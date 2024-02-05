@@ -11,13 +11,15 @@ use std::{
 };
 
 use bit_vec::BitVec;
+#[derive(Debug)] 
 pub struct BloomFilter {
-    bits_len: u32,  //  this is the length of the bit stored
-    bytes_len: u32, // this is the number of bytes it takes to store the bit vector, this is useful when we want to retrive the bit vector from disk
+    bits_len: u32,               //  this is the length of the bit stored
+    pub bytes_len: u32, // this is the number of bytes it takes to store the bit vector, this is useful when we want to retrive the bit vector from disk
     no_of_hash_func: usize, // number of hash functions to used by the bloom filter
     no_of_elements: AtomicU32, // number of elements in the bloom filter
     bit_vec: Arc<Mutex<BitVec>>, // store the bit array each representing 0 or 1 meaning true or false
 }
+
 
 impl BloomFilter {
     pub(crate) fn new(false_positive_rate: f64, no_of_elements: usize) -> Self {
@@ -64,12 +66,8 @@ impl BloomFilter {
         true
     }
 
-    pub(crate) fn write_to_file(&self, file_path: PathBuf) -> io::Result<()> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(file_path)?;
+    pub(crate) fn write_to_file(&self, sst_file: &Mutex<File>) -> io::Result<()> {
+        let mut file = sst_file.lock().expect("Failed to lock the file");
 
         // write number of element
         let capacity_bytes = self.bit_vec.lock().unwrap().to_bytes().len() as u32;
@@ -100,8 +98,8 @@ impl BloomFilter {
         Ok(())
     }
 
-    pub(crate) fn from_file(&self, file_path: PathBuf) -> Self {
-        let mut file = File::open(file_path).expect("Error opening file");
+    pub(crate) fn create_from_file(&self, sst_file: &Mutex<File>) -> Self {
+        let mut file = sst_file.lock().expect("Failed to lock the file");
 
         // Read capacity from file
         let mut bitvec_byte_len_as_byte_array = [0; 4];
@@ -205,6 +203,19 @@ impl BloomFilter {
     }
 }
 
+impl Clone for BloomFilter {
+    fn clone(&self) -> Self {
+        // Implement custom logic here if needed
+        BloomFilter {
+            bits_len: self.bits_len,               
+            bytes_len: self.bytes_len, 
+            no_of_hash_func: self.no_of_hash_func, 
+            no_of_elements: AtomicU32::load(&self.no_of_elements, Ordering::Relaxed).into(), 
+            bit_vec: self.bit_vec.clone(), 
+        }
+    }
+}
+
 #[cfg(test)]
 
 mod tests {
@@ -262,9 +273,20 @@ mod tests {
         bloom_filter.set(&k4);
 
         let path = PathBuf::new().join("sunkanmi.sst");
-        bloom_filter.write_to_file(path.clone()).unwrap();
+        let file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .append(true)
+            .open(path.clone())
+            .unwrap();
+        let file_mutex = Mutex::new(file);
+        bloom_filter.write_to_file(&file_mutex).unwrap();
+
+
+        let read_file =  OpenOptions::new().read(true).open(path.clone()).unwrap();
+        let read_file_mutex = Mutex::new(read_file);
         let new_bloom_filter =
-            BloomFilter::new(false_positive_rate, no_of_elements).from_file(path.clone());
+            BloomFilter::new(false_positive_rate, no_of_elements).create_from_file(&read_file_mutex);
 
         assert_eq!(new_bloom_filter.num_elements(), 4);
         assert_eq!(new_bloom_filter.no_of_hash_func, expected_no_hash_func);

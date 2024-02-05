@@ -1,5 +1,6 @@
 use crate::bloom_filter::BloomFilter;
 //use crate::memtable::val_option::ValueOption;
+use crate::storage_engine::SizeUnit;
 use chrono::{DateTime, Utc};
 use crossbeam_skiplist::SkipMap;
 
@@ -10,29 +11,22 @@ use std::{
     sync::{Arc, Mutex},
     thread,
 };
-//pub(crate) static DEFAULT_MEMTABLE_CAPACITY: usize = SizeUnit::Gigabytes.to_bytes(1);
+pub(crate) static DEFAULT_MEMTABLE_CAPACITY: usize = SizeUnit::Kilobytes.to_bytes(1);
 
 pub(crate) static THUMB_STONE: usize = 0;
 
 pub(crate) static DEFAULT_FALSE_POSITIVE_RATE: f64 = 0.0001;
-
-#[derive(Clone)]
-enum SizeUnit {
-    Bytes,
-    Kilobytes,
-    Megabytes,
-    Gigabytes,
-}
 
 #[derive(PartialOrd, PartialEq)]
 struct Entry<K: Hash + PartialOrd, V> {
     key: K,
     val_offset: V,
 }
-
-struct InMemoryTable<K: Hash + PartialOrd> {
-    index: Arc<SkipMap<K, usize>>,
-    bloom_filter: BloomFilter,
+#[derive(Clone)]
+pub struct InMemoryTable<K: Hash + PartialOrd> {
+    pub index: Arc<SkipMap<K, usize>>, // TODO: write a method to return this, never return property directly
+    pub bloom_filter: BloomFilter, // TODO: write a method to return this, never return property directly
+    false_positive_rate: f64,
     size: usize,
     size_unit: SizeUnit,
     capacity: usize,
@@ -40,7 +34,19 @@ struct InMemoryTable<K: Hash + PartialOrd> {
 }
 
 impl InMemoryTable<Vec<u8>> {
-    pub fn new(size_unit: SizeUnit, capacity: usize, false_positive_rate: f64) -> Self {
+    pub fn new() -> Self {
+        Self::with_specified_capacity_and_rate(
+            SizeUnit::Bytes,
+            DEFAULT_MEMTABLE_CAPACITY,
+            DEFAULT_FALSE_POSITIVE_RATE,
+        )
+    }
+
+    pub fn with_specified_capacity_and_rate(
+        size_unit: SizeUnit,
+        capacity: usize,
+        false_positive_rate: f64,
+    ) -> Self {
         assert!(
             false_positive_rate >= 0.0,
             "False positive rate can not be les than or equal to zero"
@@ -60,6 +66,7 @@ impl InMemoryTable<Vec<u8>> {
             size_unit: SizeUnit::Bytes,
             capacity: capacity_to_bytes,
             created_at: now,
+            false_positive_rate,
         }
     }
 
@@ -67,15 +74,14 @@ impl InMemoryTable<Vec<u8>> {
         if !self.bloom_filter.contains(key) {
             self.bloom_filter.set(key);
             self.index
-                .insert(key.to_vec(), val_offset.try_into().unwrap());
+                .insert(key.to_vec(), val_offset as usize);
             // it takes 4 bytes to store a 32 bit integer since 8 bits makes 1 byte
             let entry_length_byte = key.len() + 4;
             self.size += entry_length_byte;
             return Ok(());
         }
         // If the key already exist in the bloom filter then just insert into the entry alone
-        self.index
-            .insert(key.to_vec(), val_offset.try_into().unwrap());
+        self.index.insert(key.to_vec(), val_offset as usize);
         let entry_length_byte = key.len() + 4;
         self.size += entry_length_byte;
         return Ok(());
@@ -83,11 +89,13 @@ impl InMemoryTable<Vec<u8>> {
 
     pub fn get(&mut self, key: &Vec<u8>) -> io::Result<Option<usize>> {
         if self.bloom_filter.contains(key) {
-            let value = *self.index.get(key).unwrap().value();
-            return Ok(Some(value));
+            println!("Found key in bloomfilter {:?}", key.to_vec());
+            // somethigs to fix here
+            let v_offset = *self.index.get(key).unwrap().value();
+            return Ok(Some(v_offset));
         }
 
-        Err(io::Error::new(io::ErrorKind::NotFound, "Key not found"))
+        Ok(None)
     }
 
     pub fn update(&mut self, key: &Vec<u8>, val_offset: u32) -> io::Result<()> {
@@ -118,38 +126,61 @@ impl InMemoryTable<Vec<u8>> {
         self.index.insert(key.to_vec(), THUMB_STONE);
         return Ok(());
     }
+    pub fn false_positive_rate(&mut self) -> f64 {
+        self.false_positive_rate
+    }
+    pub fn size(&mut self) -> usize {
+        self.size
+    }
+
+    pub fn capacity(&mut self) -> usize {
+        self.capacity
+    }
+
+    pub fn size_unit(&mut self) -> SizeUnit {
+        self.size_unit
+    }
 
     pub fn range() {}
-}
 
-impl SizeUnit {
-    pub fn to_bytes(&self, value: usize) -> usize {
-        match self {
-            SizeUnit::Bytes => value,
-            SizeUnit::Kilobytes => value * 1024,
-            SizeUnit::Megabytes => value * 1024 * 1024,
-            SizeUnit::Gigabytes => value * 1024 * 1024 * 1024,
+    /// Clears all key-value entries in the MemTable.
+    pub(crate) fn clear(&mut self) -> Self {
+        let capacity_to_bytes = self.size_unit.to_bytes(self.capacity);
+        let avg_entry_size = 100;
+        let max_no_of_entries = capacity_to_bytes / avg_entry_size as usize;
+
+        self.index.clear();
+        self.size = 0;
+        let bloom_filter = BloomFilter::new(self.false_positive_rate, max_no_of_entries);
+        let now: DateTime<Utc> = Utc::now();
+        Self {
+            index: self.index.clone(),
+            bloom_filter,
+            size: 0,
+            size_unit: SizeUnit::Bytes,
+            capacity: capacity_to_bytes,
+            created_at: now,
+            false_positive_rate: self.false_positive_rate,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::fmt::Error;
 
     use super::*;
 
     #[test]
     fn test_new() {
-        let mem_table = InMemoryTable::new(SizeUnit::Kilobytes, 4, 0.01);
-        assert_eq!(mem_table.capacity, 4 * 1024);
+        let mem_table = InMemoryTable::new();
+        assert_eq!(mem_table.capacity, 1 * 1024);
         assert_eq!(mem_table.size, 0);
     }
 
     #[test]
     fn test_insert() {
-        let mut mem_table = InMemoryTable::new(SizeUnit::Kilobytes, 4, 0.01);
-        assert_eq!(mem_table.capacity, 4 * 1024);
+        let mut mem_table = InMemoryTable::new();
+        assert_eq!(mem_table.capacity, 1 * 1024);
         assert_eq!(mem_table.size, 0);
         let k1 = &vec![1, 2, 3, 4];
         let k2 = &vec![5, 6, 7, 8];
@@ -171,7 +202,7 @@ mod tests {
     // NOTE: handling thesame keys written at thesame exact time will be handled at the concurrency level(isolation level)
     #[test]
     fn test_concurrent_write() {
-        let mem_table = Arc::new(Mutex::new(InMemoryTable::new(SizeUnit::Kilobytes, 4, 0.01)));
+        let mem_table = Arc::new(Mutex::new(InMemoryTable::new()));
         let mut handlers = Vec::with_capacity(5 as usize);
 
         for i in 0..5 {
@@ -195,11 +226,11 @@ mod tests {
     //test get
     #[test]
     fn test_get() {
-        let mut mem_table = InMemoryTable::new(SizeUnit::Kilobytes, 4, 0.01);
+        let mut mem_table = InMemoryTable::new();
         let k1 = &vec![1, 2, 3, 4];
         let k2 = &vec![5, 6, 7, 8];
         let k3 = &vec![10, 11, 12, 13];
-
+        let k4 = &vec![19, 11, 12, 13];
         let _ = mem_table.insert(k1, 10);
         let _ = mem_table.insert(k2, 11);
         let _ = mem_table.insert(k3, 12);
@@ -207,11 +238,13 @@ mod tests {
         assert_eq!(*mem_table.index.get(k1).unwrap().value(), 10);
         assert_eq!(*mem_table.index.get(k2).unwrap().value(), 11);
         assert_eq!(*mem_table.index.get(k3).unwrap().value(), 12);
+
+        assert_eq!(mem_table.bloom_filter.contains(k4), false);
     }
     // test latest will be returned
     #[test]
     fn test_return_latest_value() {
-        let mut mem_table = InMemoryTable::new(SizeUnit::Kilobytes, 4, 0.01);
+        let mut mem_table = InMemoryTable::new();
         let k = &vec![1, 2, 3, 4];
 
         let _ = mem_table.insert(k, 10);
@@ -225,7 +258,7 @@ mod tests {
     //test update
     #[test]
     fn test_update() {
-        let mut mem_table = InMemoryTable::new(SizeUnit::Kilobytes, 4, 0.01);
+        let mut mem_table = InMemoryTable::new();
         let k = &vec![1, 2, 3, 4];
 
         let _ = mem_table.insert(k, 10);
@@ -239,7 +272,7 @@ mod tests {
 
     #[test]
     fn test_upsert() {
-        let mut mem_table = InMemoryTable::new(SizeUnit::Kilobytes, 4, 0.01);
+        let mut mem_table = InMemoryTable::new();
         let k = &vec![1, 2, 3, 4];
 
         let _ = mem_table.insert(k, 10);
@@ -255,7 +288,7 @@ mod tests {
 
     #[test]
     fn test_delete() {
-        let mut mem_table = InMemoryTable::new(SizeUnit::Kilobytes, 4, 0.01);
+        let mut mem_table = InMemoryTable::new();
         let k = &vec![1, 2, 3, 4];
 
         let _ = mem_table.insert(k, 10);
