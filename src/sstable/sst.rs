@@ -4,7 +4,7 @@ use num_traits::{ops::bytes, ToBytes};
 use serde::de::value::Error;
 use std::{
     cmp::Ordering,
-    fs::{OpenOptions, self},
+    fs::{self, OpenOptions},
     io::{self, Read, Seek, SeekFrom, Write},
     path::PathBuf,
     rc::Rc,
@@ -15,38 +15,35 @@ use crate::{
     bloom_filter::{self, BloomFilter},
     memtable::{DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MEMTABLE_CAPACITY},
 };
-pub(crate) static SST_EXTENSION: &str = ".sst";
 
 pub struct SSTable {
     file_path: PathBuf,
     index: Arc<SkipMap<Vec<u8>, usize>>,
-    bloom_filter: BloomFilter,
     created_at: DateTime<Utc>,
 }
 
 impl SSTable {
     pub fn new(dir: PathBuf, create_file: bool) -> Self {
         let created_at = Utc::now();
-        let file_name = format!("sstable_{}_.dat", created_at.timestamp_millis());
+        let file_name = format!("sstable_{}_.db", created_at.timestamp_millis());
         if !dir.exists() {
             fs::create_dir_all(&dir).expect("ss table directory was not created successfullt")
         }
 
         let file_path = dir.join(file_name);
-        if create_file{
+        if create_file {
             _ = OpenOptions::new()
-            .read(true)
-            .append(true)
-            .create(true)
-            .open(file_path.clone()).expect("error creating file");
-
+                .read(true)
+                .append(true)
+                .create(true)
+                .open(file_path.clone())
+                .expect("error creating file");
         }
         let index = Arc::new(SkipMap::new());
         let bloom_filter = BloomFilter::new(DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MEMTABLE_CAPACITY);
         Self {
             file_path,
             index,
-            bloom_filter,
             created_at,
         }
     }
@@ -61,7 +58,6 @@ impl SSTable {
 
         let file_mutex = Mutex::new(file);
 
-        self.bloom_filter.write_to_file(&file_mutex).unwrap();
         // This will store the head offset(this stores the most recent offset)
         let mut head_offset = 0;
 
@@ -110,60 +106,46 @@ impl SSTable {
     pub(crate) fn get(&self, searched_key: &[u8]) -> io::Result<usize> {
         // Open the file in read mode
         let file_path = PathBuf::from(&self.file_path);
-        let file = OpenOptions::new()
-            .read(true)
-            .open(file_path)?;
+        let file = OpenOptions::new().read(true).open(file_path)?;
 
         let file_mutex = Mutex::new(file);
-        let bloom_filter = BloomFilter::new(DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MEMTABLE_CAPACITY);
-        let stored_bloom_filter = bloom_filter.create_from_file(&file_mutex);
-
+       
         // read bloom filter to check if the key possbly exists in the sstable
         let mut locked_file = file_mutex.lock().unwrap();
-        match stored_bloom_filter.contains(&searched_key.to_vec()) {
-            true => {
-                // if so, then read index and get the value location
-                let offset_to_index = 16 + stored_bloom_filter.bytes_len;
-                locked_file.seek(SeekFrom::Start(offset_to_index as u64))?;
 
-                loop {
-                    let mut key_len_bytes = [0; 4];
-                    let mut bytes_read = locked_file.read(&mut key_len_bytes)?;
-                    if bytes_read == 0 {
-                        return Err(io::Error::new(
-                            io::ErrorKind::NotFound,
-                            format!("Key {:?} not found", searched_key),
-                        ));
-                    }
-                    let key_len = u32::from_le_bytes(key_len_bytes);
-
-                    let mut key = vec![0; key_len as usize];
-                    bytes_read = locked_file.read(&mut key)?;
-                    if bytes_read == 0 {
-                        return Err(io::Error::new(
-                            io::ErrorKind::NotFound,
-                            format!("Key {:?} not found", searched_key),
-                        ));
-                    }
-                    let mut val_offset_bytes = [0; 4];
-                    bytes_read = locked_file.read(&mut val_offset_bytes)?;
-                    if bytes_read == 0 {
-                        return Err(io::Error::new(
-                            io::ErrorKind::NotFound,
-                            format!("Key {:?} not found", searched_key),
-                        ));
-                    }
-                    let value_offset = u32::from_le_bytes(val_offset_bytes);
-
-                    if key == searched_key {
-                        value_offset as usize;
-                    }
-                }
+        // search sstable for key
+        loop {
+            let mut key_len_bytes = [0; 4];
+            let mut bytes_read = locked_file.read(&mut key_len_bytes)?;
+            if bytes_read == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("Key {:?} not found", searched_key),
+                ));
             }
-            false => Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("Key {:?} not found", searched_key),
-            )),
+            let key_len = u32::from_le_bytes(key_len_bytes);
+
+            let mut key = vec![0; key_len as usize];
+            bytes_read = locked_file.read(&mut key)?;
+            if bytes_read == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("Key {:?} not found", searched_key),
+                ));
+            }
+            let mut val_offset_bytes = [0; 4];
+            bytes_read = locked_file.read(&mut val_offset_bytes)?;
+            if bytes_read == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("Key {:?} not found", searched_key),
+                ));
+            }
+            let value_offset = u32::from_le_bytes(val_offset_bytes);
+
+            if key == searched_key {
+                return Ok(value_offset as usize);
+            }
         }
     }
 
@@ -177,21 +159,12 @@ impl SSTable {
         }
     }
 
-    pub fn set_bloom_filter(&mut self, bf: &BloomFilter)
-    {
-        self.bloom_filter = bf.clone()
+    pub fn set_index(&mut self, index: Arc<SkipMap<Vec<u8>, usize>>) {
+        self.index = index
     }
-    pub fn set_index(&mut self, i: Arc<SkipMap<Vec<u8>, usize>>)
-    {
-        self.index = i
+    pub fn get_path(&self) -> String {
+        self.file_path.to_string_lossy().into_owned()
     }
 
-    fn from_file(file_path: PathBuf) {
-
-        // generate new bloom filter from file
-
-        // read the index
-
-        // generate the SS table from the the files created
-    }
+    fn from_file(file_path: PathBuf) {}
 }

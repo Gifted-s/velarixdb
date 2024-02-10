@@ -27,7 +27,7 @@ pub struct InMemoryTable<K: Hash + PartialOrd> {
     pub index: Arc<SkipMap<K, usize>>, // TODO: write a method to return this, never return property directly
     pub bloom_filter: BloomFilter, // TODO: write a method to return this, never return property directly
     false_positive_rate: f64,
-    size: usize,
+    pub size: usize,
     size_unit: SizeUnit,
     capacity: usize,
     created_at: DateTime<Utc>,
@@ -73,8 +73,7 @@ impl InMemoryTable<Vec<u8>> {
     pub fn insert(&mut self, key: &Vec<u8>, val_offset: u32) -> io::Result<()> {
         if !self.bloom_filter.contains(key) {
             self.bloom_filter.set(key);
-            self.index
-                .insert(key.to_vec(), val_offset as usize);
+            self.index.insert(key.to_vec(), val_offset as usize);
             // it takes 4 bytes to store a 32 bit integer since 8 bits makes 1 byte
             let entry_length_byte = key.len() + 4;
             self.size += entry_length_byte;

@@ -1,0 +1,16 @@
+Write algorithm
+
+  - Get the size of the sstable
+
+  - Get which bucket will be the best to store the sstable by using the bucket average size
+
+      - If bucket exist, then write sstable to its directory and return bucket url
+
+      - Else, create new bucket, write sstable to its directory, append to list of buckets and return sstable file path
+
+  - Append the sstable file path to bloom filter and append bloom filter to existing bloom filters
+
+  - Clear MemTable
+
+
+

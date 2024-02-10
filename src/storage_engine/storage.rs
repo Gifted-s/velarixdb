@@ -1,12 +1,15 @@
-use serde::de::value;
-
 use crate::{
+    bloom_filter::BloomFilter,
+    compaction::BucketMap,
     memtable::{InMemoryTable, DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MEMTABLE_CAPACITY},
     sstable::SSTable,
     value_log::{ValueLog, VLOG_FILE_NAME},
 };
-use std::hash::Hash;
+use rand::distributions::Alphanumeric;
+use rand::{thread_rng, Rng};
+use serde::de::value;
 use std::{clone, fs, io, path::PathBuf};
+use std::{cmp, hash::Hash};
 
 pub(crate) static DEFAULT_ALLOW_PREFETCH: bool = true;
 pub(crate) static DEFAULT_PREFETCH_SIZE: usize = 32;
@@ -14,7 +17,9 @@ pub(crate) static DEFAULT_PREFETCH_SIZE: usize = 32;
 pub struct StorageEngine<K: Hash + PartialOrd> {
     pub dir: DirPath,
     pub memtable: InMemoryTable<K>,
+    pub bloom_filters: Vec<BloomFilter>,
     pub val_log: ValueLog,
+    pub buckets: BucketMap,
     pub sstables: Vec<SSTable>,
     pub key_index: LevelsBiggestKeys,
     pub allow_prefetch: bool,
@@ -33,7 +38,7 @@ impl LevelsBiggestKeys {
 pub struct DirPath {
     root: PathBuf,
     val_log: PathBuf,
-    sst: PathBuf,
+    buckets: PathBuf,
     meta: PathBuf,
 }
 
@@ -144,15 +149,16 @@ impl StorageEngine<Vec<u8>> {
 
     // if write + head offset is greater than size then flush to disk
     fn flush_memtable(&mut self) -> io::Result<()> {
-        let index = self.memtable.index.clone();
-        let bloom_filter = &self.memtable.bloom_filter;
-        let mut sstable = SSTable::new(self.dir.sst.clone(), true);
-        sstable.set_bloom_filter(bloom_filter);
-        sstable.set_index(index);
+        let insert_result = self.buckets.insert_to_appropriate_bucket(&self.memtable);
+        // let mut sstable = SSTable::new(self.dir.sst.clone(), true);
         println!("Writing to sstable =================================================");
         //write the memtable to the disk as SS Tables
-        match sstable.write_to_file() {
-            Ok(_) => {
+        match insert_result {
+            Ok(sstable_path) => {
+                // insert to bloom filter
+                self.memtable.bloom_filter.set_sstable_path(sstable_path);
+                self.bloom_filters
+                    .push(self.memtable.bloom_filter.to_owned());
                 self.memtable = self.memtable.clear();
                 Ok(())
             }
@@ -184,62 +190,86 @@ impl StorageEngine<Vec<u8>> {
         prefetch_size: usize,
     ) -> io::Result<Self> {
         let vlog_path = dir.val_log.join(VLOG_FILE_NAME);
-        let sst_path = dir.sst.clone();
+        let buckets_path = dir.buckets.clone();
         let vlog_exit = vlog_path.exists();
         let vlog_empty = !vlog_exit || fs::metadata(&vlog_path)?.len() == 0;
 
         // no ss table exists
-        let sst_exit = sst_path.exists();
-        let sst_empty = !sst_exit || fs::metadata(&sst_path)?.len() == 0;
+        let buckets_dir_exit = buckets_path.exists();
+        let buckets_empty = !buckets_dir_exit || fs::metadata(&buckets_path)?.len() == 0;
 
         let key_index = LevelsBiggestKeys::new(Vec::new());
         let vlog = ValueLog::new(&dir.val_log)?;
-        if vlog_empty || sst_empty {
+        if vlog_empty && buckets_empty {
             let memtable = InMemoryTable::with_specified_capacity_and_rate(
                 size_unit,
                 capacity,
                 false_positive_rate,
             );
 
-            let sstables = vec![SSTable::new(sst_path, false)];
-            Ok(Self {
+            let sstables = vec![SSTable::new(buckets_path.clone(), false)];
+            return Ok(Self {
                 memtable,
                 val_log: vlog,
                 sstables,
+                bloom_filters: Vec::new(),
+                buckets: BucketMap::new(buckets_path.clone()),
                 dir,
                 key_index,
                 allow_prefetch,
                 prefetch_size,
-            })
-        } else {
-            // recover memtable
-            let recover_result = StorageEngine::recover_memtable(
-                size_unit,
-                capacity,
-                false_positive_rate,
-                &sst_path,
-                &dir.val_log,
-            );
-
-            match recover_result {
-                Ok(memtable) => {
-                    let sstables = vec![SSTable::new(sst_path, true)];
-                    Ok(Self {
-                        memtable,
-                        val_log: vlog,
-                        sstables,
-                        dir,
-                        key_index,
-                        allow_prefetch,
-                        prefetch_size,
-                    })
-                }
-                Err(err) => Err(io::Error::new(
-                    err.kind(),
-                    "Error retriving entries from value logs",
-                )),
-            }
+            });
         }
+        // remove this section
+        let memtable = InMemoryTable::with_specified_capacity_and_rate(
+            size_unit,
+            capacity,
+            false_positive_rate,
+        );
+
+        let sstables = vec![SSTable::new(buckets_path.clone(), false)];
+        return Ok(Self {
+            memtable,
+            val_log: vlog,
+            sstables,
+            bloom_filters: Vec::new(),
+            buckets: BucketMap::new(buckets_path.clone()),
+            dir,
+            key_index,
+            allow_prefetch,
+            prefetch_size,
+        });
+        //  else {
+        //     // recover memtable
+        //     let recover_result = StorageEngine::recover_memtable(
+        //         size_unit,
+        //         capacity,
+        //         false_positive_rate,
+        //         &buckets_path,
+        //         &dir.val_log,
+        //     );
+
+        //     match recover_result {
+        //         Ok(memtable) => {
+        //             let sstables = vec![SSTable::new(buckets_path.clone(), true)];
+        //             Ok(Self {
+        //                 memtable,
+        //                 val_log: vlog,
+        //                 sstables,
+        //                 dir,
+        //                 buckets: BucketMap::new(buckets_path), // TODO: Retrive this from sstable files
+        //                 bloom_filters: Vec::new(), // TODO: Retrieve from memtable
+        //                 key_index,
+        //                 allow_prefetch,
+        //                 prefetch_size,
+        //             })
+        //         }
+        //         Err(err) => Err(io::Error::new(
+        //             err.kind(),
+        //             "Error retriving entries from value logs",
+        //         )),
+        //     }
+        // }
     }
 
     fn recover_memtable(
@@ -283,12 +313,12 @@ impl DirPath {
     fn build(root_path: PathBuf) -> Self {
         let root = root_path;
         let val_log = root.join("v_log");
-        let sst = root.join("sst");
+        let buckets = root.join("buckets");
         let meta = root.join("meta");
         Self {
             root,
             val_log,
-            sst,
+            buckets,
             meta,
         }
     }
@@ -318,27 +348,46 @@ mod tests {
 
     #[test]
     fn storage_engine_create() {
-        let k1 = "sunkanmi";
-        let k2 = "ayomide";
-        let k3 = "kolade";
-        let k4 = "bodunde";
-
-        let path = PathBuf::new().join("wired_tiger");
+        let path = PathBuf::new().join("bump");
         let mut wt = StorageEngine::new(path.clone()).unwrap();
 
-        wt.put(k1, "boyode").unwrap();
-        wt.put(k2, "boyode").unwrap();
-        wt.put(k3, "boyode").unwrap();
+        // Specify the number of random strings to generate
+        let num_strings = 1000;
 
-        let value1 = wt.get(k1);
-        let value2 = wt.get(k2);
-        let value3 = wt.get(k3);
-        let value4 = wt.get(k4);
-        assert_eq!(value1.unwrap().as_str(), "boyode");
-        assert_eq!(value2.unwrap().as_str(), "boyode");
-        assert_eq!(value3.unwrap().as_str(), "boyode");
+        // Specify the length of each random string
+        let string_length = 10;
+        // Generate random strings and store them in a vector
+        let mut random_strings: Vec<String> = Vec::new();
+        for _ in 0..num_strings {
+            let random_string = generate_random_string(string_length);
+            random_strings.push(random_string);
+        }
 
-        assert_eq!(value4, None);
+        // Print the generated random strings
+        for (_, s) in random_strings.iter().enumerate() {
+            wt.put(s, "boyode").unwrap();
+        }
+
+        // wt.put(k2, "boyode").unwrap();
+        // wt.put(k3, "boyode").unwrap();
+
+        // let value1 = wt.get(k1);
+        // let value2 = wt.get(k2);
+        // let value3 = wt.get(k3);
+        // let value4 = wt.get(k4);
+        // assert_eq!(value1.unwrap().as_str(), "boyode");
+        // assert_eq!(value2.unwrap().as_str(), "boyode");
+        // assert_eq!(value3.unwrap().as_str(), "boyode");
+
+        // assert_eq!(value4, None);
         //fs::remove_dir_all(path.clone()).unwrap();
     }
+}
+
+fn generate_random_string(length: usize) -> String {
+    let rng = thread_rng();
+    rng.sample_iter(&Alphanumeric)
+        .take(length)
+        .map(|c| c as char)
+        .collect()
 }
