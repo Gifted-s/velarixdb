@@ -74,11 +74,18 @@ impl StorageEngine<Vec<u8>> {
                 // 4 bytes to store length of key "head"
                 // 4 bytes to store the actual key "head"
                 // 4 bytes to store the head offset
-                if self.memtable.size() + 12 >= self.memtable.capacity() {
+                // 8 bytes to store the head entry creation date
+                if self.memtable.size() + 20 >= self.memtable.capacity() {
                     let capacity = self.memtable.capacity();
                     let size_unit = self.memtable.size_unit();
                     let false_positive_rate = self.memtable.false_positive_rate();
-
+                    let head_offset = self.memtable.index.iter().max_by_key(|e| e.value().0);
+                    let head_entry = Entry::new(
+                        "head".as_bytes().to_vec(),
+                        head_offset.unwrap().value().0,
+                        Utc::now().timestamp_millis() as u64,
+                    );
+                    self.memtable.insert(&head_entry);
                     let flush_result = self.flush_memtable();
                     match flush_result {
                         Ok(_) => {
@@ -168,10 +175,9 @@ impl StorageEngine<Vec<u8>> {
         match insert_result {
             Ok(sstable_path) => {
                 // insert to bloom filter
-                self.memtable
-                    .get_bloom_filter()
-                    .set_sstable_path(sstable_path);
-                self.bloom_filters.push(self.memtable.get_bloom_filter());
+                let mut bf = self.memtable.get_bloom_filter();
+                bf.set_sstable_path(sstable_path);
+                self.bloom_filters.push(bf);
 
                 // sort bloom filter by hotness
                 self.bloom_filters.sort_by(|a, b| {

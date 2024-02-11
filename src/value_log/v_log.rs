@@ -1,6 +1,7 @@
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, Read, Seek, SeekFrom, Write},
+    mem,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -82,7 +83,7 @@ impl ValueLog {
         log_file.seek(SeekFrom::Start(start_offset as u64))?;
 
         // get entry length
-        let mut entry_len_bytes = [0; 4];
+        let mut entry_len_bytes = [0; mem::size_of::<u32>()];
         let bytes_read = log_file.read(&mut entry_len_bytes)?;
         if bytes_read == 0 {
             return Ok(None);
@@ -90,7 +91,7 @@ impl ValueLog {
         let _entry_len = u32::from_le_bytes(entry_len_bytes);
 
         // get key length
-        let mut key_len_bytes = [0; 4];
+        let mut key_len_bytes = [0; mem::size_of::<u32>()];
         let bytes_read = log_file.read(&mut key_len_bytes)?;
         if bytes_read == 0 {
             return Ok(None);
@@ -98,12 +99,20 @@ impl ValueLog {
         let key_len = u32::from_le_bytes(key_len_bytes);
 
         // get value length
-        let mut val_len_bytes = [0; 4];
-        let mut bytes_read = log_file.read(&mut val_len_bytes)?;
+        let mut val_len_bytes = [0; mem::size_of::<u32>()];
+        let bytes_read = log_file.read(&mut val_len_bytes)?;
         if bytes_read == 0 {
             return Ok(None);
         }
         let val_len = u32::from_le_bytes(val_len_bytes);
+
+        // get date length
+        let mut creation_date_bytes = [0; mem::size_of::<u64>()];
+        let mut bytes_read = log_file.read(&mut creation_date_bytes)?;
+        if bytes_read == 0 {
+            return Ok(None);
+        }
+        let _ = u64::from_le_bytes(creation_date_bytes);
 
         let mut key = vec![0; key_len as usize];
         bytes_read = log_file.read(&mut key)?;
@@ -162,7 +171,12 @@ impl ValueLogEntry {
     }
 
     fn serialize(&self) -> Vec<u8> {
-        let entry_len = 4 + 4 + 4 + 8 + self.key.len() + self.value.len();
+        let entry_len = mem::size_of::<u32>()
+            + mem::size_of::<u32>()
+            + mem::size_of::<u32>()
+            + mem::size_of::<u64>()
+            + self.key.len()
+            + self.value.len();
 
         let mut serialized_data = Vec::with_capacity(entry_len);
 

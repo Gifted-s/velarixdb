@@ -18,7 +18,7 @@ pub struct BucketMap {
     buckets: HashMap<Uuid, Bucket>,
 }
 #[derive(Debug)]
-pub(crate) struct Bucket {
+pub struct Bucket {
     pub(crate) id: Uuid,
     pub(crate) dir: PathBuf,
     pub(crate) avarage_size: usize,
@@ -26,8 +26,8 @@ pub(crate) struct Bucket {
 }
 #[derive(Debug, Clone)]
 pub struct SSTablePath{
-    file_path: String,
-    hotness: u64
+    pub file_path: String,
+    pub hotness: u64
 }
 impl  SSTablePath{
     pub fn  new(file_path: String)-> Self{
@@ -48,7 +48,7 @@ impl  SSTablePath{
      }
 }
 
-pub trait ProvideSizeInBytes {
+pub trait IndexWithSizeInBytes {
     fn get_index(&self) -> Arc<SkipMap<Vec<u8>, (usize, u64)>>; // usize for value offset, u64 to store entry creation date in milliseconds
     fn size(&self)-> usize;
 }
@@ -76,7 +76,7 @@ impl BucketMap {
     }
 
 
-    pub fn insert_to_appropriate_bucket<T: ProvideSizeInBytes>(&mut self, memtable: &T, hotness: u64) -> io::Result<SSTablePath> {
+    pub fn insert_to_appropriate_bucket<T: IndexWithSizeInBytes>(&mut self, memtable: &T, hotness: u64) -> io::Result<SSTablePath> {
         let added_to_bucket = false;
             
             for (_, bucket) in &mut self.buckets {

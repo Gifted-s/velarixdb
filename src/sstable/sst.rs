@@ -6,28 +6,30 @@ use std::{
     cmp::Ordering,
     fs::{self, OpenOptions},
     io::{self, Read, Seek, SeekFrom, Write},
+    mem,
     path::{Path, PathBuf},
     rc::Rc,
     sync::{Arc, Mutex},
 };
 
 use crate::{
-    compaction::ProvideSizeInBytes,
+    compaction::IndexWithSizeInBytes,
     memtable::{Entry, DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MEMTABLE_CAPACITY},
 };
 
 pub struct SSTable {
-    file_path: PathBuf,
-    index: Arc<SkipMap<Vec<u8>, (usize, u64)>>,
-    created_at: u64,
+    pub file_path: PathBuf,
+    pub index: Arc<SkipMap<Vec<u8>, (usize, u64)>>,
+    pub created_at: u64,
+    pub size: usize,
 }
 
-impl ProvideSizeInBytes for SSTable {
+impl IndexWithSizeInBytes for SSTable {
     fn get_index(&self) -> Arc<SkipMap<Vec<u8>, (usize, u64)>> {
         Arc::clone(&self.index)
     }
     fn size(&self) -> usize {
-        self.size()
+        self.size
     }
 }
 
@@ -52,6 +54,7 @@ impl SSTable {
         Self {
             file_path,
             index,
+            size: 0,
             created_at: created_at.timestamp_millis() as u64,
         }
     }
@@ -73,17 +76,30 @@ impl SSTable {
         self.index.iter().for_each(|e| {
             let entry = Entry::new(e.key().clone(), e.value().0, e.value().1);
 
+    
+            // mem::size_of function is efficient because the size is known at compile time so 
+            // during compilation this will be replaced  with the actual size during compilation i.e number of bytes to store the type
             // key length(used during fetch) + key len(actual key length) + value length(4 bytes) + date in milliseconds(8 bytes)
-            let entry_len = 4 + entry.key.len() + 4 + 8;
+            let entry_len = mem::size_of::<u32>()
+                + entry.key.len()
+                + mem::size_of::<u32>()
+                + mem::size_of::<u64>();
             let mut entry_vec = Vec::with_capacity(entry_len as usize);
 
+            //add key len
             entry_vec.extend_from_slice(&(entry.key.len() as u32).to_le_bytes());
-            entry_vec.extend_from_slice(&entry.key);
-            entry_vec.extend_from_slice(&(entry.val_offset as u32).to_le_bytes());
-            entry_vec.extend_from_slice(&(entry.created_at as u64).to_le_bytes());
-            locked_file.write_all(&entry_vec).unwrap();
 
-            //TODO: write creation time to file
+            //add key
+            entry_vec.extend_from_slice(&entry.key);
+
+            //add value offset
+            entry_vec.extend_from_slice(&(entry.val_offset as u32).to_le_bytes());
+
+            //write date created in milliseconds
+            entry_vec.extend_from_slice(&(entry.created_at as u64).to_le_bytes());
+
+            //write to file
+            locked_file.write_all(&entry_vec).unwrap();
 
             assert!(entry_len == entry_vec.len(), "Incorrect entry size");
 
@@ -99,16 +115,6 @@ impl SSTable {
                 }
             }
         });
-        let mut entry_vec = Vec::with_capacity(12);
-
-        // will be stored as <head, head_offset>
-        let key = "head";
-        // write new header offset
-        entry_vec.extend_from_slice(&(key.len() as u32).to_le_bytes());
-        entry_vec.extend_from_slice(key.as_bytes());
-        entry_vec.extend_from_slice(&(head_offset as u32).to_le_bytes());
-        locked_file.write_all(&entry_vec).unwrap();
-        locked_file.flush().unwrap();
 
         return Ok(());
     }
@@ -126,7 +132,7 @@ impl SSTable {
 
         // search sstable for key
         loop {
-            let mut key_len_bytes = [0; 4];
+            let mut key_len_bytes = [0;  mem::size_of::<u32>()];
             let mut bytes_read = locked_file.read(&mut key_len_bytes)?;
             if bytes_read == 0 {
                 return Err(io::Error::new(
@@ -144,7 +150,7 @@ impl SSTable {
                     format!("Key {:?} not found", searched_key),
                 ));
             }
-            let mut val_offset_bytes = [0; 4];
+            let mut val_offset_bytes = [0;  mem::size_of::<u32>()];
             bytes_read = locked_file.read(&mut val_offset_bytes)?;
             if bytes_read == 0 {
                 return Err(io::Error::new(
@@ -152,7 +158,7 @@ impl SSTable {
                     format!("Key {:?} not found", searched_key),
                 ));
             }
-            let mut created_at_bytes = [0; 8];
+            let mut created_at_bytes = [0;  mem::size_of::<u64>()];
             bytes_read = locked_file.read(&mut created_at_bytes)?;
             if bytes_read == 0 {
                 return Err(io::Error::new(
@@ -180,15 +186,25 @@ impl SSTable {
     }
 
     fn size(&self) -> usize {
-        fs::metadata(self.get_path()).unwrap().len() as usize
+        self.size
     }
 
     pub fn set_index(&mut self, index: Arc<SkipMap<Vec<u8>, (usize, u64)>>) {
-        self.index = index
+        self.index = index;
+        self.set_sst_size_from_index();
     }
+
     pub fn get_index(&self) -> Arc<SkipMap<Vec<u8>, (usize, u64)>> {
         self.index.clone()
     }
+    pub fn set_sst_size_from_index(&mut self) {
+        self.size = self
+            .index
+            .iter()
+            .map(|e| e.key().len() + mem::size_of::<usize>() + mem::size_of::<u64>())
+            .sum::<usize>();
+    }
+
     pub fn get_path(&self) -> String {
         self.file_path.to_string_lossy().into_owned()
     }
@@ -201,7 +217,7 @@ impl SSTable {
         path.exists() && path.is_file()
     }
 
-    fn from_file(sstable_file_path: PathBuf) -> io::Result<Option<SSTable>> {
+    pub fn from_file(sstable_file_path: PathBuf) -> io::Result<Option<SSTable>> {
         let index = Arc::new(SkipMap::new());
         // Open the file in read mode
         let file_path = PathBuf::from(&sstable_file_path);
@@ -218,7 +234,7 @@ impl SSTable {
 
         // search sstable for key
         loop {
-            let mut key_len_bytes = [0; 4];
+            let mut key_len_bytes = [0;  mem::size_of::<u32>()];
             let mut bytes_read = locked_file.read(&mut key_len_bytes)?;
             if bytes_read == 0 {
                 break;
@@ -233,7 +249,7 @@ impl SSTable {
                     format!("File read ended expectedly"),
                 ));
             }
-            let mut val_offset_bytes = [0; 4];
+            let mut val_offset_bytes = [0;  mem::size_of::<u32>()];
             bytes_read = locked_file.read(&mut val_offset_bytes)?;
             if bytes_read == 0 {
                 return Err(io::Error::new(
@@ -241,7 +257,7 @@ impl SSTable {
                     format!("File read ended expectedly"),
                 ));
             }
-            let mut created_at_bytes = [0; 4];
+            let mut created_at_bytes = [0;  mem::size_of::<u64>()];
             bytes_read = locked_file.read(&mut created_at_bytes)?;
             if bytes_read == 0 {
                 return Err(io::Error::new(
@@ -249,15 +265,16 @@ impl SSTable {
                     format!("File read ended expectedly"),
                 ));
             }
-            let created_at = u32::from_le_bytes(created_at_bytes);
+            let created_at = u64::from_le_bytes(created_at_bytes);
             let value_offset = u32::from_le_bytes(val_offset_bytes);
             index.insert(key, (value_offset as usize, created_at as u64));
         }
         let created_at = Utc::now().timestamp_millis() as u64;
         return Ok(Some(SSTable {
-            file_path: sstable_file_path.to_owned(),
+            file_path: sstable_file_path.clone(),
             index: index.to_owned(),
             created_at,
+            size: fs::metadata(sstable_file_path).unwrap().len() as usize,
         }));
     }
 }

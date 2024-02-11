@@ -1,5 +1,5 @@
 use crate::bloom_filter::BloomFilter;
-use crate::compaction::ProvideSizeInBytes;
+use crate::compaction::IndexWithSizeInBytes;
 //use crate::memtable::val_option::ValueOption;
 use crate::storage_engine::SizeUnit;
 use chrono::{DateTime, Utc};
@@ -18,7 +18,7 @@ pub(crate) static THUMB_STONE: usize = 0;
 
 pub(crate) static DEFAULT_FALSE_POSITIVE_RATE: f64 = 0.0001;
 
-#[derive(PartialOrd, PartialEq)]
+#[derive(PartialOrd, PartialEq, Copy, Clone)]
 pub struct Entry<K: Hash + PartialOrd, V> {
     pub key: K,
     pub val_offset: V,
@@ -26,7 +26,7 @@ pub struct Entry<K: Hash + PartialOrd, V> {
 }
 #[derive(Clone)]
 pub struct InMemoryTable<K: Hash + PartialOrd> {
-    index: Arc<SkipMap<K, (usize, u64)>>, // TODO: write a method to return this, never return property directly
+    pub index: Arc<SkipMap<K, (usize, u64)>>, // TODO: write a method to return this, never return property directly
     bloom_filter: BloomFilter, // TODO: write a method to return this, never return property directly
     false_positive_rate: f64,
     pub size: usize,
@@ -35,7 +35,7 @@ pub struct InMemoryTable<K: Hash + PartialOrd> {
     created_at: DateTime<Utc>,
 }
 
-impl ProvideSizeInBytes for InMemoryTable<Vec<u8>> {
+impl IndexWithSizeInBytes for InMemoryTable<Vec<u8>> {
     fn get_index(&self) -> Arc<SkipMap<Vec<u8>, (usize, u64)>> {
         Arc::clone(&self.index)
     }
@@ -99,7 +99,7 @@ impl InMemoryTable<Vec<u8>> {
 
             // key length + value offset length + date created length
             // it takes 4 bytes to store a 32 bit integer since 8 bits makes 1 byte
-            let entry_length_byte = entry.key.len() + 4 + 4;
+            let entry_length_byte = entry.key.len() + 4 + 8;
             self.size += entry_length_byte;
             return Ok(());
         }
@@ -108,7 +108,7 @@ impl InMemoryTable<Vec<u8>> {
             .insert(entry.key.to_owned(), (entry.val_offset, entry.created_at));
         // key length + value offset length + date created length
         // it takes 4 bytes to store a 32 bit integer since 8 bits makes 1 byte
-        let entry_length_byte = entry.key.len() + 4 + 4;
+        let entry_length_byte = entry.key.len() + 4 + 8;
         self.size += entry_length_byte;
         return Ok(());
     }
@@ -149,7 +149,10 @@ impl InMemoryTable<Vec<u8>> {
         }
         let created_at = Utc::now();
         // Insert thumb stone to indicate deletion
-        self.index.insert(key.to_vec(), ( THUMB_STONE, created_at.timestamp_millis() as u64));
+        self.index.insert(
+            key.to_vec(),
+            (THUMB_STONE, created_at.timestamp_millis() as u64),
+        );
         return Ok(());
     }
     pub fn false_positive_rate(&mut self) -> f64 {
@@ -159,7 +162,7 @@ impl InMemoryTable<Vec<u8>> {
         self.size
     }
 
-    pub fn get_index(self) -> Arc<SkipMap<Vec<u8>, (usize, u64)>>{
+    pub fn get_index(self) -> Arc<SkipMap<Vec<u8>, (usize, u64)>> {
         self.index.clone()
     }
 
