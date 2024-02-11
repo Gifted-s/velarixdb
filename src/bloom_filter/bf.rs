@@ -20,6 +20,7 @@ pub struct BloomFilter {
     bit_vec: Arc<Mutex<BitVec>>, // store the bit array each representing 0 or 1 meaning true or false
 }
 
+
 impl BloomFilter {
     pub(crate) fn new(false_positive_rate: f64, no_of_elements: usize) -> Self {
         assert!(
@@ -105,6 +106,12 @@ impl BloomFilter {
     pub(crate) fn num_of_hash_functions(&self) -> usize {
         // Retrieve the element count atomically.
         self.no_of_hash_func as usize
+    }
+
+      /// Get SSTable path
+      pub(crate) fn get_sstable_path(&self) -> SSTablePath {
+        // Retrieve the element count atomically.
+        self.sstable_path.clone().unwrap()
     }
 
     fn calculate_hash<T: Hash>(&self, key: &T, seed: usize) -> u64 {

@@ -16,6 +16,7 @@ pub(crate) struct ValueLogEntry {
     pub(crate) vsize: usize,
     pub(crate) key: Vec<u8>,
     pub(crate) value: Vec<u8>,
+    pub(crate) created_at: u64, // date to milliseconds
 }
 
 impl ValueLog {
@@ -39,17 +40,28 @@ impl ValueLog {
         })
     }
 
-    pub(crate) fn append(&self, key: &Vec<u8>, value: &Vec<u8>) -> io::Result<usize> {
+    pub(crate) fn append(
+        &self,
+        key: &Vec<u8>,
+        value: &Vec<u8>,
+        created_at: u64,
+    ) -> io::Result<usize> {
         let mut log_file = self.file.lock().map_err(|poison_err| {
             io::Error::new(
                 io::ErrorKind::Other,
                 format!("Failed to lock file {:?}", poison_err),
             )
         })?;
-        let v_log_entry = ValueLogEntry::new(key.len(), value.len(), key.to_vec(), value.to_vec());
+        let v_log_entry = ValueLogEntry::new(
+            key.len(),
+            value.len(),
+            key.to_vec(),
+            value.to_vec(),
+            created_at,
+        );
         let serialized_data = v_log_entry.serialize();
 
-        // Get the current offset before writing(this will be the offset of the value stored in the memory)
+        // Get the current offset before writing(this will be the offset of the value stored in the memtable)
         let value_offset = log_file.seek(io::SeekFrom::End(0))?;
 
         log_file
@@ -76,7 +88,7 @@ impl ValueLog {
             return Ok(None);
         }
         let _entry_len = u32::from_le_bytes(entry_len_bytes);
-        
+
         // get key length
         let mut key_len_bytes = [0; 4];
         let bytes_read = log_file.read(&mut key_len_bytes)?;
@@ -93,13 +105,12 @@ impl ValueLog {
         }
         let val_len = u32::from_le_bytes(val_len_bytes);
 
-        
         let mut key = vec![0; key_len as usize];
         bytes_read = log_file.read(&mut key)?;
         if bytes_read == 0 {
             return Ok(None);
         }
-       
+
         let mut value = vec![0; val_len as usize];
         bytes_read = log_file.read(&mut value)?;
 
@@ -134,17 +145,24 @@ impl ValueLog {
 }
 
 impl ValueLogEntry {
-    pub(crate) fn new(ksize: usize, vsize: usize, key: Vec<u8>, value: Vec<u8>) -> Self {
+    pub(crate) fn new(
+        ksize: usize,
+        vsize: usize,
+        key: Vec<u8>,
+        value: Vec<u8>,
+        created_at: u64,
+    ) -> Self {
         Self {
             ksize,
             vsize,
             key,
             value,
+            created_at,
         }
     }
 
     fn serialize(&self) -> Vec<u8> {
-        let entry_len = 4 + 4 + 4 + self.key.len() + self.value.len();
+        let entry_len = 4 + 4 + 4 + 8 + self.key.len() + self.value.len();
 
         let mut serialized_data = Vec::with_capacity(entry_len);
 
@@ -153,17 +171,18 @@ impl ValueLogEntry {
         serialized_data.extend_from_slice(&(self.key.len() as u32).to_le_bytes());
 
         serialized_data.extend_from_slice(&(self.value.len() as u32).to_le_bytes());
-       
+
+        serialized_data.extend_from_slice(&(self.created_at as u64).to_le_bytes());
+
         serialized_data.extend_from_slice(&self.key);
 
         serialized_data.extend_from_slice(&self.value);
 
         serialized_data
-
     }
 
     fn deserialize(serialized_data: &[u8]) -> io::Result<Self> {
-        if serialized_data.len() < 12 {
+        if serialized_data.len() < 20 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "invalid length of serialized data",
@@ -190,6 +209,7 @@ impl ValueLogEntry {
             serialized_data[6],
             serialized_data[7],
         ]) as usize;
+
         let value_len = u32::from_le_bytes([
             serialized_data[8],
             serialized_data[9],
@@ -197,17 +217,30 @@ impl ValueLogEntry {
             serialized_data[11],
         ]) as usize;
 
-        if serialized_data.len() != 12 + key_len + value_len {
+        let created_at = u64::from_le_bytes([
+            serialized_data[12],
+            serialized_data[13],
+            serialized_data[14],
+            serialized_data[15],
+            serialized_data[16],
+            serialized_data[17],
+            serialized_data[18],
+            serialized_data[19],
+        ]);
+
+        if serialized_data.len() != 20 + key_len + value_len {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "invalid length of serialized data",
             ));
         }
 
-        let key = serialized_data[12..(12 + key_len)].to_vec();
-        let value = serialized_data[(12 + key_len)..].to_vec();
+        let key = serialized_data[20..(20 + key_len)].to_vec();
+        let value = serialized_data[(20 + key_len)..].to_vec();
 
-        Ok(ValueLogEntry::new(key_len, value_len, key, value))
+        Ok(ValueLogEntry::new(
+            key_len, value_len, key, value, created_at,
+        ))
     }
 }
 
@@ -219,11 +252,17 @@ mod tests {
     fn test_serialized_deserialized() {
         let key = vec![1, 2, 3];
         let value = vec![4, 5, 6];
-
-        let original_entry = ValueLogEntry::new(key.len(), value.len(), key.clone(), value.clone());
+        let created_at = 164343434343434;
+        let original_entry = ValueLogEntry::new(
+            key.len(),
+            value.len(),
+            key.clone(),
+            value.clone(),
+            created_at,
+        );
         let serialized_data = original_entry.serialize();
 
-        let expected_entry_len = 4 + 4 + 4 + key.len() + value.len();
+        let expected_entry_len = 4 + 4 + 4 + 8 + key.len() + value.len();
 
         assert_eq!(serialized_data.len(), expected_entry_len);
 

@@ -1,10 +1,11 @@
 use crate::{
     bloom_filter::BloomFilter,
     compaction::BucketMap,
-    memtable::{InMemoryTable, DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MEMTABLE_CAPACITY},
+    memtable::{Entry, InMemoryTable, DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MEMTABLE_CAPACITY},
     sstable::SSTable,
     value_log::{ValueLog, VLOG_FILE_NAME},
 };
+use chrono::{DateTime, Utc};
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 use serde::de::value;
@@ -62,9 +63,10 @@ impl StorageEngine<Vec<u8>> {
         // Convert the key and value into Vec<u8> from given &str.
         let key = &key.as_bytes().to_vec();
         let value = &value.as_bytes().to_vec();
+        let created_at = Utc::now().timestamp_millis() as u64;
 
         // Write to value log first which returns the offset
-        let v_offset_opt = self.val_log.append(key, value);
+        let v_offset_opt = self.val_log.append(key, value, created_at);
         match v_offset_opt {
             Ok(v_offset) => {
                 // then check if the length of the memtable + head offset > than memtable length
@@ -77,15 +79,22 @@ impl StorageEngine<Vec<u8>> {
                     let size_unit = self.memtable.size_unit();
                     let false_positive_rate = self.memtable.false_positive_rate();
 
-                    self.flush_memtable()?;
-
-                    self.memtable = InMemoryTable::with_specified_capacity_and_rate(
-                        size_unit,
-                        capacity,
-                        false_positive_rate,
-                    );
+                    let flush_result = self.flush_memtable();
+                    match flush_result {
+                        Ok(_) => {
+                            self.memtable = InMemoryTable::with_specified_capacity_and_rate(
+                                size_unit,
+                                capacity,
+                                false_positive_rate,
+                            );
+                        }
+                        Err(err) => {
+                            return Err(io::Error::new(err.kind(), err.to_string()));
+                        }
+                    }
                 }
-                self.memtable.insert(key, v_offset.try_into().unwrap())?;
+                let entry = Entry::new(key.to_vec(), v_offset.try_into().unwrap(), created_at);
+                self.memtable.insert(&entry)?;
                 return Ok(true);
             }
             Err(err) => io::Error::new(err.kind(), "Could not write entry to value log"),
@@ -149,16 +158,27 @@ impl StorageEngine<Vec<u8>> {
 
     // if write + head offset is greater than size then flush to disk
     fn flush_memtable(&mut self) -> io::Result<()> {
-        let insert_result = self.buckets.insert_to_appropriate_bucket(&self.memtable);
+        let hotness = 1;
+        let insert_result = self
+            .buckets
+            .insert_to_appropriate_bucket(&self.memtable, hotness);
         // let mut sstable = SSTable::new(self.dir.sst.clone(), true);
         println!("Writing to sstable =================================================");
         //write the memtable to the disk as SS Tables
         match insert_result {
             Ok(sstable_path) => {
                 // insert to bloom filter
-                self.memtable.bloom_filter.set_sstable_path(sstable_path);
-                self.bloom_filters
-                    .push(self.memtable.bloom_filter.to_owned());
+                self.memtable
+                    .get_bloom_filter()
+                    .set_sstable_path(sstable_path);
+                self.bloom_filters.push(self.memtable.get_bloom_filter());
+
+                // sort bloom filter by hotness
+                self.bloom_filters.sort_by(|a, b| {
+                    b.get_sstable_path()
+                        .get_hotness()
+                        .cmp(&a.get_sstable_path().get_hotness())
+                });
                 self.memtable = self.memtable.clear();
                 Ok(())
             }
@@ -293,8 +313,9 @@ impl StorageEngine<Vec<u8>> {
                 match vlog.recover(offset) {
                     Ok(entries) => {
                         for e in entries {
+                            let entry = Entry::new(e.key.clone(), offset, e.created_at);
                             // we will be rewriting head to memtable but safe since we also set the offset of the head
-                            memtable.insert(&e.key, offset.try_into().unwrap())?;
+                            memtable.insert(&entry)?;
                             offset += e.ksize + e.vsize + e.key.len() + e.value.len();
                         }
                     }

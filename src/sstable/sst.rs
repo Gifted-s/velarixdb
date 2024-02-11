@@ -6,20 +6,29 @@ use std::{
     cmp::Ordering,
     fs::{self, OpenOptions},
     io::{self, Read, Seek, SeekFrom, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     rc::Rc,
     sync::{Arc, Mutex},
 };
 
 use crate::{
-    bloom_filter::{self, BloomFilter},
-    memtable::{DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MEMTABLE_CAPACITY},
+    compaction::ProvideSizeInBytes,
+    memtable::{Entry, DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MEMTABLE_CAPACITY},
 };
 
 pub struct SSTable {
     file_path: PathBuf,
-    index: Arc<SkipMap<Vec<u8>, usize>>,
-    created_at: DateTime<Utc>,
+    index: Arc<SkipMap<Vec<u8>, (usize, u64)>>,
+    created_at: u64,
+}
+
+impl ProvideSizeInBytes for SSTable {
+    fn get_index(&self) -> Arc<SkipMap<Vec<u8>, (usize, u64)>> {
+        Arc::clone(&self.index)
+    }
+    fn size(&self) -> usize {
+        self.size()
+    }
 }
 
 impl SSTable {
@@ -40,11 +49,10 @@ impl SSTable {
                 .expect("error creating file");
         }
         let index = Arc::new(SkipMap::new());
-        let bloom_filter = BloomFilter::new(DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MEMTABLE_CAPACITY);
         Self {
             file_path,
             index,
-            created_at,
+            created_at: created_at.timestamp_millis() as u64,
         }
     }
 
@@ -58,36 +66,39 @@ impl SSTable {
 
         let file_mutex = Mutex::new(file);
 
-        // This will store the head offset(this stores the most recent offset)
+        // This will store the head offset(this stores the most recent value offset)
         let mut head_offset = 0;
 
         let mut locked_file = file_mutex.lock().unwrap();
-        let _ = self
-            .index
-            .iter()
-            .map(|e| {
-                let entry = (e.key().clone(), *e.value());
-                // key length(used during fetch) + key len(actual key length) + value length(4 bytes)
-                let entry_len = 4 + entry.0.len() + 4;
-                let mut entry_vec = Vec::with_capacity(entry_len as usize);
+        self.index.iter().for_each(|e| {
+            let entry = Entry::new(e.key().clone(), e.value().0, e.value().1);
 
-                entry_vec.extend_from_slice(&(entry.0.len() as u32).to_le_bytes());
-                entry_vec.extend_from_slice(&entry.0);
-                entry_vec.extend_from_slice(&(entry.1 as u32).to_le_bytes());
-                locked_file.write_all(&entry_vec).unwrap();
+            // key length(used during fetch) + key len(actual key length) + value length(4 bytes) + date in milliseconds(8 bytes)
+            let entry_len = 4 + entry.key.len() + 4 + 8;
+            let mut entry_vec = Vec::with_capacity(entry_len as usize);
 
-                assert!(entry_len == entry_vec.len(), "Incorrect entry size");
+            entry_vec.extend_from_slice(&(entry.key.len() as u32).to_le_bytes());
+            entry_vec.extend_from_slice(&entry.key);
+            entry_vec.extend_from_slice(&(entry.val_offset as u32).to_le_bytes());
+            entry_vec.extend_from_slice(&(entry.created_at as u64).to_le_bytes());
+            locked_file.write_all(&entry_vec).unwrap();
 
-                locked_file.flush().unwrap();
+            //TODO: write creation time to file
 
-                match Self::compare_offsets(head_offset, entry.1) {
-                    Ordering::Less => head_offset = entry.1,
-                    _ => {
-                        // We only update header if the value offset is greater than existing header offset
-                    }
+            assert!(entry_len == entry_vec.len(), "Incorrect entry size");
+
+            locked_file.flush().unwrap();
+
+            // We check that the head offset is less than the value offset because
+            // there is no gurantee that the value offset of the next key will be greater than
+            // the previous key since index is sorted based on key and not value offset
+            match Self::compare_offsets(head_offset, entry.val_offset) {
+                Ordering::Less => head_offset = entry.val_offset,
+                _ => {
+                    // We only update header if the value offset is greater than existing header offset
                 }
-            })
-            .collect::<Vec<_>>();
+            }
+        });
         let mut entry_vec = Vec::with_capacity(12);
 
         // will be stored as <head, head_offset>
@@ -109,7 +120,7 @@ impl SSTable {
         let file = OpenOptions::new().read(true).open(file_path)?;
 
         let file_mutex = Mutex::new(file);
-       
+
         // read bloom filter to check if the key possbly exists in the sstable
         let mut locked_file = file_mutex.lock().unwrap();
 
@@ -141,6 +152,15 @@ impl SSTable {
                     format!("Key {:?} not found", searched_key),
                 ));
             }
+            let mut created_at_bytes = [0; 8];
+            bytes_read = locked_file.read(&mut created_at_bytes)?;
+            if bytes_read == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("Key {:?} not found", searched_key),
+                ));
+            }
+            let _ = u64::from_le_bytes(created_at_bytes);
             let value_offset = u32::from_le_bytes(val_offset_bytes);
 
             if key == searched_key {
@@ -159,12 +179,85 @@ impl SSTable {
         }
     }
 
-    pub fn set_index(&mut self, index: Arc<SkipMap<Vec<u8>, usize>>) {
+    fn size(&self) -> usize {
+        fs::metadata(self.get_path()).unwrap().len() as usize
+    }
+
+    pub fn set_index(&mut self, index: Arc<SkipMap<Vec<u8>, (usize, u64)>>) {
         self.index = index
+    }
+    pub fn get_index(&self) -> Arc<SkipMap<Vec<u8>, (usize, u64)>> {
+        self.index.clone()
     }
     pub fn get_path(&self) -> String {
         self.file_path.to_string_lossy().into_owned()
     }
 
-    fn from_file(file_path: PathBuf) {}
+    fn file_exists(path_buf: &PathBuf) -> bool {
+        // Convert the PathBuf to a Path
+        let path: &Path = path_buf.as_path();
+
+        // Check if the file exists
+        path.exists() && path.is_file()
+    }
+
+    fn from_file(sstable_file_path: PathBuf) -> io::Result<Option<SSTable>> {
+        let index = Arc::new(SkipMap::new());
+        // Open the file in read mode
+        let file_path = PathBuf::from(&sstable_file_path);
+        if Self::file_exists(&file_path) {
+            return Ok(None);
+        }
+
+        let file = OpenOptions::new().read(true).open(file_path)?;
+
+        let file_mutex = Mutex::new(file);
+
+        // read bloom filter to check if the key possbly exists in the sstable
+        let mut locked_file = file_mutex.lock().unwrap();
+
+        // search sstable for key
+        loop {
+            let mut key_len_bytes = [0; 4];
+            let mut bytes_read = locked_file.read(&mut key_len_bytes)?;
+            if bytes_read == 0 {
+                break;
+            }
+            let key_len = u32::from_le_bytes(key_len_bytes);
+
+            let mut key = vec![0; key_len as usize];
+            bytes_read = locked_file.read(&mut key)?;
+            if bytes_read == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    format!("File read ended expectedly"),
+                ));
+            }
+            let mut val_offset_bytes = [0; 4];
+            bytes_read = locked_file.read(&mut val_offset_bytes)?;
+            if bytes_read == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    format!("File read ended expectedly"),
+                ));
+            }
+            let mut created_at_bytes = [0; 4];
+            bytes_read = locked_file.read(&mut created_at_bytes)?;
+            if bytes_read == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    format!("File read ended expectedly"),
+                ));
+            }
+            let created_at = u32::from_le_bytes(created_at_bytes);
+            let value_offset = u32::from_le_bytes(val_offset_bytes);
+            index.insert(key, (value_offset as usize, created_at as u64));
+        }
+        let created_at = Utc::now().timestamp_millis() as u64;
+        return Ok(Some(SSTable {
+            file_path: sstable_file_path.to_owned(),
+            index: index.to_owned(),
+            created_at,
+        }));
+    }
 }
