@@ -24,7 +24,6 @@ impl compactor {
         
         buckets.iter().for_each(|b|{
             let ssttable_paths = b.sstables;
-            
         })
         
     }
