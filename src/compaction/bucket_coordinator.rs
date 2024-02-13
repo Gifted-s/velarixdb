@@ -179,14 +179,16 @@ impl BucketMap {
 
 
         // NOTE:  This should be called only after compaction is complete
-        pub fn delete_sstables(&mut self, sstables_to_delete: Vec<(Uuid, Vec<SSTablePath>)>) {
-            
+        pub fn delete_sstables(&mut self, sstables_to_delete: &Vec<(Uuid, Vec<SSTablePath>)>) -> bool {
+            let mut all_sstables_deleted = true;
             // Remove sstables from in memory tables
-            for sst in &sstables_to_delete {
-                let bucket: &Bucket = self.buckets.get(&sst.0).unwrap();
-                let sstables_remaining = &bucket.sstables[0..MAX_TRESHOLD];
+            for (bucket_id, _) in sstables_to_delete {
+                let bucket: &Bucket = self.buckets.get(&bucket_id).unwrap();
+
+                let sstables_remaining = &bucket.sstables[(MAX_TRESHOLD+1)..];
+                // reset bucket based by bucket ID 
                 self.buckets.insert(
-                    sst.0,
+                    *bucket_id,
                     Bucket {
                         id: bucket.id,
                         dir: bucket.dir.to_owned(),
@@ -196,16 +198,19 @@ impl BucketMap {
                 );
             }
            // Remove the sstables from bucket 
-            for sst in &sstables_to_delete {
-                let sst_paths= &sst.1;
+            for (_, sst_paths) in sstables_to_delete {
                 sst_paths.iter().for_each(|sst|{
                     // Attempt to delete the file
                     match fs::remove_file(sst.file_path.to_owned()) {
                         Ok(_) => println!("SS Table deleted successfully."),
-                        Err(err) => eprintln!("Error deleting SS Table file: {}", err),
+                        Err(err) => {
+                            all_sstables_deleted= false;
+                            eprintln!("Error deleting SS Table file: {}", err)
+                        },
                     }
                 })
             }
+            return all_sstables_deleted
         }
 
 

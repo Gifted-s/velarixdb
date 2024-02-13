@@ -14,10 +14,10 @@ use crate::compaction::SSTablePath;
 
 #[derive(Debug)]
 pub struct BloomFilter {
-    sstable_path: Option<SSTablePath>,
-    no_of_hash_func: usize, // number of hash functions to used by the bloom filter
-    no_of_elements: AtomicU32, // number of elements in the bloom filter
-    bit_vec: Arc<Mutex<BitVec>>, // store the bit array each representing 0 or 1 meaning true or false
+    pub sstable_path: Option<SSTablePath>,
+    pub no_of_hash_func: usize, // number of hash functions to used by the bloom filter
+    pub no_of_elements: AtomicU32, // number of elements in the bloom filter
+    pub bit_vec: Arc<Mutex<BitVec>>, // store the bit array each representing 0 or 1 meaning true or false
 }
 
 
@@ -109,9 +109,9 @@ impl BloomFilter {
     }
 
       /// Get SSTable path
-      pub(crate) fn get_sstable_path(&self) -> SSTablePath {
+      pub(crate) fn get_sstable_path(&self) -> &SSTablePath {
         // Retrieve the element count atomically.
-        self.sstable_path.clone().unwrap()
+        self.sstable_path.as_ref().unwrap()
     }
 
     fn calculate_hash<T: Hash>(&self, key: &T, seed: usize) -> u64 {

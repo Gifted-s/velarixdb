@@ -1,6 +1,6 @@
 use crate::{
     bloom_filter::BloomFilter,
-    compaction::BucketMap,
+    compaction::{BucketMap, Compactor},
     memtable::{Entry, InMemoryTable, DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MEMTABLE_CAPACITY},
     sstable::SSTable,
     value_log::{ValueLog, VLOG_FILE_NAME},
@@ -16,15 +16,15 @@ pub(crate) static DEFAULT_ALLOW_PREFETCH: bool = true;
 pub(crate) static DEFAULT_PREFETCH_SIZE: usize = 32;
 
 pub struct StorageEngine<K: Hash + PartialOrd> {
-    pub dir: DirPath,
-    pub memtable: InMemoryTable<K>,
-    pub bloom_filters: Vec<BloomFilter>,
-    pub val_log: ValueLog,
-    pub buckets: BucketMap,
-    pub sstables: Vec<SSTable>,
-    pub key_index: LevelsBiggestKeys,
-    pub allow_prefetch: bool,
-    pub prefetch_size: usize,
+    pub(crate) dir: DirPath,
+    pub(crate) memtable: InMemoryTable<K>,
+    pub(crate) bloom_filters: Vec<BloomFilter>,
+    pub(crate) val_log: ValueLog,
+    pub(crate) buckets: BucketMap,
+    pub(crate) sstables: Vec<SSTable>,
+    pub(crate) key_index: LevelsBiggestKeys,
+    pub(crate) allow_prefetch: bool,
+    pub(crate) prefetch_size: usize,
 }
 
 pub struct LevelsBiggestKeys {
@@ -334,6 +334,14 @@ impl StorageEngine<Vec<u8>> {
             Err(err) => Err(io::Error::new(err.kind(), "read failure")),
         }
     }
+
+
+
+    pub fn run_compaction(&mut self){
+        let compactor = Compactor::new();
+        compactor.run_compaction(&mut self.buckets, &mut self.bloom_filters);
+        
+    }
 }
 
 impl DirPath {
@@ -371,12 +379,14 @@ impl SizeUnit {
 mod tests {
     use std::fs::remove_dir;
 
+    use crate::bloom_filter;
+
     use super::*;
 
     #[test]
     fn storage_engine_create() {
         let path = PathBuf::new().join("bump");
-        let mut wt = StorageEngine::new(path.clone()).unwrap();
+        let mut s_engine = StorageEngine::new(path.clone()).unwrap();
 
         // Specify the number of random strings to generate
         let num_strings = 1000;
@@ -392,8 +402,10 @@ mod tests {
 
         // Print the generated random strings
         for (_, s) in random_strings.iter().enumerate() {
-            wt.put(s, "boyode").unwrap();
+            s_engine.put(s, "boyode").unwrap();
         }
+        // let bloom_filters = s_engine.compactor.run_compaction(&mut s_engine.buckets, &mut s_engine.bloom_filters);
+        // s_engine.bloom_filters = bloom_filters.unwrap();
 
         // wt.put(k2, "boyode").unwrap();
         // wt.put(k3, "boyode").unwrap();
@@ -418,3 +430,21 @@ fn generate_random_string(length: usize) -> String {
         .map(|c| c as char)
         .collect()
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
