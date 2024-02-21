@@ -1,4 +1,4 @@
-use std::{io, mem, path::PathBuf, sync::Arc};
+use std::{cmp::Ordering, io, mem, path::PathBuf, sync::Arc};
 
 use crossbeam_skiplist::SkipMap;
 use uuid::Uuid;
@@ -28,23 +28,38 @@ impl MergedSSTable {
         }
     }
 }
+
 impl Compactor {
     pub fn new() -> Self {
         return Self;
     }
 
-    pub fn run_compaction(&self, buckets: &mut BucketMap, bloom_filters: &mut Vec<BloomFilter>) -> io::Result<Vec<BloomFilter>> {
-        // Step 1: Extract buckets to compact
-        let buckets_to_compact = buckets.extract_buckets_to_compact();
-        let sstables_files_to_remove = buckets_to_compact.1;
+    pub fn run_compaction(&self, buckets: &mut BucketMap, bloom_filters: &mut Vec<BloomFilter>) -> io::Result<bool> {
+        let mut number_of_compactions =0;
+        // The compaction loop will keep running until there 
+        // are no more buckets with more than minimum treshold size
 
+        // TODO: See if we can handle this with multiple threads while keeping track of number of Disk IO used 
+        // so that we don't run out of Disk IO during large compactions
+        loop {
+        // Step 1: Extract buckets to compact
+        let buckets_to_compact_and_sstables_to_remove = buckets.extract_buckets_to_compact();
+        let buckets_to_compact =  buckets_to_compact_and_sstables_to_remove.0;
+        let sstables_files_to_remove = buckets_to_compact_and_sstables_to_remove.1;
+        
+        // Exit the compaction loop if there are no more buckets to compact
+        if buckets_to_compact.is_empty(){
+            println!("{} ALL COMPACTION COMPLETED", number_of_compactions);
+            return Ok(true)
+        }
+        number_of_compactions+=1;
         // Step 2: Merge SSTables in each buckct
-        let merged_sstable_opt = self.merge_sstables_in_buckets(&buckets_to_compact.0);
+        let merged_sstable_opt = self.merge_sstables_in_buckets(&buckets_to_compact);
         let mut actual_number_of_sstables_written_to_disk = 0;
         let mut expected_sstables_to_be_writtten_to_disk = 0;
         match merged_sstable_opt {
             Some(merged_sstables) => {
-                // Number of
+                // Number of sstables expected to be inserted to disk
                 expected_sstables_to_be_writtten_to_disk = merged_sstables.len();
 
                 //Step 3: Write merged sstables to bucket map
@@ -58,10 +73,8 @@ impl Compactor {
                             Ok(sst_file_path) => {
                                 // Step 4: Map this bloom filter to its sstable file path
                                 m.bloom_filter.set_sstable_path(sst_file_path);
-
                                 // Step 5: Store the bloom filter in the bloom filters vector
                                 bloom_filters.push(m.bloom_filter);
-
                                 actual_number_of_sstables_written_to_disk += 1;
                             }
                             Err(_) =>  {
@@ -76,27 +89,34 @@ impl Compactor {
         }
 
         println!(
-        "Expected number of new SSTables written to disk :{} , Actual number of SSTables written {}",
+        "Expected number of new SSTables written to disk : {}, Actual number of SSTables written {}",
          expected_sstables_to_be_writtten_to_disk, 
          actual_number_of_sstables_written_to_disk 
         );
 
         if expected_sstables_to_be_writtten_to_disk == actual_number_of_sstables_written_to_disk{
+            
             // Step 6:  Delete the sstables that we already merged from their previous buckets
             let updated_bloom_filters_opt = self.clean_up_after_compaction(buckets, &sstables_files_to_remove, bloom_filters);
             match updated_bloom_filters_opt {
                 Some(updated_bloom_filters)=>{
                     bloom_filters.clear();
-                    bloom_filters.clone_from_slice(&updated_bloom_filters.clone());
-                     return Ok(updated_bloom_filters);
+                    // update bloom filter vector
+                    bloom_filters.extend_from_slice(&updated_bloom_filters.clone());
+                    bloom_filters.iter().for_each(|bf|{
+                        println!("THIS IS OUT NEW BF {:?}", bf.sstable_path)
+                    });
+                   
                 }
                 None=> {
                     return Err(io::Error::new(io::ErrorKind::BrokenPipe, "Bloom Filter was not updated successfully"));
                 }
             }
         }
-        return Ok(Vec::new())
-        //
+          println!("{} COMPACTION COMPLETED SUCCESSFULLY", number_of_compactions);
+
+        }
+    
     }
 
     pub fn clean_up_after_compaction(&self,  buckets: &mut BucketMap,  sstables_to_delete: &Vec<(Uuid, Vec<SSTablePath>)>, bloom_filters_with_both_old_and_new_sstables: &mut Vec<BloomFilter>)-> Option<Vec<BloomFilter>>{
@@ -114,11 +134,13 @@ impl Compactor {
     }
     
     pub fn filter_out_old_bloom_filters(&self, bloom_filters_with_both_old_and_new_sstables: &mut Vec<BloomFilter>, sstables_to_delete: &Vec<(Uuid, Vec<SSTablePath>)>)-> Vec<BloomFilter>{
-    
-        let mut updated_bloom_filters = bloom_filters_with_both_old_and_new_sstables
-            .iter()
-            .filter(|b| {
-                let mut to_delete = false;
+        println!("How far have you gone before {}", bloom_filters_with_both_old_and_new_sstables.len());
+        let mut new_bf = Vec::new();
+        println!("SS tabels to delete {:?}", sstables_to_delete.clone());
+        bloom_filters_with_both_old_and_new_sstables
+            .into_iter()
+            .for_each(|b| {
+                let mut bf_sst_path_not_found_in_sstables_to_delete = true;
                 sstables_to_delete.iter().for_each(
                     |(_, sstable_files_paths)| {
                         sstable_files_paths.iter().for_each(
@@ -126,24 +148,20 @@ impl Compactor {
                                 if b.sstable_path.as_ref()
                                     .unwrap()
                                     .file_path
-                                    == file_path_to_delete.file_path
-                                {
-                                    to_delete = true;
-                                }
+                                    == file_path_to_delete.file_path{
+                                        bf_sst_path_not_found_in_sstables_to_delete= false
+                                    }
+                               
                             },
                         )
                     },
                 );
-                to_delete
-            })
-            .cloned()
-            .collect::<Vec<BloomFilter>>();
-        // Clear the bloom filter
-        bloom_filters_with_both_old_and_new_sstables.clear();
-
-        // reset it to the new bloom filter
-        bloom_filters_with_both_old_and_new_sstables.clone_from_slice(&updated_bloom_filters);
-        updated_bloom_filters
+                if bf_sst_path_not_found_in_sstables_to_delete{
+                    new_bf.push(b.to_owned());
+                }
+            });
+    println!("How far have you gone {}", new_bf.len());
+       new_bf
     }
 
 
@@ -153,11 +171,9 @@ impl Compactor {
         buckets.iter().for_each(|b| {
             let mut hotness = 0;
             let sstable_paths = &b.sstables;
-            let mut merged_sstable =
-                SSTable::from_file(PathBuf::new().join(sstable_paths[0].get_path()))
-                    .unwrap()
-                    .unwrap();
-            sstable_paths[1..].iter().for_each(|path| {
+            
+            let mut merged_sstable= SSTable::new(b.dir.clone(), false);
+            sstable_paths.iter().for_each(|path| {
                 hotness += path.hotness;
                 let sst_opt = SSTable::from_file(PathBuf::new().join(path.get_path())).unwrap();
                 match sst_opt {
@@ -189,7 +205,7 @@ impl Compactor {
         // Rebuild the bloom filter since a new sstable has been created
         let mut new_bloom_filter = BloomFilter::new(DEFAULT_FALSE_POSITIVE_RATE, index.len());
         index.iter().for_each(|e| new_bloom_filter.set(e.key()));
-        return new_bloom_filter;
+        new_bloom_filter
     }
 
     fn merge_sstables(&self, sst1: &SSTable, sst2: &SSTable) -> SSTable {
@@ -207,28 +223,30 @@ impl Compactor {
             .iter()
             .map(|e| Entry::new(e.key().to_vec(), e.value().0, e.value().1))
             .collect::<Vec<Entry<Vec<u8>, usize>>>();
-
+        
         let (mut i, mut j) = (0, 0);
-
         // Compare elements from both arrays and merge them
         while i < index1.len() && j < index2.len() {
-            if index1[i].key[0] < index2[j].key[0] {
-                // increase new_sstable size
-                merged_indexes.push(index1[i].clone());
-                i += 1;
-            } else if index1[i].key[0] == index2[i].key[0] {
-                // If the keys are thesame pick the updated one based on creation time
-                // TODO: Thumbstone compaction(with TTL) seperately
-                if index1[i].created_at > index2[i].created_at {
+
+            match index1[i].key.cmp(&index2[j].key)  {
+                Ordering::Less => {
+                    // increase new_sstable size
                     merged_indexes.push(index1[i].clone());
-                } else {
-                    merged_indexes.push(index2[i].clone());
+                    i += 1;
+                },
+                Ordering::Equal =>{
+                    if index1[i].created_at > index2[j].created_at {
+                        merged_indexes.push(index1[i].clone());
+                    } else {
+                        merged_indexes.push(index2[j].clone());
+                    }
+                    i += 1;
+                    j += 1;
+                },
+                Ordering::Greater =>{
+                    merged_indexes.push(index2[j].clone());
+                    j += 1;
                 }
-                i += 1;
-                j += 1;
-            } else {
-                merged_indexes.push(index2[j].clone());
-                j += 1;
             }
         }
 

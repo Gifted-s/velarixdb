@@ -25,6 +25,7 @@ pub struct StorageEngine<K: Hash + PartialOrd> {
     pub(crate) key_index: LevelsBiggestKeys,
     pub(crate) allow_prefetch: bool,
     pub(crate) prefetch_size: usize,
+    pub(crate) compactor: Compactor,
 }
 
 pub struct LevelsBiggestKeys {
@@ -170,7 +171,7 @@ impl StorageEngine<Vec<u8>> {
             .buckets
             .insert_to_appropriate_bucket(&self.memtable, hotness);
         // let mut sstable = SSTable::new(self.dir.sst.clone(), true);
-        println!("Writing to sstable =================================================");
+        println!(" ====================== FLUSHING TO SS TABLE ===========================");
         //write the memtable to the disk as SS Tables
         match insert_result {
             Ok(sstable_path) => {
@@ -244,6 +245,7 @@ impl StorageEngine<Vec<u8>> {
                 key_index,
                 allow_prefetch,
                 prefetch_size,
+                compactor: Compactor::new()
             });
         }
         // remove this section
@@ -264,6 +266,7 @@ impl StorageEngine<Vec<u8>> {
             key_index,
             allow_prefetch,
             prefetch_size,
+            compactor: Compactor::new()
         });
         //  else {
         //     // recover memtable
@@ -389,7 +392,7 @@ mod tests {
         let mut s_engine = StorageEngine::new(path.clone()).unwrap();
 
         // Specify the number of random strings to generate
-        let num_strings = 1000;
+        let num_strings = 5000;
 
         // Specify the length of each random string
         let string_length = 10;
@@ -403,6 +406,19 @@ mod tests {
         // Print the generated random strings
         for (_, s) in random_strings.iter().enumerate() {
             s_engine.put(s, "boyode").unwrap();
+        }
+        let compactor = Compactor::new();
+    
+        let compaction_opt = s_engine.compactor.run_compaction(&mut s_engine.buckets, &mut s_engine.bloom_filters);
+        match compaction_opt {
+            Ok(_)=>{
+                println!("Compaction is now successful");
+                println!("Length of bucket after compaction {:?}", s_engine.buckets.buckets.len());
+                println!("Length of bloom filters after compaction {:?}", s_engine.bloom_filters.len());
+            }
+            Err(err)=>{
+                println!("Error during compaction")
+            }
         }
         // let bloom_filters = s_engine.compactor.run_compaction(&mut s_engine.buckets, &mut s_engine.bloom_filters);
         // s_engine.bloom_filters = bloom_filters.unwrap();

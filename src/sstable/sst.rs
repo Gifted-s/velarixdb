@@ -209,10 +209,9 @@ impl SSTable {
         self.file_path.to_string_lossy().into_owned()
     }
 
-    fn file_exists(path_buf: &PathBuf) -> bool {
+    pub fn file_exists(path_buf: &PathBuf) -> bool {
         // Convert the PathBuf to a Path
         let path: &Path = path_buf.as_path();
-
         // Check if the file exists
         path.exists() && path.is_file()
     }
@@ -220,13 +219,11 @@ impl SSTable {
     pub fn from_file(sstable_file_path: PathBuf) -> io::Result<Option<SSTable>> {
         let index = Arc::new(SkipMap::new());
         // Open the file in read mode
-        let file_path = PathBuf::from(&sstable_file_path);
-        if Self::file_exists(&file_path) {
+        if !Self::file_exists(&sstable_file_path) {
             return Ok(None);
         }
 
-        let file = OpenOptions::new().read(true).open(file_path)?;
-
+        let file = OpenOptions::new().read(true).open(sstable_file_path.clone())?;
         let file_mutex = Mutex::new(file);
 
         // read bloom filter to check if the key possbly exists in the sstable

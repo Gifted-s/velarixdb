@@ -14,8 +14,8 @@ const MAX_TRESHOLD: usize = 32;
 const  BUCKET_DIRECTORY_PREFIX: &str = "bucket";
 #[derive(Debug)]
 pub struct BucketMap {
-    dir: PathBuf,
-    buckets: HashMap<Uuid, Bucket>,
+    pub dir: PathBuf,
+    pub buckets: HashMap<Uuid, Bucket>,
 }
 #[derive(Debug)]
 pub struct Bucket {
@@ -26,8 +26,8 @@ pub struct Bucket {
 }
 #[derive(Debug, Clone)]
 pub struct SSTablePath{
-    pub file_path: String,
-    pub hotness: u64
+    pub(crate) file_path: String,
+    pub(crate) hotness: u64
 }
 impl  SSTablePath{
     pub fn  new(file_path: String)-> Self{
@@ -76,23 +76,23 @@ impl BucketMap {
     }
 
 
-    pub fn insert_to_appropriate_bucket<T: IndexWithSizeInBytes>(&mut self, memtable: &T, hotness: u64) -> io::Result<SSTablePath> {
+    pub fn insert_to_appropriate_bucket<T: IndexWithSizeInBytes>(&mut self, table: &T, hotness: u64) -> io::Result<SSTablePath> {
         let added_to_bucket = false;
             
             for (_, bucket) in &mut self.buckets {
                 
                 // if (bucket low * bucket avg) is less than sstable size 
-                if (bucket.avarage_size as f64 * BUCKET_LOW  < memtable.size() as f64) 
+                if (bucket.avarage_size as f64 * BUCKET_LOW  < table.size() as f64) 
         
                     // and sstable size is less than (bucket avg * bucket high)
-                    && (memtable.size() < (bucket.avarage_size as f64 * BUCKET_HIGH) as usize)
+                    && (table.size() < (bucket.avarage_size as f64 * BUCKET_HIGH) as usize)
                     
                     // or the (sstable size is less than min sstabke size) and (bucket avg is less than the min sstable size )
-                    || ((memtable.size() as usize) < MIN_SSTABLE_SIZE && bucket.avarage_size  < MIN_SSTABLE_SIZE)
+                    || ((table.size() as usize) < MIN_SSTABLE_SIZE && bucket.avarage_size  < MIN_SSTABLE_SIZE)
                 {
                     
                     let mut sstable = SSTable::new(bucket.dir.clone(), true);
-                    sstable.set_index(memtable.get_index());
+                    sstable.set_index(table.get_index());
                     match sstable.write_to_file() {
                         Ok(_) => {
                             // add sstable to bucket
@@ -103,13 +103,6 @@ impl BucketMap {
                             bucket.sstables.push(sstable_path.clone());
                             bucket.sstables.iter_mut().for_each(|s| s.increase_hotness());
                             bucket.avarage_size = (bucket.sstables.iter().map(|s| fs::metadata(s.get_path()).unwrap().len()).sum::<u64>() / bucket.sstables.len() as u64) as usize;
-                            // for test
-                            self.buckets.iter().for_each(|b|{
-                                b.1.sstables.iter().for_each(|s|{
-                                    println!("Inserted to bucket {:?} \n", s);
-                                });
-                            });
-                           
                             return Ok(sstable_path);
                         }
                         Err(err) => {
@@ -123,7 +116,7 @@ impl BucketMap {
             if !added_to_bucket {
                 let mut bucket = Bucket::new(self.dir.clone());
                 let mut sstable = SSTable::new(bucket.dir.clone(), true);
-                    sstable.set_index(memtable.get_index());
+                    sstable.set_index(table.get_index());
                     match sstable.write_to_file() {
                         Ok(_) => {
                             // add sstable to bucket
@@ -163,11 +156,14 @@ impl BucketMap {
                 })
                 .for_each(|(_, elem)| {
                     let b = elem.1;
-                    if b.sstables.len() > MAX_TRESHOLD {
-                        sstables_to_delete.push((b.id, b.sstables[0..MAX_TRESHOLD].to_vec()));
-                    }
+
+                    // get the sstables we have to delete after compaction is complete
+                    // if the number of sstables is more than the max treshhold then just extract the first 32 sstables
+                    // otherwise extract all the sstables in the bucket
+                    sstables_to_delete.push((b.id, b.sstables.get(0..MAX_TRESHOLD).unwrap_or(&b.sstables).to_vec()));
+                
                     buckets_to_compact.push(Bucket {
-                        sstables: b.sstables[0..MAX_TRESHOLD].to_vec(),
+                        sstables: b.sstables.get(0..MAX_TRESHOLD).unwrap_or(&b.sstables).to_vec(),
                         id: b.id,
                         dir: b.dir.clone(),
                         avarage_size: b.avarage_size, // passing the average size is redundant here becuase
@@ -180,39 +176,56 @@ impl BucketMap {
 
         // NOTE:  This should be called only after compaction is complete
         pub fn delete_sstables(&mut self, sstables_to_delete: &Vec<(Uuid, Vec<SSTablePath>)>) -> bool {
-            let mut all_sstables_deleted = true;
+        let mut all_sstables_deleted = true;
             // Remove sstables from in memory tables
-            for (bucket_id, _) in sstables_to_delete {
-                let bucket: &Bucket = self.buckets.get(&bucket_id).unwrap();
+           // Iterate over the keys of the HashMap
+        let mut buckets_dir_to_delete : Vec<&Uuid>= vec![];
+        for (bucket_id, _) in sstables_to_delete {
+            // Access the bucket using the key
+            if let Some(bucket) = self.buckets.get_mut(bucket_id) {
+                let sstables_remaining = bucket.sstables.get((MAX_TRESHOLD + 1)..).unwrap_or(&vec![]).to_vec();
 
-                let sstables_remaining = &bucket.sstables[(MAX_TRESHOLD+1)..];
-                // reset bucket based by bucket ID 
-                self.buckets.insert(
-                    *bucket_id,
-                    Bucket {
+                // If bucket still contains some sstables after deletion
+                // then update the bucket to contain the sstables
+                // otherwise don't set the bucket
+                if !sstables_remaining.is_empty() {
+                    *bucket = Bucket {
                         id: bucket.id,
                         dir: bucket.dir.to_owned(),
                         avarage_size: bucket.avarage_size,
-                        sstables: sstables_remaining.to_owned(),
-                    },
-                );
+                        sstables: sstables_remaining,
+                    };
+                } else {
+                    buckets_dir_to_delete.push(bucket_id);
+                    // If all sstables in a bucket have been compacted, then delete the bucket and outdated sstables
+                    match fs::remove_dir_all(bucket.dir.to_owned()) {
+                        Ok(_) => println!("Bucket successfully removed with bucket id {}", bucket_id),
+                        Err(err) => eprintln!("Error removing directory: {}", err),
+                    }
+                }
             }
            // Remove the sstables from bucket 
             for (_, sst_paths) in sstables_to_delete {
                 sst_paths.iter().for_each(|sst|{
                     // Attempt to delete the file
-                    match fs::remove_file(sst.file_path.to_owned()) {
-                        Ok(_) => println!("SS Table deleted successfully."),
-                        Err(err) => {
-                            all_sstables_deleted= false;
-                            eprintln!("Error deleting SS Table file: {}", err)
-                        },
+                    if SSTable::file_exists(&PathBuf::new().join(sst.get_path()) ){
+                        match fs::remove_file(sst.file_path.to_owned()) {
+                            Ok(_) => println!("SS Table deleted successfully."),
+                            Err(err) => {
+                                all_sstables_deleted= false;
+                                eprintln!("Error deleting SS Table file: {}", err)
+                            },
+                        }
                     }
+                    
                 })
             }
-            return all_sstables_deleted
         }
-
-
-    
+        if buckets_dir_to_delete.len() >0 {
+            buckets_dir_to_delete.into_iter().for_each(|bucket_id|{
+                self.buckets.remove(bucket_id);
+            })
+        }
+        return all_sstables_deleted
+    }
 }
