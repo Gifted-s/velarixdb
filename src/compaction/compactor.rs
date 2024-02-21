@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, io, mem, path::PathBuf, sync::Arc};
+use std::{cmp::Ordering, collections::HashMap, io, mem, path::PathBuf, sync::Arc};
 
 use crossbeam_skiplist::SkipMap;
 use uuid::Uuid;
@@ -36,11 +36,12 @@ impl Compactor {
 
     pub fn run_compaction(&self, buckets: &mut BucketMap, bloom_filters: &mut Vec<BloomFilter>) -> io::Result<bool> {
         let mut number_of_compactions =0;
+        println!("Initial number of bloomfilters {}", bloom_filters.len());
         // The compaction loop will keep running until there 
         // are no more buckets with more than minimum treshold size
 
-        // TODO: See if we can handle this with multiple threads while keeping track of number of Disk IO used 
-        // so that we don't run out of Disk IO during large compactions
+        // TODO: Handle this with multiple threads while keeping track of number of Disk IO used 
+        // so we don't run out of Disk IO during large compactions
         loop {
         // Step 1: Extract buckets to compact
         let buckets_to_compact_and_sstables_to_remove = buckets.extract_buckets_to_compact();
@@ -49,7 +50,7 @@ impl Compactor {
         
         // Exit the compaction loop if there are no more buckets to compact
         if buckets_to_compact.is_empty(){
-            println!("{} ALL COMPACTION COMPLETED", number_of_compactions);
+            println!("================== THIS IS THE SSTABLES FILE TO DELETE {:?} ===============", sstables_files_to_remove);
             return Ok(true)
         }
         number_of_compactions+=1;
@@ -95,31 +96,25 @@ impl Compactor {
         );
 
         if expected_sstables_to_be_writtten_to_disk == actual_number_of_sstables_written_to_disk{
-            
-            // Step 6:  Delete the sstables that we already merged from their previous buckets
-            let updated_bloom_filters_opt = self.clean_up_after_compaction(buckets, &sstables_files_to_remove, bloom_filters);
-            match updated_bloom_filters_opt {
-                Some(updated_bloom_filters)=>{
-                    bloom_filters.clear();
-                    // update bloom filter vector
-                    bloom_filters.extend_from_slice(&updated_bloom_filters.clone());
-                    bloom_filters.iter().for_each(|bf|{
-                        println!("THIS IS OUT NEW BF {:?}", bf.sstable_path)
-                    });
-                   
+
+            // Step 6:  Delete the sstables that we already merged from their previous buckets and update bloom filters
+            let bloom_filter_updated_opt = self.clean_up_after_compaction(buckets, &sstables_files_to_remove, bloom_filters);
+            match bloom_filter_updated_opt {
+                Some(bloom_filter_updated)=>{
+                    println!("{} COMPACTION COMPLETED SUCCESSFULLY : {}", number_of_compactions, bloom_filter_updated);   
                 }
                 None=> {
                     return Err(io::Error::new(io::ErrorKind::BrokenPipe, "Bloom Filter was not updated successfully"));
                 }
             }
         }
-          println!("{} COMPACTION COMPLETED SUCCESSFULLY", number_of_compactions);
+       
 
         }
     
     }
 
-    pub fn clean_up_after_compaction(&self,  buckets: &mut BucketMap,  sstables_to_delete: &Vec<(Uuid, Vec<SSTablePath>)>, bloom_filters_with_both_old_and_new_sstables: &mut Vec<BloomFilter>)-> Option<Vec<BloomFilter>>{
+    pub fn clean_up_after_compaction(&self,  buckets: &mut BucketMap,  sstables_to_delete: &Vec<(Uuid, Vec<SSTablePath>)>, bloom_filters_with_both_old_and_new_sstables: &mut Vec<BloomFilter>)-> Option<bool>{
        let all_sstables_deleted = buckets.delete_sstables(&sstables_to_delete);
        
        // if all sstables were not deleted then don't remove the associated bloom filters
@@ -127,41 +122,30 @@ impl Compactor {
        // since keys are represented in bits  
        if all_sstables_deleted{
         // Step 7: Delete the bloom filters associated with the sstables that we already merged
-        let updated_bloom_filters  = self.filter_out_old_bloom_filters(bloom_filters_with_both_old_and_new_sstables, sstables_to_delete);
-         return Some(updated_bloom_filters);
+        let bloom_filter_updated  = self.filter_out_old_bloom_filters(bloom_filters_with_both_old_and_new_sstables, sstables_to_delete);
+         return bloom_filter_updated;
        }
        None
     }
     
-    pub fn filter_out_old_bloom_filters(&self, bloom_filters_with_both_old_and_new_sstables: &mut Vec<BloomFilter>, sstables_to_delete: &Vec<(Uuid, Vec<SSTablePath>)>)-> Vec<BloomFilter>{
-        println!("How far have you gone before {}", bloom_filters_with_both_old_and_new_sstables.len());
-        let mut new_bf = Vec::new();
-        println!("SS tabels to delete {:?}", sstables_to_delete.clone());
-        bloom_filters_with_both_old_and_new_sstables
-            .into_iter()
-            .for_each(|b| {
-                let mut bf_sst_path_not_found_in_sstables_to_delete = true;
-                sstables_to_delete.iter().for_each(
-                    |(_, sstable_files_paths)| {
-                        sstable_files_paths.iter().for_each(
-                            |file_path_to_delete| {
-                                if b.sstable_path.as_ref()
-                                    .unwrap()
-                                    .file_path
-                                    == file_path_to_delete.file_path{
-                                        bf_sst_path_not_found_in_sstables_to_delete= false
-                                    }
-                               
-                            },
-                        )
+    pub fn filter_out_old_bloom_filters(&self, bloom_filters_with_both_old_and_new_sstables: &mut Vec<BloomFilter>, sstables_to_delete: &Vec<(Uuid, Vec<SSTablePath>)>)-> Option<bool>{
+        let mut bloom_filters_map: HashMap<String, BloomFilter> = bloom_filters_with_both_old_and_new_sstables
+        .iter()
+        .map(|b| (b.get_sstable_path().get_path().to_owned(), b.to_owned()))
+        .collect();
+
+        sstables_to_delete.iter().for_each(
+            |(_, sstable_files_paths)| {
+                sstable_files_paths.iter().for_each(
+                    |file_path_to_delete| {
+                        bloom_filters_map.remove(&file_path_to_delete.get_path());
                     },
-                );
-                if bf_sst_path_not_found_in_sstables_to_delete{
-                    new_bf.push(b.to_owned());
-                }
-            });
-    println!("How far have you gone {}", new_bf.len());
-       new_bf
+                )
+            },
+        );
+        bloom_filters_with_both_old_and_new_sstables.clear();
+        bloom_filters_with_both_old_and_new_sstables.extend(bloom_filters_map.into_iter().map(|(_, bf)| bf));
+       Some(true)
     }
 
 

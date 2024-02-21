@@ -1,6 +1,8 @@
+use crate::bloom_filter::{self, BloomFilter};
 use crate::memtable::InMemoryTable;
 use crate::sstable::SSTable;
 use std::collections::HashMap;
+use std::path::Path;
 use std::{fs, io};
 use std::{path::PathBuf, sync::Arc};
 use crossbeam_skiplist::SkipMap;
@@ -156,7 +158,6 @@ impl BucketMap {
                 })
                 .for_each(|(_, elem)| {
                     let b = elem.1;
-
                     // get the sstables we have to delete after compaction is complete
                     // if the number of sstables is more than the max treshhold then just extract the first 32 sstables
                     // otherwise extract all the sstables in the bucket
@@ -165,7 +166,7 @@ impl BucketMap {
                     buckets_to_compact.push(Bucket {
                         sstables: b.sstables.get(0..MAX_TRESHOLD).unwrap_or(&b.sstables).to_vec(),
                         id: b.id,
-                        dir: b.dir.clone(),
+                        dir: b.dir.to_owned(),
                         avarage_size: b.avarage_size, // passing the average size is redundant here becuase
                                                       // we don't need it for the actual compaction but we leave it to keep things readable
                     })
@@ -175,57 +176,61 @@ impl BucketMap {
 
 
         // NOTE:  This should be called only after compaction is complete
-        pub fn delete_sstables(&mut self, sstables_to_delete: &Vec<(Uuid, Vec<SSTablePath>)>) -> bool {
-        let mut all_sstables_deleted = true;
-            // Remove sstables from in memory tables
-           // Iterate over the keys of the HashMap
-        let mut buckets_dir_to_delete : Vec<&Uuid>= vec![];
-        for (bucket_id, _) in sstables_to_delete {
-            // Access the bucket using the key
-            if let Some(bucket) = self.buckets.get_mut(bucket_id) {
-                let sstables_remaining = bucket.sstables.get((MAX_TRESHOLD + 1)..).unwrap_or(&vec![]).to_vec();
 
-                // If bucket still contains some sstables after deletion
-                // then update the bucket to contain the sstables
-                // otherwise don't set the bucket
-                if !sstables_remaining.is_empty() {
-                    *bucket = Bucket {
-                        id: bucket.id,
-                        dir: bucket.dir.to_owned(),
-                        avarage_size: bucket.avarage_size,
-                        sstables: sstables_remaining,
-                    };
-                } else {
-                    buckets_dir_to_delete.push(bucket_id);
-                    // If all sstables in a bucket have been compacted, then delete the bucket and outdated sstables
-                    match fs::remove_dir_all(bucket.dir.to_owned()) {
-                        Ok(_) => println!("Bucket successfully removed with bucket id {}", bucket_id),
-                        Err(err) => eprintln!("Error removing directory: {}", err),
+        pub fn delete_sstables(&mut self, sstables_to_delete: &Vec<(Uuid, Vec<SSTablePath>)>) -> bool {
+            let mut all_sstables_deleted = true;
+            let mut buckets_to_delete: Vec<&Uuid> = Vec::new();
+        
+            for (bucket_id, sst_paths) in sstables_to_delete {
+                if let Some(bucket) = self.buckets.get_mut(bucket_id) {
+                    let sstables_remaining = bucket.sstables.get(sst_paths.len()..).clone().unwrap_or_default();
+        
+                    if !sstables_remaining.is_empty() {
+                        *bucket = Bucket {
+                            id: bucket.id,
+                            dir: bucket.dir.clone(),
+                            avarage_size: bucket.avarage_size,
+                            sstables: sstables_remaining.to_vec(),
+                        };
+                    } else {
+                        buckets_to_delete.push(bucket_id);
+        
+                        if let Err(err) = fs::remove_dir_all(&bucket.dir) {
+                            eprintln!("Error removing directory: {}", err);
+                        } else {
+                            println!("Bucket successfully removed with bucket id {}", bucket_id);
+                        }
+                    }
+                }
+        
+                for sst in sst_paths {
+                    if SSTable::file_exists(&PathBuf::new().join(sst.get_path())) {
+                         //bloom_filters_map.remove(&sst.get_path());
+                        if let Err(err) = fs::remove_file(&sst.file_path) {
+                            all_sstables_deleted = false;
+                            eprintln!("Error deleting SS Table file: {}", err);
+                        } else {
+                            println!("SS Table deleted successfully.");
+                        }
                     }
                 }
             }
-           // Remove the sstables from bucket 
-            for (_, sst_paths) in sstables_to_delete {
-                sst_paths.iter().for_each(|sst|{
-                    // Attempt to delete the file
-                    if SSTable::file_exists(&PathBuf::new().join(sst.get_path()) ){
-                        match fs::remove_file(sst.file_path.to_owned()) {
-                            Ok(_) => println!("SS Table deleted successfully."),
-                            Err(err) => {
-                                all_sstables_deleted= false;
-                                eprintln!("Error deleting SS Table file: {}", err)
-                            },
-                        }
-                    }
-                    
-                })
+        
+            if !buckets_to_delete.is_empty() {
+                buckets_to_delete.iter().for_each(|&bucket_id| {
+                    self.buckets.remove(bucket_id);
+                });
             }
+        
+            // bloom_filters.clear();
+            // bloom_filters.extend(bloom_filters_map.into_iter().map(|(_, bf)| bf));
+        
+            // println!("SS TABLES DELETED: {:?}", sstables_to_delete.iter().map(|e| e.1.len()).sum::<usize>());
+            // println!("Old Bloom Filters: {:?}", bloom_filters.len());
+            // println!("=======================================");
+            // println!("Updated Bloom Filters: {:?}", bloom_filters.len());
+        
+            all_sstables_deleted
         }
-        if buckets_dir_to_delete.len() >0 {
-            buckets_dir_to_delete.into_iter().for_each(|bucket_id|{
-                self.buckets.remove(bucket_id);
-            })
-        }
-        return all_sstables_deleted
-    }
+        
 }

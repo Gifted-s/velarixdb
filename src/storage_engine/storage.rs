@@ -388,11 +388,13 @@ mod tests {
 
     #[test]
     fn storage_engine_create() {
+        
         let path = PathBuf::new().join("bump");
+
         let mut s_engine = StorageEngine::new(path.clone()).unwrap();
 
         // Specify the number of random strings to generate
-        let num_strings = 5000;
+        let num_strings = 500000;
 
         // Specify the length of each random string
         let string_length = 10;
@@ -417,7 +419,7 @@ mod tests {
                 println!("Length of bloom filters after compaction {:?}", s_engine.bloom_filters.len());
             }
             Err(err)=>{
-                println!("Error during compaction")
+                println!("Error during compaction {}", err)
             }
         }
         // let bloom_filters = s_engine.compactor.run_compaction(&mut s_engine.buckets, &mut s_engine.bloom_filters);
@@ -435,7 +437,7 @@ mod tests {
         // assert_eq!(value3.unwrap().as_str(), "boyode");
 
         // assert_eq!(value4, None);
-        //fs::remove_dir_all(path.clone()).unwrap();
+        
     }
 }
 
