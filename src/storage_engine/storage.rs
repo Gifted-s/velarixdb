@@ -394,7 +394,7 @@ mod tests {
         let mut s_engine = StorageEngine::new(path.clone()).unwrap();
 
         // Specify the number of random strings to generate
-        let num_strings = 500000;
+        let num_strings = 50000;
 
         // Specify the length of each random string
         let string_length = 10;

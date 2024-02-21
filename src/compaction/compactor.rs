@@ -169,7 +169,7 @@ impl Compactor {
             });
 
             // Rebuild the bloom filter since a new sstable has been created
-            let new_bloom_filter = self.build_bloomfilter_from_sstable(&merged_sstable.index);
+            let new_bloom_filter = SSTable::build_bloomfilter_from_sstable(&merged_sstable.index);
             merged_sstbales.push(MergedSSTable {
                 sstable: merged_sstable,
                 hotness,

@@ -71,10 +71,6 @@ impl BloomFilter {
     }
 
 
-    fn bytes_to_usize(&self, bytes: [u8; 4]) -> usize {
-        return u32::from_le_bytes(bytes) as usize;
-    }
-
     pub fn clear(&self) -> Self {
         let mut bits = self.bit_vec.lock().expect("Failed to lock file");
         for i in 0..bits.len() {
