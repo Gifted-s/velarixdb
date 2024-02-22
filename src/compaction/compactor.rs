@@ -182,15 +182,6 @@ impl Compactor {
         Some(merged_sstbales)
     }
 
-    fn build_bloomfilter_from_sstable(
-        &self,
-        index: &Arc<SkipMap<Vec<u8>, (usize, u64)>>,
-    ) -> BloomFilter {
-        // Rebuild the bloom filter since a new sstable has been created
-        let mut new_bloom_filter = BloomFilter::new(DEFAULT_FALSE_POSITIVE_RATE, index.len());
-        index.iter().for_each(|e| new_bloom_filter.set(e.key()));
-        new_bloom_filter
-    }
 
     fn merge_sstables(&self, sst1: &SSTable, sst2: &SSTable) -> SSTable {
         let mut new_sstable = SSTable::new(PathBuf::new(), false);

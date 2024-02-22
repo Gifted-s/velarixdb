@@ -5,7 +5,7 @@ use crate::storage_engine::SizeUnit;
 use chrono::{DateTime, Utc};
 use crossbeam_skiplist::SkipMap;
 
-use std::cmp::Ordering;
+use std::cmp::{self, Ordering};
 use std::io;
 use std::{
     hash::Hash,
@@ -24,8 +24,8 @@ pub struct Entry<K: Hash + PartialOrd, V> {
     pub val_offset: V,
     pub created_at: u64,
 }
-#[derive(Clone)]
-pub struct InMemoryTable<K: Hash + PartialOrd> {
+#[derive(Clone, Debug)]
+pub struct InMemoryTable<K: Hash + PartialOrd + cmp::Ord> {
     pub index: Arc<SkipMap<K, (usize, u64)>>, // TODO: write a method to return this, never return property directly
     bloom_filter: BloomFilter, // TODO: write a method to return this, never return property directly
     false_positive_rate: f64,

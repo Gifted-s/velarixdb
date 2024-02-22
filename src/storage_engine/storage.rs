@@ -1,6 +1,6 @@
 use crate::{
-    bloom_filter::BloomFilter,
-    compaction::{BucketMap, Compactor},
+    bloom_filter::{self, BloomFilter},
+    compaction::{Bucket, BucketMap, Compactor, SSTablePath},
     memtable::{Entry, InMemoryTable, DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MEMTABLE_CAPACITY},
     sstable::SSTable,
     value_log::{ValueLog, VLOG_FILE_NAME},
@@ -9,19 +9,25 @@ use chrono::{DateTime, Utc};
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 use serde::de::value;
-use std::{clone, fs, io, path::PathBuf};
+use std::{
+    clone,
+    collections::HashMap,
+    fs,
+    io::{self, Error},
+    mem,
+    path::{Component, Path, PathBuf},
+};
 use std::{cmp, hash::Hash};
 
 pub(crate) static DEFAULT_ALLOW_PREFETCH: bool = true;
 pub(crate) static DEFAULT_PREFETCH_SIZE: usize = 32;
 
-pub struct StorageEngine<K: Hash + PartialOrd> {
+pub struct StorageEngine<K: Hash + PartialOrd + std::cmp::Ord> {
     pub(crate) dir: DirPath,
     pub(crate) memtable: InMemoryTable<K>,
     pub(crate) bloom_filters: Vec<BloomFilter>,
     pub(crate) val_log: ValueLog,
     pub(crate) buckets: BucketMap,
-    pub(crate) sstables: Vec<SSTable>,
     pub(crate) key_index: LevelsBiggestKeys,
     pub(crate) allow_prefetch: bool,
     pub(crate) prefetch_size: usize,
@@ -44,7 +50,7 @@ pub struct DirPath {
     meta: PathBuf,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum SizeUnit {
     Bytes,
     Kilobytes,
@@ -82,11 +88,11 @@ impl StorageEngine<Vec<u8>> {
                     let false_positive_rate = self.memtable.false_positive_rate();
                     let head_offset = self.memtable.index.iter().max_by_key(|e| e.value().0);
                     let head_entry = Entry::new(
-                        "head".as_bytes().to_vec(),
+                        b"head".to_vec(),
                         head_offset.unwrap().value().0,
                         Utc::now().timestamp_millis() as u64,
                     );
-                    self.memtable.insert(&head_entry);
+                    let _ = self.memtable.insert(&head_entry);
                     let flush_result = self.flush_memtable();
                     match flush_result {
                         Ok(_) => {
@@ -119,16 +125,16 @@ impl StorageEngine<Vec<u8>> {
         } else {
             // search sstable
             // perform some magic here later
-            match self.sstables[0].get(&key) {
-                Ok(value_offset) => offset = value_offset,
-                Err(err) => {
-                    println!("Error fetching key {}", err);
-                    return None;
-                }
-            }
+            // match self.sstables[0].get(&key) {
+            //     Ok(value_offset) => offset = value_offset,
+            //     Err(err) => {
+            //         println!("Error fetching key {}", err);
+            //         return None;
+            //     }
+            // }
         }
 
-        let value = self.val_log.get(offset).unwrap();
+        let value = self.val_log.get(0).unwrap();
         value
     }
 
@@ -227,123 +233,203 @@ impl StorageEngine<Vec<u8>> {
 
         let key_index = LevelsBiggestKeys::new(Vec::new());
         let vlog = ValueLog::new(&dir.val_log)?;
-        if vlog_empty && buckets_empty {
+        if vlog_empty {
             let memtable = InMemoryTable::with_specified_capacity_and_rate(
                 size_unit,
                 capacity,
                 false_positive_rate,
             );
 
-            let sstables = vec![SSTable::new(buckets_path.clone(), false)];
             return Ok(Self {
                 memtable,
                 val_log: vlog,
-                sstables,
                 bloom_filters: Vec::new(),
                 buckets: BucketMap::new(buckets_path.clone()),
                 dir,
                 key_index,
                 allow_prefetch,
                 prefetch_size,
-                compactor: Compactor::new()
+                compactor: Compactor::new(),
             });
         }
-        // remove this section
-        let memtable = InMemoryTable::with_specified_capacity_and_rate(
+
+        let mut recovered_buckets: HashMap<uuid::Uuid, Bucket> = HashMap::new();
+        let mut bloom_filters: Vec<BloomFilter> = Vec::new();
+        let mut most_recent_head_timestamp = 0;
+        let mut most_recent_head_offset = 0;
+        for buckets_directories in fs::read_dir(buckets_path.clone())? {
+            for bucket_dir in fs::read_dir(buckets_directories.unwrap().path())? {
+                if let Ok(entry) = bucket_dir {
+                    let file_path = entry.path();
+                    // Check if the entry is a file
+                    if file_path.is_file() {
+                        let sstable_path_str = file_path.to_string_lossy().to_string();
+                        let bucket_id =
+                            Self::get_bucket_id_from_full_bucket_path(sstable_path_str.clone());
+                        let sst_path = SSTablePath::new(sstable_path_str.clone());
+
+                        match uuid::Uuid::parse_str(&bucket_id) {
+                            Ok(bucket_uuid) => {
+                                if let Some(b) = recovered_buckets.get(&bucket_uuid) {
+                                    let mut temp_sstables = b.sstables.clone();
+                                    temp_sstables.push(sst_path.clone());
+                                    let updated_bucket =
+                                        Bucket::new_with_id_dir_average_and_sstables(
+                                            PathBuf::new().join(sstable_path_str.clone()),
+                                            bucket_uuid,
+                                            temp_sstables.to_owned(),
+                                            0,
+                                        );
+                                    recovered_buckets.insert(bucket_uuid, updated_bucket);
+                                } else {
+                                    let updated_bucket =
+                                        Bucket::new_with_id_dir_average_and_sstables(
+                                            PathBuf::new().join(sstable_path_str.clone()),
+                                            bucket_uuid,
+                                            vec![sst_path.clone()],
+                                            0,
+                                        );
+                                    recovered_buckets.insert(bucket_uuid, updated_bucket);
+                                }
+
+                                let sstable_from_file = SSTable::from_file(
+                                    PathBuf::new().join(sstable_path_str.clone()),
+                                );
+                                let sstable = sstable_from_file.as_ref().unwrap().as_ref().unwrap();
+                                let (head_offset, date_created) =
+                                    sstable.get_value_from_index(b"head");
+
+                                if date_created > most_recent_head_timestamp {
+                                    most_recent_head_offset = head_offset;
+                                    most_recent_head_timestamp = date_created;
+                                }
+                                let mut bf = SSTable::build_bloomfilter_from_sstable(
+                                    &sstable.index, // Handle error later
+                                );
+                                bf.set_sstable_path(sst_path.clone());
+                                bloom_filters.push(bf)
+                            }
+                            Err(err) => {
+                                return Err(Error::new(
+                                    io::ErrorKind::InvalidInput,
+                                    err.to_string(),
+                                ))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut buckets_map = BucketMap::new(buckets_path.clone());
+        buckets_map.set_buckets(recovered_buckets);
+        // buckets_map.buckets.iter().for_each(|b| {
+        //     println!("==========RECOVERED BUCKETDS===={:?}============", b.1);
+        // });
+
+        // bloom_filters.iter().for_each(|b| {
+        //     println!("==========RECOVERED Bloom filters ===={:?}============", b);
+        // });
+
+        //println!("MOST recent head offset {}", most_recent_head_offset);
+        // recover memtable
+        let recover_result = StorageEngine::recover_memtable(
             size_unit,
             capacity,
             false_positive_rate,
+            &buckets_path,
+            &dir.val_log,
+            most_recent_head_offset,
         );
 
-        let sstables = vec![SSTable::new(buckets_path.clone(), false)];
-        return Ok(Self {
-            memtable,
-            val_log: vlog,
-            sstables,
-            bloom_filters: Vec::new(),
-            buckets: BucketMap::new(buckets_path.clone()),
-            dir,
-            key_index,
-            allow_prefetch,
-            prefetch_size,
-            compactor: Compactor::new()
-        });
-        //  else {
-        //     // recover memtable
-        //     let recover_result = StorageEngine::recover_memtable(
-        //         size_unit,
-        //         capacity,
-        //         false_positive_rate,
-        //         &buckets_path,
-        //         &dir.val_log,
-        //     );
-
-        //     match recover_result {
-        //         Ok(memtable) => {
-        //             let sstables = vec![SSTable::new(buckets_path.clone(), true)];
-        //             Ok(Self {
-        //                 memtable,
-        //                 val_log: vlog,
-        //                 sstables,
-        //                 dir,
-        //                 buckets: BucketMap::new(buckets_path), // TODO: Retrive this from sstable files
-        //                 bloom_filters: Vec::new(), // TODO: Retrieve from memtable
-        //                 key_index,
-        //                 allow_prefetch,
-        //                 prefetch_size,
-        //             })
-        //         }
-        //         Err(err) => Err(io::Error::new(
-        //             err.kind(),
-        //             "Error retriving entries from value logs",
-        //         )),
-        //     }
-        // }
+        match recover_result {
+            Ok(memtable) => {
+                println!("Heren is the memtable {:?}", memtable.index.len());
+                return Ok(Self {
+                    memtable,
+                    val_log: vlog,
+                    dir,
+                    buckets: buckets_map,
+                    bloom_filters,
+                    key_index,
+                    allow_prefetch,
+                    prefetch_size,
+                    compactor: Compactor::new(),
+                });
+            }
+            Err(err) => {
+                return Err(io::Error::new(
+                    err.kind(),
+                    "Error retriving entries from value logs",
+                ));
+            }
+        }
+        Err(io::Error::new(io::ErrorKind::Other, "Unknown Error"))
     }
-
     fn recover_memtable(
         size_unit: SizeUnit,
         capacity: usize,
         false_positive_rate: f64,
         sst_path: &PathBuf,
         vlog_path: &PathBuf,
+        mut head_offset: usize,
     ) -> io::Result<InMemoryTable<Vec<u8>>> {
         let mut memtable = InMemoryTable::with_specified_capacity_and_rate(
             size_unit,
             capacity,
             false_positive_rate,
         );
-        // Normally we need to scan the in memory levels biggest key to know this sstable will posibly contain the "head" key
-        let sstable = SSTable::new(sst_path.clone(), true);
-        let head_opt = sstable.get(b"head");
-        match head_opt {
-            Ok(mut offset) => {
-                let mut vlog = ValueLog::new(&vlog_path.clone())?;
-                match vlog.recover(offset) {
-                    Ok(entries) => {
-                        for e in entries {
-                            let entry = Entry::new(e.key.clone(), offset, e.created_at);
-                            // we will be rewriting head to memtable but safe since we also set the offset of the head
-                            memtable.insert(&entry)?;
-                            offset += e.ksize + e.vsize + e.key.len() + e.value.len();
-                        }
-                    }
-                    Err(err) => {
-                        println!("Error retrieving entries from value logs")
-                    }
+
+        let mut vlog = ValueLog::new(&vlog_path.clone())?;
+        match vlog.recover(head_offset) {
+            Ok(entries) => {
+                for e in entries {
+                    println!("en {:?}", e);
+                    let entry = Entry::new(e.key.to_owned(), head_offset, e.created_at);
+                    // we will be rewriting head to memtable but safe since we also set the offset of the head
+                    memtable.insert(&entry)?;
+                    // Entry Length
+                    // Key Size -> for fetching key length
+                    // Value Length -> for fetching value length
+                    // Date Length
+                    // Key Length
+                    // Value Length
+                    head_offset += mem::size_of::<u32>()
+                        + mem::size_of::<u32>()
+                        + mem::size_of::<u32>()
+                        + mem::size_of::<u64>()
+                        + e.key.len()
+                        + e.value.len();
                 }
-                return Ok(memtable);
             }
-            Err(err) => Err(io::Error::new(err.kind(), "read failure")),
+            Err(err) => {
+                println!("Error retrieving entries from value logs inner {}", err.to_string())
+            }
         }
+        return Ok(memtable);
     }
 
+    pub fn run_compaction(&mut self) {
+        let _ = self
+            .compactor
+            .run_compaction(&mut self.buckets, &mut self.bloom_filters);
+    }
 
-
-    pub fn run_compaction(&mut self){
-        let compactor = Compactor::new();
-        compactor.run_compaction(&mut self.buckets, &mut self.bloom_filters);
-        
+    pub fn get_bucket_id_from_full_bucket_path(full_path: String) -> String {
+        // Find the last occurrence of "bucket" in the file path
+        if let Some(idx) = full_path.rfind("bucket") {
+            // Extract the substring starting from the index after the last occurrence of "bucket"
+            let uuid_part = &full_path[idx + "bucket".len()..];
+            if let Some(end_idx) = uuid_part.find('/') {
+                // Extract the UUID
+                let uuid = &uuid_part[..end_idx];
+                uuid.to_string()
+            } else {
+                "".to_owned()
+            }
+        } else {
+            "".to_owned()
+        }
     }
 }
 
@@ -388,9 +474,7 @@ mod tests {
 
     #[test]
     fn storage_engine_create() {
-        
         let path = PathBuf::new().join("bump");
-
         let mut s_engine = StorageEngine::new(path.clone()).unwrap();
 
         // Specify the number of random strings to generate
@@ -406,22 +490,22 @@ mod tests {
         }
 
         // Print the generated random strings
-        for (_, s) in random_strings.iter().enumerate() {
-            s_engine.put(s, "boyode").unwrap();
-        }
-        let compactor = Compactor::new();
-    
-        let compaction_opt = s_engine.compactor.run_compaction(&mut s_engine.buckets, &mut s_engine.bloom_filters);
-        match compaction_opt {
-            Ok(_)=>{
-                println!("Compaction is now successful");
-                println!("Length of bucket after compaction {:?}", s_engine.buckets.buckets.len());
-                println!("Length of bloom filters after compaction {:?}", s_engine.bloom_filters.len());
-            }
-            Err(err)=>{
-                println!("Error during compaction {}", err)
-            }
-        }
+        // for (_, s) in random_strings.iter().enumerate() {
+        //     s_engine.put(s, "boyode").unwrap();
+        // }
+        // let compactor = Compactor::new();
+
+        // let compaction_opt = s_engine.compactor.run_compaction(&mut s_engine.buckets, &mut s_engine.bloom_filters);
+        // match compaction_opt {
+        //     Ok(_)=>{
+        //         println!("Compaction is now successful");
+        //         println!("Length of bucket after compaction {:?}", s_engine.buckets.buckets.len());
+        //         println!("Length of bloom filters after compaction {:?}", s_engine.bloom_filters.len());
+        //     }
+        //     Err(err)=>{
+        //         println!("Error during compaction {}", err)
+        //     }
+        // }
         // let bloom_filters = s_engine.compactor.run_compaction(&mut s_engine.buckets, &mut s_engine.bloom_filters);
         // s_engine.bloom_filters = bloom_filters.unwrap();
 
@@ -437,7 +521,6 @@ mod tests {
         // assert_eq!(value3.unwrap().as_str(), "boyode");
 
         // assert_eq!(value4, None);
-        
     }
 }
 
@@ -448,21 +531,3 @@ fn generate_random_string(length: usize) -> String {
         .map(|c| c as char)
         .collect()
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

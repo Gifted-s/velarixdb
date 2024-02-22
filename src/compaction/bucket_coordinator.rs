@@ -67,6 +67,18 @@ impl Bucket {
             sstables: Vec::new(),
         }
     }
+
+    pub fn new_with_id_dir_average_and_sstables( dir: PathBuf, id: Uuid,sstables: Vec<SSTablePath>, mut avarage_size: usize ) -> Bucket{
+        if avarage_size==0{
+            avarage_size = (sstables.iter().map(|s| fs::metadata(s.get_path()).unwrap().len()).sum::<u64>() / sstables.len() as u64) as usize
+        }
+        Self {
+            id,
+            dir,
+            avarage_size,
+            sstables,
+        }
+    }
 }
 
 impl BucketMap {
@@ -75,6 +87,9 @@ impl BucketMap {
             dir,
             buckets: HashMap::new(),
         }
+    }
+    pub fn set_buckets(&mut self, buckets: HashMap<Uuid, Bucket>){
+     self.buckets = buckets
     }
 
 

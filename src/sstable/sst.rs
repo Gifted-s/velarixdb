@@ -13,7 +13,9 @@ use std::{
 };
 
 use crate::{
-    bloom_filter::BloomFilter, compaction::IndexWithSizeInBytes, memtable::{Entry, DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MEMTABLE_CAPACITY}
+    bloom_filter::BloomFilter,
+    compaction::IndexWithSizeInBytes,
+    memtable::{Entry, DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MEMTABLE_CAPACITY},
 };
 
 pub struct SSTable {
@@ -75,8 +77,7 @@ impl SSTable {
         self.index.iter().for_each(|e| {
             let entry = Entry::new(e.key().clone(), e.value().0, e.value().1);
 
-    
-            // mem::size_of function is efficient because the size is known at compile time so 
+            // mem::size_of function is efficient because the size is known at compile time so
             // during compilation this will be replaced  with the actual size during compilation i.e number of bytes to store the type
             // key length(used during fetch) + key len(actual key length) + value length(4 bytes) + date in milliseconds(8 bytes)
             let entry_len = mem::size_of::<u32>()
@@ -131,7 +132,7 @@ impl SSTable {
 
         // search sstable for key
         loop {
-            let mut key_len_bytes = [0;  mem::size_of::<u32>()];
+            let mut key_len_bytes = [0; mem::size_of::<u32>()];
             let mut bytes_read = locked_file.read(&mut key_len_bytes)?;
             if bytes_read == 0 {
                 return Err(io::Error::new(
@@ -149,7 +150,7 @@ impl SSTable {
                     format!("Key {:?} not found", searched_key),
                 ));
             }
-            let mut val_offset_bytes = [0;  mem::size_of::<u32>()];
+            let mut val_offset_bytes = [0; mem::size_of::<u32>()];
             bytes_read = locked_file.read(&mut val_offset_bytes)?;
             if bytes_read == 0 {
                 return Err(io::Error::new(
@@ -157,7 +158,7 @@ impl SSTable {
                     format!("Key {:?} not found", searched_key),
                 ));
             }
-            let mut created_at_bytes = [0;  mem::size_of::<u64>()];
+            let mut created_at_bytes = [0; mem::size_of::<u64>()];
             bytes_read = locked_file.read(&mut created_at_bytes)?;
             if bytes_read == 0 {
                 return Err(io::Error::new(
@@ -181,6 +182,11 @@ impl SSTable {
         let mut new_bloom_filter = BloomFilter::new(DEFAULT_FALSE_POSITIVE_RATE, index.len());
         index.iter().for_each(|e| new_bloom_filter.set(e.key()));
         new_bloom_filter
+    }
+
+    pub fn get_value_from_index(&self, key: &[u8]) -> (usize, u64) {
+        let value = self.index.get(key);
+        value.unwrap().value().to_owned()
     }
 
     fn compare_offsets(offset_a: usize, offset_b: usize) -> Ordering {
@@ -231,15 +237,16 @@ impl SSTable {
             return Ok(None);
         }
 
-        let file = OpenOptions::new().read(true).open(sstable_file_path.clone())?;
+        let file = OpenOptions::new()
+            .read(true)
+            .open(sstable_file_path.clone())?;
         let file_mutex = Mutex::new(file);
 
         // read bloom filter to check if the key possbly exists in the sstable
         let mut locked_file = file_mutex.lock().unwrap();
-
         // search sstable for key
         loop {
-            let mut key_len_bytes = [0;  mem::size_of::<u32>()];
+            let mut key_len_bytes = [0; mem::size_of::<u32>()];
             let mut bytes_read = locked_file.read(&mut key_len_bytes)?;
             if bytes_read == 0 {
                 break;
@@ -254,7 +261,7 @@ impl SSTable {
                     format!("File read ended expectedly"),
                 ));
             }
-            let mut val_offset_bytes = [0;  mem::size_of::<u32>()];
+            let mut val_offset_bytes = [0; mem::size_of::<u32>()];
             bytes_read = locked_file.read(&mut val_offset_bytes)?;
             if bytes_read == 0 {
                 return Err(io::Error::new(
@@ -262,7 +269,7 @@ impl SSTable {
                     format!("File read ended expectedly"),
                 ));
             }
-            let mut created_at_bytes = [0;  mem::size_of::<u64>()];
+            let mut created_at_bytes = [0; mem::size_of::<u64>()];
             bytes_read = locked_file.read(&mut created_at_bytes)?;
             if bytes_read == 0 {
                 return Err(io::Error::new(
