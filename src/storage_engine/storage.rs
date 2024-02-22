@@ -197,7 +197,7 @@ impl StorageEngine<Vec<u8>> {
         }
     }
 
-    pub(crate) fn with_capacity(
+    fn with_capacity(
         dir: DirPath,
         size_unit: SizeUnit,
         capacity: usize,
@@ -212,7 +212,7 @@ impl StorageEngine<Vec<u8>> {
         )
     }
 
-    pub fn with_capacity_and_rate(
+     fn with_capacity_and_rate(
         dir: DirPath,
         size_unit: SizeUnit,
         capacity: usize,
@@ -398,15 +398,15 @@ impl StorageEngine<Vec<u8>> {
                 )
             }
         }
-        return Ok(memtable);
+        Ok(memtable)
     }
 
-    pub fn run_compaction(&mut self) -> io::Result<bool> {
+    fn run_compaction(&mut self) -> io::Result<bool> {
         self.compactor
             .run_compaction(&mut self.buckets, &mut self.bloom_filters)
     }
 
-    pub fn get_bucket_id_from_full_bucket_path(full_path: PathBuf) -> String {
+    fn get_bucket_id_from_full_bucket_path(full_path: PathBuf) -> String {
         let full_path_as_str = full_path.to_string_lossy().to_string();
         let mut bucket_id = String::new();
         // Find the last occurrence of "bucket" in the file path

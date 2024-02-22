@@ -18,11 +18,11 @@ use crate::{
     memtable::{Entry, DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MEMTABLE_CAPACITY},
 };
 
-pub struct SSTable {
-    pub file_path: PathBuf,
-    pub index: Arc<SkipMap<Vec<u8>, (usize, u64)>>,
-    pub created_at: u64,
-    pub size: usize,
+pub(crate) struct SSTable {
+    pub(crate) file_path: PathBuf,
+    pub(crate) index: Arc<SkipMap<Vec<u8>, (usize, u64)>>,
+    pub(crate) created_at: u64,
+    pub(crate) size: usize,
 }
 
 impl IndexWithSizeInBytes for SSTable {
@@ -35,7 +35,7 @@ impl IndexWithSizeInBytes for SSTable {
 }
 
 impl SSTable {
-    pub fn new(dir: PathBuf, create_file: bool) -> Self {
+    pub(crate) fn new(dir: PathBuf, create_file: bool) -> Self {
         let created_at = Utc::now();
         let file_name = format!("sstable_{}_.db", created_at.timestamp_millis());
         if !dir.exists() {
@@ -117,7 +117,7 @@ impl SSTable {
             }
         });
 
-        return Ok(());
+        Ok(())
     }
 
     // for now we assume that we have only have one sstable but in the future we will have levels table for biggest keys
@@ -176,7 +176,7 @@ impl SSTable {
         }
     }
 
-    pub fn build_bloomfilter_from_sstable(
+    pub(crate) fn build_bloomfilter_from_sstable(
         index: &Arc<SkipMap<Vec<u8>, (usize, u64)>>,
     ) -> BloomFilter {
         // Rebuild the bloom filter since a new sstable has been created
@@ -185,7 +185,7 @@ impl SSTable {
         new_bloom_filter
     }
 
-    pub fn get_value_from_index(&self, key: &[u8]) -> Option<(usize, u64)> {
+    pub(crate) fn get_value_from_index(&self, key: &[u8]) -> Option<(usize, u64)> {
         if let Some(entry) = self.index.get(key) {
             Some(entry.value().to_owned())
         } else {
@@ -207,15 +207,15 @@ impl SSTable {
         self.size
     }
 
-    pub fn set_index(&mut self, index: Arc<SkipMap<Vec<u8>, (usize, u64)>>) {
+    pub(crate) fn set_index(&mut self, index: Arc<SkipMap<Vec<u8>, (usize, u64)>>) {
         self.index = index;
         self.set_sst_size_from_index();
     }
 
-    pub fn get_index(&self) -> Arc<SkipMap<Vec<u8>, (usize, u64)>> {
+    pub(crate) fn get_index(&self) -> Arc<SkipMap<Vec<u8>, (usize, u64)>> {
         self.index.clone()
     }
-    pub fn set_sst_size_from_index(&mut self) {
+    pub(crate) fn set_sst_size_from_index(&mut self) {
         self.size = self
             .index
             .iter()
@@ -223,18 +223,18 @@ impl SSTable {
             .sum::<usize>();
     }
 
-    pub fn get_path(&self) -> PathBuf {
+    pub(crate) fn get_path(&self) -> PathBuf {
         self.file_path.clone()
     }
 
-    pub fn file_exists(path_buf: &PathBuf) -> bool {
+    pub(crate) fn file_exists(path_buf: &PathBuf) -> bool {
         // Convert the PathBuf to a Path
         let path: &Path = path_buf.as_path();
         // Check if the file exists
         path.exists() && path.is_file()
     }
 
-    pub fn from_file(sstable_file_path: PathBuf) -> io::Result<Option<SSTable>> {
+    pub(crate) fn from_file(sstable_file_path: PathBuf) -> io::Result<Option<SSTable>> {
         let index = Arc::new(SkipMap::new());
         // Open the file in read mode
         if !Self::file_exists(&sstable_file_path) {
@@ -286,11 +286,11 @@ impl SSTable {
             index.insert(key, (value_offset as usize, created_at as u64));
         }
         let created_at = Utc::now().timestamp_millis() as u64;
-        return Ok(Some(SSTable {
+        Ok(Some(SSTable {
             file_path: sstable_file_path.clone(),
             index: index.to_owned(),
             created_at,
             size: fs::metadata(sstable_file_path).unwrap().len() as usize,
-        }));
+        }))
     }
 }
