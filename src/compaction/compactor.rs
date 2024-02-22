@@ -36,7 +36,6 @@ impl Compactor {
 
     pub fn run_compaction(&self, buckets: &mut BucketMap, bloom_filters: &mut Vec<BloomFilter>) -> io::Result<bool> {
         let mut number_of_compactions =0;
-        println!("Initial number of bloomfilters {}", bloom_filters.len());
         // The compaction loop will keep running until there 
         // are no more buckets with more than minimum treshold size
 
@@ -50,7 +49,6 @@ impl Compactor {
         
         // Exit the compaction loop if there are no more buckets to compact
         if buckets_to_compact.is_empty(){
-            println!("================== THIS IS THE SSTABLES FILE TO DELETE {:?} ===============", sstables_files_to_remove);
             return Ok(true)
         }
         number_of_compactions+=1;
@@ -129,7 +127,7 @@ impl Compactor {
     }
     
     pub fn filter_out_old_bloom_filters(&self, bloom_filters_with_both_old_and_new_sstables: &mut Vec<BloomFilter>, sstables_to_delete: &Vec<(Uuid, Vec<SSTablePath>)>)-> Option<bool>{
-        let mut bloom_filters_map: HashMap<String, BloomFilter> = bloom_filters_with_both_old_and_new_sstables
+        let mut bloom_filters_map: HashMap<PathBuf, BloomFilter> = bloom_filters_with_both_old_and_new_sstables
         .iter()
         .map(|b| (b.get_sstable_path().get_path().to_owned(), b.to_owned()))
         .collect();

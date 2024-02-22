@@ -139,17 +139,73 @@ impl ValueLog {
         log_file.seek(SeekFrom::Start(start_offset as u64))?;
         let mut entries = Vec::new();
         loop {
-            let mut serialized_data = Vec::new();
-            log_file.read_to_end(&mut serialized_data)?;
+            // get entry length
+            let mut entry_len_bytes = [0; mem::size_of::<u32>()];
+            let bytes_read = log_file.read(&mut entry_len_bytes)?;
+            if bytes_read == 0 {
+                return Ok(entries);
+            }
+            let _entry_len = u32::from_le_bytes(entry_len_bytes);
 
-            if serialized_data.is_empty() {
-                break;
+            // get key length
+            let mut key_len_bytes = [0; mem::size_of::<u32>()];
+            let bytes_read = log_file.read(&mut key_len_bytes)?;
+            if bytes_read == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("Error while reading entries from value log file"),
+                ));
+            }
+            let key_len = u32::from_le_bytes(key_len_bytes);
+
+            // get value length
+            let mut val_len_bytes = [0; mem::size_of::<u32>()];
+            let bytes_read = log_file.read(&mut val_len_bytes)?;
+            if bytes_read == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("Error while reading entries from value log file"),
+                ));
+            }
+            let val_len = u32::from_le_bytes(val_len_bytes);
+
+            // get date length
+            let mut creation_date_bytes = [0; mem::size_of::<u64>()];
+            let mut bytes_read = log_file.read(&mut creation_date_bytes)?;
+            if bytes_read == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("Error while reading entries from value log file"),
+                ));
+            }
+            let created_at = u64::from_le_bytes(creation_date_bytes);
+
+            let mut key = vec![0; key_len as usize];
+            bytes_read = log_file.read(&mut key)?;
+            if bytes_read == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("Error while reading entries from value log file"),
+                ));
             }
 
-            let entry = ValueLogEntry::deserialize(&serialized_data)?;
-            entries.push(entry)
+            let mut value = vec![0; val_len as usize];
+            bytes_read = log_file.read(&mut value)?;
+
+            if bytes_read == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("Error while reading entries from value log file"),
+                ));
+            }
+            entries.push(ValueLogEntry {
+                ksize: key_len as usize,
+                vsize: val_len as usize,
+                key,
+                value,
+                created_at,
+            })
         }
-        Ok(entries)
     }
 }
 
@@ -286,7 +342,3 @@ mod tests {
         assert_eq!(deserialized_entry, original_entry);
     }
 }
-
-
-
-

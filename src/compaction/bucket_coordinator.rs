@@ -28,11 +28,11 @@ pub struct Bucket {
 }
 #[derive(Debug, Clone)]
 pub struct SSTablePath{
-    pub(crate) file_path: String,
+    pub(crate) file_path: PathBuf,
     pub(crate) hotness: u64
 }
 impl  SSTablePath{
-    pub fn  new(file_path: String)-> Self{
+    pub fn  new(file_path: PathBuf)-> Self{
      Self{
        file_path,
        hotness:0
@@ -41,7 +41,7 @@ impl  SSTablePath{
     pub fn increase_hotness(&mut self){
        self.hotness+=1;
     }
-    pub fn get_path(&self)-> String{
+    pub fn get_path(&self)-> PathBuf{
         self.file_path.clone()
      }
 
@@ -59,7 +59,10 @@ impl Bucket {
     pub fn new(dir: PathBuf) -> Self {
         let bucket_id = Uuid::new_v4();
         let bucket_dir = dir.join(BUCKET_DIRECTORY_PREFIX.to_string() + bucket_id.to_string().as_str()) ;
-        fs::create_dir(bucket_dir.clone()).expect("Unable to create file");
+    
+        if !bucket_dir.exists() {
+            let _ = fs::create_dir_all(&bucket_dir);
+        }
         Self {
             id: bucket_id,
             dir: bucket_dir,

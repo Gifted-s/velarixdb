@@ -51,6 +51,7 @@ impl SSTable {
                 .open(file_path.clone())
                 .expect("error creating file");
         }
+     
         let index = Arc::new(SkipMap::new());
         Self {
             file_path,
@@ -184,9 +185,12 @@ impl SSTable {
         new_bloom_filter
     }
 
-    pub fn get_value_from_index(&self, key: &[u8]) -> (usize, u64) {
-        let value = self.index.get(key);
-        value.unwrap().value().to_owned()
+    pub fn get_value_from_index(&self, key: &[u8]) -> Option<(usize, u64)> {
+        if let Some(entry) = self.index.get(key) {
+            Some(entry.value().to_owned())
+        } else {
+            None
+        }
     }
 
     fn compare_offsets(offset_a: usize, offset_b: usize) -> Ordering {
@@ -219,8 +223,8 @@ impl SSTable {
             .sum::<usize>();
     }
 
-    pub fn get_path(&self) -> String {
-        self.file_path.to_string_lossy().into_owned()
+    pub fn get_path(&self) -> PathBuf {
+        self.file_path.clone()
     }
 
     pub fn file_exists(path_buf: &PathBuf) -> bool {

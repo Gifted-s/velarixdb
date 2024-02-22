@@ -176,8 +176,6 @@ impl StorageEngine<Vec<u8>> {
         let insert_result = self
             .buckets
             .insert_to_appropriate_bucket(&self.memtable, hotness);
-        // let mut sstable = SSTable::new(self.dir.sst.clone(), true);
-        println!(" ====================== FLUSHING TO SS TABLE ===========================");
         //write the memtable to the disk as SS Tables
         match insert_result {
             Ok(sstable_path) => {
@@ -222,17 +220,13 @@ impl StorageEngine<Vec<u8>> {
         allow_prefetch: bool,
         prefetch_size: usize,
     ) -> io::Result<Self> {
-        let vlog_path = dir.val_log.join(VLOG_FILE_NAME);
+        let vlog_path = &dir.val_log;
         let buckets_path = dir.buckets.clone();
         let vlog_exit = vlog_path.exists();
-        let vlog_empty = !vlog_exit || fs::metadata(&vlog_path)?.len() == 0;
-
-        // no ss table exists
-        let buckets_dir_exit = buckets_path.exists();
-        let buckets_empty = !buckets_dir_exit || fs::metadata(&buckets_path)?.len() == 0;
+        let vlog_empty = !vlog_exit || fs::metadata(vlog_path)?.len() == 0;
 
         let key_index = LevelsBiggestKeys::new(Vec::new());
-        let vlog = ValueLog::new(&dir.val_log)?;
+        let vlog = ValueLog::new(vlog_path)?;
         if vlog_empty {
             let memtable = InMemoryTable::with_specified_capacity_and_rate(
                 size_unit,
@@ -257,34 +251,39 @@ impl StorageEngine<Vec<u8>> {
         let mut bloom_filters: Vec<BloomFilter> = Vec::new();
         let mut most_recent_head_timestamp = 0;
         let mut most_recent_head_offset = 0;
+
+        // engine_root/buckets/bucket{id}
         for buckets_directories in fs::read_dir(buckets_path.clone())? {
-            for bucket_dir in fs::read_dir(buckets_directories.unwrap().path())? {
+            //  engine_root/buckets/bucket{id}/sstable_{timestamp}_.db
+            for bucket_dir in fs::read_dir(buckets_directories.as_ref().unwrap().path())? {
                 if let Ok(entry) = bucket_dir {
-                    let file_path = entry.path();
+                    let sstable_path_str = entry.path();
                     // Check if the entry is a file
-                    if file_path.is_file() {
-                        let sstable_path_str = file_path.to_string_lossy().to_string();
+                    if sstable_path_str.is_file() {
+                        // Extract bucket id
                         let bucket_id =
                             Self::get_bucket_id_from_full_bucket_path(sstable_path_str.clone());
                         let sst_path = SSTablePath::new(sstable_path_str.clone());
 
                         match uuid::Uuid::parse_str(&bucket_id) {
                             Ok(bucket_uuid) => {
+                                // If bucket already exisit in recovered bucket then just append sstable to its sstables vector
                                 if let Some(b) = recovered_buckets.get(&bucket_uuid) {
                                     let mut temp_sstables = b.sstables.clone();
                                     temp_sstables.push(sst_path.clone());
                                     let updated_bucket =
                                         Bucket::new_with_id_dir_average_and_sstables(
-                                            PathBuf::new().join(sstable_path_str.clone()),
+                                            buckets_directories.as_ref().unwrap().path(),
                                             bucket_uuid,
                                             temp_sstables.to_owned(),
                                             0,
                                         );
                                     recovered_buckets.insert(bucket_uuid, updated_bucket);
                                 } else {
+                                    // Create new bucket
                                     let updated_bucket =
                                         Bucket::new_with_id_dir_average_and_sstables(
-                                            PathBuf::new().join(sstable_path_str.clone()),
+                                            buckets_directories.as_ref().unwrap().path(),
                                             bucket_uuid,
                                             vec![sst_path.clone()],
                                             0,
@@ -296,17 +295,24 @@ impl StorageEngine<Vec<u8>> {
                                     PathBuf::new().join(sstable_path_str.clone()),
                                 );
                                 let sstable = sstable_from_file.as_ref().unwrap().as_ref().unwrap();
-                                let (head_offset, date_created) =
-                                    sstable.get_value_from_index(b"head");
 
-                                if date_created > most_recent_head_timestamp {
-                                    most_recent_head_offset = head_offset;
-                                    most_recent_head_timestamp = date_created;
+                                // We need to fetch the most recent write offset so it can
+                                // use it to recover entries not written into sstables from value log
+                                let fetch_result = sstable.get_value_from_index(b"head");
+                                match fetch_result {
+                                    Some((head_offset, date_created)) => {
+                                        if date_created > most_recent_head_timestamp {
+                                            most_recent_head_offset = head_offset;
+                                            most_recent_head_timestamp = date_created;
+                                        }
+                                    }
+                                    None => {}
                                 }
-                                let mut bf = SSTable::build_bloomfilter_from_sstable(
-                                    &sstable.index, // Handle error later
-                                );
+
+                                let mut bf =
+                                    SSTable::build_bloomfilter_from_sstable(&sstable.index);
                                 bf.set_sstable_path(sst_path.clone());
+                                // update bloom filters
                                 bloom_filters.push(bf)
                             }
                             Err(err) => {
@@ -323,56 +329,40 @@ impl StorageEngine<Vec<u8>> {
 
         let mut buckets_map = BucketMap::new(buckets_path.clone());
         buckets_map.set_buckets(recovered_buckets);
-        // buckets_map.buckets.iter().for_each(|b| {
-        //     println!("==========RECOVERED BUCKETDS===={:?}============", b.1);
-        // });
 
-        // bloom_filters.iter().for_each(|b| {
-        //     println!("==========RECOVERED Bloom filters ===={:?}============", b);
-        // });
-
-        //println!("MOST recent head offset {}", most_recent_head_offset);
         // recover memtable
         let recover_result = StorageEngine::recover_memtable(
             size_unit,
             capacity,
             false_positive_rate,
-            &buckets_path,
             &dir.val_log,
             most_recent_head_offset,
         );
 
         match recover_result {
-            Ok(memtable) => {
-                println!("Heren is the memtable {:?}", memtable.index.len());
-                return Ok(Self {
-                    memtable,
-                    val_log: vlog,
-                    dir,
-                    buckets: buckets_map,
-                    bloom_filters,
-                    key_index,
-                    allow_prefetch,
-                    prefetch_size,
-                    compactor: Compactor::new(),
-                });
-            }
-            Err(err) => {
-                return Err(io::Error::new(
-                    err.kind(),
-                    "Error retriving entries from value logs",
-                ));
-            }
+            Ok(memtable) => Ok(Self {
+                memtable,
+                val_log: vlog,
+                dir,
+                buckets: buckets_map,
+                bloom_filters,
+                key_index,
+                allow_prefetch,
+                prefetch_size,
+                compactor: Compactor::new(),
+            }),
+            Err(err) => Err(io::Error::new(
+                err.kind(),
+                "Error retriving entries from value logs",
+            )),
         }
-        Err(io::Error::new(io::ErrorKind::Other, "Unknown Error"))
     }
     fn recover_memtable(
         size_unit: SizeUnit,
         capacity: usize,
         false_positive_rate: f64,
-        sst_path: &PathBuf,
         vlog_path: &PathBuf,
-        mut head_offset: usize,
+        head_offset: usize,
     ) -> io::Result<InMemoryTable<Vec<u8>>> {
         let mut memtable = InMemoryTable::with_specified_capacity_and_rate(
             size_unit,
@@ -383,53 +373,53 @@ impl StorageEngine<Vec<u8>> {
         let mut vlog = ValueLog::new(&vlog_path.clone())?;
         match vlog.recover(head_offset) {
             Ok(entries) => {
+                let mut most_recent_offset = head_offset;
                 for e in entries {
-                    println!("en {:?}", e);
-                    let entry = Entry::new(e.key.to_owned(), head_offset, e.created_at);
-                    // we will be rewriting head to memtable but safe since we also set the offset of the head
-                    memtable.insert(&entry)?;
-                    // Entry Length
-                    // Key Size -> for fetching key length
-                    // Value Length -> for fetching value length
-                    // Date Length
-                    // Key Length
-                    // Value Length
-                    head_offset += mem::size_of::<u32>()
-                        + mem::size_of::<u32>()
-                        + mem::size_of::<u32>()
-                        + mem::size_of::<u64>()
-                        + e.key.len()
-                        + e.value.len();
+                    let entry = Entry::new(e.key.to_owned(), most_recent_offset, e.created_at);
+                    // Since the most recent offset is the offset we start reading entries from in value log
+                    // and we retrieved this from the sstable, therefore should not re-write the initial entry in
+                    // memtable since it's already in the sstable
+                    if most_recent_offset != head_offset {
+                        println!("E {:?}", e);
+                        memtable.insert(&entry)?;
+                    }
+                    most_recent_offset += mem::size_of::<u32>() // Entry Length
+                        + mem::size_of::<u32>() // Key Size -> for fetching key length
+                        + mem::size_of::<u32>() // Value Length -> for fetching value length
+                        + mem::size_of::<u64>() // Date Length
+                        + e.key.len() // Key Length
+                        + e.value.len(); // Value Length
                 }
             }
             Err(err) => {
-                println!("Error retrieving entries from value logs inner {}", err.to_string())
+                println!(
+                    "Error retrieving entries from value logs inner {}",
+                    err.to_string()
+                )
             }
         }
         return Ok(memtable);
     }
 
-    pub fn run_compaction(&mut self) {
-        let _ = self
-            .compactor
-            .run_compaction(&mut self.buckets, &mut self.bloom_filters);
+    pub fn run_compaction(&mut self) -> io::Result<bool> {
+        self.compactor
+            .run_compaction(&mut self.buckets, &mut self.bloom_filters)
     }
 
-    pub fn get_bucket_id_from_full_bucket_path(full_path: String) -> String {
+    pub fn get_bucket_id_from_full_bucket_path(full_path: PathBuf) -> String {
+        let full_path_as_str = full_path.to_string_lossy().to_string();
+        let mut bucket_id = String::new();
         // Find the last occurrence of "bucket" in the file path
-        if let Some(idx) = full_path.rfind("bucket") {
+        if let Some(idx) = full_path_as_str.rfind("bucket") {
             // Extract the substring starting from the index after the last occurrence of "bucket"
-            let uuid_part = &full_path[idx + "bucket".len()..];
+            let uuid_part = &full_path_as_str[idx + "bucket".len()..];
             if let Some(end_idx) = uuid_part.find('/') {
                 // Extract the UUID
                 let uuid = &uuid_part[..end_idx];
-                uuid.to_string()
-            } else {
-                "".to_owned()
+                bucket_id = uuid.to_string();
             }
-        } else {
-            "".to_owned()
         }
+        bucket_id
     }
 }
 
@@ -471,7 +461,7 @@ mod tests {
     use crate::bloom_filter;
 
     use super::*;
-
+// Generate test to find keys after compaction
     #[test]
     fn storage_engine_create() {
         let path = PathBuf::new().join("bump");
@@ -489,29 +479,32 @@ mod tests {
             random_strings.push(random_string);
         }
 
-        // Print the generated random strings
-        // for (_, s) in random_strings.iter().enumerate() {
-        //     s_engine.put(s, "boyode").unwrap();
-        // }
+        // Insert the generated random strings
+        for (_, s) in random_strings.iter().enumerate() {
+            s_engine.put(s, "boyode").unwrap();
+        }
         // let compactor = Compactor::new();
 
-        // let compaction_opt = s_engine.compactor.run_compaction(&mut s_engine.buckets, &mut s_engine.bloom_filters);
+        // let compaction_opt = s_engine.run_compaction();
         // match compaction_opt {
-        //     Ok(_)=>{
-        //         println!("Compaction is now successful");
-        //         println!("Length of bucket after compaction {:?}", s_engine.buckets.buckets.len());
-        //         println!("Length of bloom filters after compaction {:?}", s_engine.bloom_filters.len());
+        //     Ok(_) => {
+        //         println!("Compaction is successful");
+        //         println!(
+        //             "Length of bucket after compaction {:?}",
+        //             s_engine.buckets.buckets.len()
+        //         );
+        //         println!(
+        //             "Length of bloom filters after compaction {:?}",
+        //             s_engine.bloom_filters.len()
+        //         );
         //     }
-        //     Err(err)=>{
+        //     Err(err) => {
         //         println!("Error during compaction {}", err)
         //     }
         // }
-        // let bloom_filters = s_engine.compactor.run_compaction(&mut s_engine.buckets, &mut s_engine.bloom_filters);
-        // s_engine.bloom_filters = bloom_filters.unwrap();
-
-        // wt.put(k2, "boyode").unwrap();
-        // wt.put(k3, "boyode").unwrap();
-
+        // for key in random_strings{
+        //     assert_eq!(s_engine.get(&key).unwrap(), "boyode");
+        // }
         // let value1 = wt.get(k1);
         // let value2 = wt.get(k2);
         // let value3 = wt.get(k3);
