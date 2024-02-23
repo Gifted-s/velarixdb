@@ -472,6 +472,14 @@ impl SizeUnit {
     }
 }
 
+fn generate_random_string(length: usize) -> String {
+    let rng = thread_rng();
+    rng.sample_iter(&Alphanumeric)
+        .take(length)
+        .map(|c| c as char)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -532,12 +540,4 @@ mod tests {
 
         // assert_eq!(value4, None);
     }
-}
-
-fn generate_random_string(length: usize) -> String {
-    let rng = thread_rng();
-    rng.sample_iter(&Alphanumeric)
-        .take(length)
-        .map(|c| c as char)
-        .collect()
 }

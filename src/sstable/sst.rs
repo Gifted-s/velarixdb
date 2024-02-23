@@ -99,7 +99,7 @@ impl SSTable {
         // Open the file in write mode with the append flag.
         let file_path = PathBuf::from(&self.file_path);
         let file = OpenOptions::new()
-            .write(true)
+            
             .append(true)
             .open(file_path)?;
 
