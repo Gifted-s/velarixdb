@@ -1,6 +1,6 @@
-use chrono::{Utc};
+use chrono::Utc;
 use crossbeam_skiplist::SkipMap;
-use num_traits::{ToBytes};
+use num_traits::ToBytes;
 
 use std::{
     cmp::Ordering,

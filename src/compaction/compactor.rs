@@ -4,8 +4,8 @@ use crossbeam_skiplist::SkipMap;
 use uuid::Uuid;
 
 use crate::{
-    bloom_filter::{BloomFilter},
-    memtable::{Entry},
+    bloom_filter::BloomFilter,
+    memtable::Entry,
     sstable::{SSTable, SSTablePath},
 };
 
@@ -90,8 +90,7 @@ impl Compactor {
 
             println!(
         "Expected number of new SSTables written to disk : {}, Actual number of SSTables written {}",
-         expected_sstables_to_be_writtten_to_disk, 
-         actual_number_of_sstables_written_to_disk 
+         expected_sstables_to_be_writtten_to_disk, actual_number_of_sstables_written_to_disk 
         );
 
             if expected_sstables_to_be_writtten_to_disk == actual_number_of_sstables_written_to_disk
@@ -161,8 +160,7 @@ impl Compactor {
                 })
             });
         bloom_filters_with_both_old_and_new_sstables.clear();
-        bloom_filters_with_both_old_and_new_sstables
-            .extend(bloom_filters_map.into_values());
+        bloom_filters_with_both_old_and_new_sstables.extend(bloom_filters_map.into_values());
         Some(true)
     }
 

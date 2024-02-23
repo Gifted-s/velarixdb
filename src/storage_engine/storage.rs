@@ -1,22 +1,22 @@
 use crate::{
-    bloom_filter::{BloomFilter},
+    bloom_filter::BloomFilter,
     compaction::{Bucket, BucketMap, Compactor},
     memtable::{Entry, InMemoryTable, DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MEMTABLE_CAPACITY},
     sstable::{SSTable, SSTablePath},
-    value_log::{ValueLog},
+    value_log::ValueLog,
 };
-use chrono::{Utc};
+use chrono::Utc;
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 
+use std::hash::Hash;
 use std::{
     collections::HashMap,
     fs,
     io::{self, Error},
     mem,
-    path::{PathBuf},
+    path::PathBuf,
 };
-use std::{hash::Hash};
 
 pub(crate) static DEFAULT_ALLOW_PREFETCH: bool = true;
 pub(crate) static DEFAULT_PREFETCH_SIZE: usize = 32;
@@ -413,10 +413,7 @@ impl StorageEngine<Vec<u8>> {
                 }
             }
             Err(err) => {
-                println!(
-                    "Error retrieving entries from value logs inner {}",
-                    err
-                )
+                println!("Error retrieving entries from value logs inner {}", err)
             }
         }
         Ok(memtable)
@@ -477,8 +474,6 @@ impl SizeUnit {
 
 #[cfg(test)]
 mod tests {
-    
-    
 
     use super::*;
     // Generate test to find keys after compaction

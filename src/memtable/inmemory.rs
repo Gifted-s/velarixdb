@@ -7,10 +7,7 @@ use crossbeam_skiplist::SkipMap;
 
 use std::cmp::{self};
 use std::io;
-use std::{
-    hash::Hash,
-    sync::{Arc},
-};
+use std::{hash::Hash, sync::Arc};
 pub(crate) static DEFAULT_MEMTABLE_CAPACITY: usize = SizeUnit::Kilobytes.to_bytes(1);
 
 pub(crate) static THUMB_STONE: usize = 0;

@@ -1,5 +1,3 @@
-
-
 use crate::sstable::{SSTable, SSTablePath};
 use crossbeam_skiplist::SkipMap;
 use std::collections::HashMap;
@@ -207,10 +205,7 @@ impl BucketMap {
 
         for (bucket_id, sst_paths) in sstables_to_delete {
             if let Some(bucket) = self.buckets.get_mut(bucket_id) {
-                let sstables_remaining = bucket
-                    .sstables
-                    .get(sst_paths.len()..)
-                    .unwrap_or_default();
+                let sstables_remaining = bucket.sstables.get(sst_paths.len()..).unwrap_or_default();
 
                 if !sstables_remaining.is_empty() {
                     *bucket = Bucket {

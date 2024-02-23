@@ -1,4 +1,4 @@
-use std::fs::{OpenOptions};
+use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
