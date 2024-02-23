@@ -116,7 +116,7 @@ impl StorageEngine<Vec<u8>> {
         Ok(true)
     }
 
-    /// A Result indicating success or an `io::Error` if an error occurred.
+    // A Result indicating success or an `io::Error` if an error occurred.
     pub fn get(&mut self, key: &str) -> io::Result<(Vec<u8>, u64)> {
         let key = key.as_bytes().to_vec();
         let mut offset = 0;
@@ -127,7 +127,7 @@ impl StorageEngine<Vec<u8>> {
             offset = value_offset;
             most_recent_insert_time = creation_date;
         } else {
-            // Step 2: If key does not exist in MemTable then we can load sstables that contains this key from bloom filter
+            // Step 2: If key does not exist in MemTable then we can load sstables that probaby contains this key from bloom filter
             let sstable_paths =
                 BloomFilter::get_sstable_paths_that_contains_key(&self.bloom_filters, &key);
             match sstable_paths {
@@ -141,12 +141,12 @@ impl StorageEngine<Vec<u8>> {
                                     offset = value_offset;
                                     most_recent_insert_time = created_at;
                                 }
-                                println!("Found at this SSTABLE {:?}", sst_path.get_path());
+                                //println!("Found at this SSTABLE {:?}", sst_path.get_path());
                             }
                             Err(err) => {
                                 // println!("Key was not found for this sstable {:?}", sst_path.get_path());
-                                // // return Err(err), // Return the error directly
-                           }
+                                // return Err(err), // Return the error directly
+                            }
                         }
                     }
                 }
@@ -403,7 +403,6 @@ impl StorageEngine<Vec<u8>> {
                     // and we retrieved this from the sstable, therefore should not re-write the initial entry in
                     // memtable since it's already in the sstable
                     if most_recent_offset != head_offset {
-                        println!("E {:?}", e);
                         memtable.insert(&entry)?;
                     }
                     most_recent_offset += mem::size_of::<u32>() // Entry Length
@@ -479,8 +478,8 @@ impl SizeUnit {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::remove_dir;
     use crate::bloom_filter;
+    use std::fs::remove_dir;
 
     use super::*;
     // Generate test to find keys after compaction
@@ -525,7 +524,7 @@ mod tests {
             }
         }
         random_strings.sort();
-        for key in random_strings{
+        for key in random_strings {
             println!("KEY FOUND {}", key);
             assert_eq!(s_engine.get(&key).unwrap().0, b"boyode");
         }

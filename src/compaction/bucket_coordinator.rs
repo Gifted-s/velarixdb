@@ -201,7 +201,6 @@ impl BucketMap {
         
                 for sst in sst_paths {
                     if SSTable::file_exists(&PathBuf::new().join(sst.get_path())) {
-                         //bloom_filters_map.remove(&sst.get_path());
                         if let Err(err) = fs::remove_file(&sst.file_path) {
                             all_sstables_deleted = false;
                             eprintln!("Error deleting SS Table file: {}", err);
@@ -217,15 +216,6 @@ impl BucketMap {
                     self.buckets.remove(bucket_id);
                 });
             }
-        
-            // bloom_filters.clear();
-            // bloom_filters.extend(bloom_filters_map.into_iter().map(|(_, bf)| bf));
-        
-            // println!("SS TABLES DELETED: {:?}", sstables_to_delete.iter().map(|e| e.1.len()).sum::<usize>());
-            // println!("Old Bloom Filters: {:?}", bloom_filters.len());
-            // println!("=======================================");
-            // println!("Updated Bloom Filters: {:?}", bloom_filters.len());
-        
             all_sstables_deleted
         }
         
