@@ -116,7 +116,7 @@ impl InMemoryTable<Vec<u8>> {
     pub(crate) fn get(&mut self, key: &Vec<u8>) -> io::Result<Option<(usize, u64)>> {
         if self.bloom_filter.contains(key) {
             println!("Found key in bloomfilter {:?}", key.to_vec());
-            if let Some(entry) =  self.index.get(key){
+            if let Some(entry) = self.index.get(key) {
                 return Ok(Some(*entry.value())); // returns value offset
             }
         }

@@ -65,7 +65,7 @@ impl Meta {
 
         file.read_exact(&mut tail_bytes)?;
         let tail = u32::from_le_bytes(tail_bytes);
-        
+
         //TODO:  Abstract date conversion to a seperate function
         let mut date_created_bytes: [u8; 4] = [0; 4];
         file.read_exact(&mut date_created_bytes)?;

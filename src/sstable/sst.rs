@@ -35,27 +35,27 @@ impl IndexWithSizeInBytes for SSTable {
 }
 
 #[derive(Debug, Clone)]
-pub struct SSTablePath{
+pub struct SSTablePath {
     pub(crate) file_path: PathBuf,
-    pub(crate) hotness: u64
+    pub(crate) hotness: u64,
 }
-impl  SSTablePath{
-    pub fn  new(file_path: PathBuf)-> Self{
-     Self{
-       file_path,
-       hotness:0
-     }
+impl SSTablePath {
+    pub fn new(file_path: PathBuf) -> Self {
+        Self {
+            file_path,
+            hotness: 0,
+        }
     }
-    pub fn increase_hotness(&mut self){
-       self.hotness+=1;
+    pub fn increase_hotness(&mut self) {
+        self.hotness += 1;
     }
-    pub fn get_path(&self)-> PathBuf{
+    pub fn get_path(&self) -> PathBuf {
         self.file_path.clone()
-     }
+    }
 
-     pub fn get_hotness(&self)-> u64{
+    pub fn get_hotness(&self) -> u64 {
         self.hotness
-     }
+    }
 }
 
 impl SSTable {
@@ -75,7 +75,7 @@ impl SSTable {
                 .open(file_path.clone())
                 .expect("error creating file");
         }
-     
+
         let index = Arc::new(SkipMap::new());
         Self {
             file_path,
@@ -202,7 +202,7 @@ impl SSTable {
                     format!("Key {:?} not found", searched_key),
                 ));
             }
-            let created_at= u64::from_le_bytes(created_at_bytes);
+            let created_at = u64::from_le_bytes(created_at_bytes);
             let value_offset = u32::from_le_bytes(val_offset_bytes);
 
             if key == searched_key {

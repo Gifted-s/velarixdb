@@ -1,6 +1,5 @@
-
-pub enum ValueOption{
-    Raw(Vec<u8>) ,
+pub enum ValueOption {
+    Raw(Vec<u8>),
     Offset(usize),
-    ThumbStone(u8)
-} 
+    ThumbStone(u8),
+}
