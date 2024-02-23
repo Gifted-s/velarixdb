@@ -34,6 +34,30 @@ impl IndexWithSizeInBytes for SSTable {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct SSTablePath{
+    pub(crate) file_path: PathBuf,
+    pub(crate) hotness: u64
+}
+impl  SSTablePath{
+    pub fn  new(file_path: PathBuf)-> Self{
+     Self{
+       file_path,
+       hotness:0
+     }
+    }
+    pub fn increase_hotness(&mut self){
+       self.hotness+=1;
+    }
+    pub fn get_path(&self)-> PathBuf{
+        self.file_path.clone()
+     }
+
+     pub fn get_hotness(&self)-> u64{
+        self.hotness
+     }
+}
+
 impl SSTable {
     pub(crate) fn new(dir: PathBuf, create_file: bool) -> Self {
         let created_at = Utc::now();
@@ -52,6 +76,17 @@ impl SSTable {
                 .expect("error creating file");
         }
      
+        let index = Arc::new(SkipMap::new());
+        Self {
+            file_path,
+            index,
+            size: 0,
+            created_at: created_at.timestamp_millis() as u64,
+        }
+    }
+
+    pub(crate) fn new_with_exisiting_file_path(file_path: PathBuf) -> Self {
+        let created_at = Utc::now();
         let index = Arc::new(SkipMap::new());
         Self {
             file_path,
@@ -121,7 +156,7 @@ impl SSTable {
     }
 
     // for now we assume that we have only have one sstable but in the future we will have levels table for biggest keys
-    pub(crate) fn get(&self, searched_key: &[u8]) -> io::Result<usize> {
+    pub(crate) fn get(&self, searched_key: &[u8]) -> io::Result<(usize, u64)> {
         // Open the file in read mode
         let file_path = PathBuf::from(&self.file_path);
         let file = OpenOptions::new().read(true).open(file_path)?;
@@ -167,11 +202,11 @@ impl SSTable {
                     format!("Key {:?} not found", searched_key),
                 ));
             }
-            let _ = u64::from_le_bytes(created_at_bytes);
+            let created_at= u64::from_le_bytes(created_at_bytes);
             let value_offset = u32::from_le_bytes(val_offset_bytes);
 
             if key == searched_key {
-                return Ok(value_offset as usize);
+                return Ok((value_offset as usize, created_at));
             }
         }
     }

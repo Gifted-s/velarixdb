@@ -6,11 +6,11 @@ use uuid::Uuid;
 use crate::{
     bloom_filter::{self, BloomFilter},
     memtable::{Entry, DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MEMTABLE_CAPACITY},
-    sstable::{self, SSTable},
+    sstable::{self, SSTable, SSTablePath},
     storage_engine::SizeUnit,
 };
 
-use super::{bucket_coordinator::Bucket, BucketMap, SSTablePath};
+use super::{bucket_coordinator::Bucket, BucketMap};
 
 pub struct Compactor;
 pub(crate) struct MergedSSTable {

@@ -16,7 +16,7 @@ pub(crate) static DEFAULT_MEMTABLE_CAPACITY: usize = SizeUnit::Kilobytes.to_byte
 
 pub(crate) static THUMB_STONE: usize = 0;
 
-pub(crate) static DEFAULT_FALSE_POSITIVE_RATE: f64 = 0.0001;
+pub(crate) static DEFAULT_FALSE_POSITIVE_RATE: f64 = 1e-100;
 
 #[derive(PartialOrd, PartialEq, Copy, Clone)]
 pub struct Entry<K: Hash + PartialOrd, V> {
@@ -113,12 +113,12 @@ impl InMemoryTable<Vec<u8>> {
         return Ok(());
     }
 
-    pub(crate) fn get(&mut self, key: &Vec<u8>) -> io::Result<Option<usize>> {
+    pub(crate) fn get(&mut self, key: &Vec<u8>) -> io::Result<Option<(usize, u64)>> {
         if self.bloom_filter.contains(key) {
             println!("Found key in bloomfilter {:?}", key.to_vec());
-            // somethigs to fix here
-            let v_offset = *self.index.get(key).unwrap().value();
-            return Ok(Some(v_offset.0 as usize)); // returns value offset
+            if let Some(entry) =  self.index.get(key){
+                return Ok(Some(*entry.value())); // returns value offset
+            }
         }
         Ok(None)
     }
@@ -181,24 +181,14 @@ impl InMemoryTable<Vec<u8>> {
     pub fn range() {}
 
     /// Clears all key-value entries in the MemTable.
-    pub(crate) fn clear(&mut self) -> Self {
+    pub(crate) fn clear(&mut self) {
         let capacity_to_bytes = self.size_unit.to_bytes(self.capacity);
         let avg_entry_size = 100;
         let max_no_of_entries = capacity_to_bytes / avg_entry_size as usize;
 
         self.index.clear();
         self.size = 0;
-        let bloom_filter = BloomFilter::new(self.false_positive_rate, max_no_of_entries);
-        let now: DateTime<Utc> = Utc::now();
-        Self {
-            index: self.index.clone(),
-            bloom_filter,
-            size: 0,
-            size_unit: SizeUnit::Bytes,
-            capacity: capacity_to_bytes,
-            created_at: now,
-            false_positive_rate: self.false_positive_rate,
-        }
+        self.bloom_filter = BloomFilter::new(self.false_positive_rate, max_no_of_entries);
     }
 }
 

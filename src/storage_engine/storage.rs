@@ -1,8 +1,8 @@
 use crate::{
     bloom_filter::{self, BloomFilter},
-    compaction::{Bucket, BucketMap, Compactor, SSTablePath},
+    compaction::{Bucket, BucketMap, Compactor},
     memtable::{Entry, InMemoryTable, DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MEMTABLE_CAPACITY},
-    sstable::SSTable,
+    sstable::{SSTable, SSTablePath},
     value_log::{ValueLog, VLOG_FILE_NAME},
 };
 use chrono::{DateTime, Utc};
@@ -117,25 +117,52 @@ impl StorageEngine<Vec<u8>> {
     }
 
     /// A Result indicating success or an `io::Error` if an error occurred.
-    pub fn get(&mut self, key: &str) -> Option<String> {
+    pub fn get(&mut self, key: &str) -> io::Result<(Vec<u8>, u64)> {
         let key = key.as_bytes().to_vec();
-        let offset;
-        if let Ok(Some(value_offset)) = self.memtable.get(&key) {
-            offset = value_offset;
-        } else {
-            // search sstable
-            // perform some magic here later
-            // match self.sstables[0].get(&key) {
-            //     Ok(value_offset) => offset = value_offset,
-            //     Err(err) => {
-            //         println!("Error fetching key {}", err);
-            //         return None;
-            //     }
-            // }
-        }
+        let mut offset = 0;
+        let mut most_recent_insert_time = 0;
 
-        let value = self.val_log.get(0).unwrap();
-        value
+        // Step 1: Check if key exist in MemTable
+        if let Ok(Some((value_offset, creation_date))) = self.memtable.get(&key) {
+            offset = value_offset;
+            most_recent_insert_time = creation_date;
+        } else {
+            // Step 2: If key does not exist in MemTable then we can load sstables that contains this key from bloom filter
+            let sstable_paths =
+                BloomFilter::get_sstable_paths_that_contains_key(&self.bloom_filters, &key);
+            match sstable_paths {
+                Some(paths) => {
+                    // Step 3: Get the most recent value offset from sstables
+                    for sst_path in paths.iter() {
+                        let sstable = SSTable::new_with_exisiting_file_path(sst_path.get_path());
+                        match sstable.get(&key) {
+                            Ok((value_offset, created_at)) => {
+                                if created_at > most_recent_insert_time {
+                                    offset = value_offset;
+                                    most_recent_insert_time = created_at;
+                                }
+                                println!("Found at this SSTABLE {:?}", sst_path.get_path());
+                            }
+                            Err(err) => {
+                                // println!("Key was not found for this sstable {:?}", sst_path.get_path());
+                                // // return Err(err), // Return the error directly
+                           }
+                        }
+                    }
+                }
+                None => return Err(io::Error::new(io::ErrorKind::NotFound, "Key Not Found")),
+            }
+        }
+        // most_recent_insert_time cannot be zero unless did not find this key in any sstable
+        if most_recent_insert_time > 0 {
+            // Step 5: Read value from value log based on offset
+            let value: Option<Vec<u8>> = self.val_log.get(offset).unwrap();
+            match value {
+                Some(v) => return Ok((v, most_recent_insert_time)),
+                None => return Err(io::Error::new(io::ErrorKind::NotFound, "Key Not Found")),
+            };
+        }
+        Err(io::Error::new(io::ErrorKind::NotFound, "Key Not Found"))
     }
 
     pub fn update(&mut self, key: &str, value: &str) -> io::Result<bool> {
@@ -190,18 +217,14 @@ impl StorageEngine<Vec<u8>> {
                         .get_hotness()
                         .cmp(&a.get_sstable_path().get_hotness())
                 });
-                self.memtable = self.memtable.clear();
+                self.memtable.clear();
                 Ok(())
             }
             Err(err) => Err(io::Error::new(err.kind(), err.to_string())),
         }
     }
 
-    fn with_capacity(
-        dir: DirPath,
-        size_unit: SizeUnit,
-        capacity: usize,
-    ) -> io::Result<Self> {
+    fn with_capacity(dir: DirPath, size_unit: SizeUnit, capacity: usize) -> io::Result<Self> {
         Self::with_capacity_and_rate(
             dir,
             size_unit,
@@ -212,7 +235,7 @@ impl StorageEngine<Vec<u8>> {
         )
     }
 
-     fn with_capacity_and_rate(
+    fn with_capacity_and_rate(
         dir: DirPath,
         size_unit: SizeUnit,
         capacity: usize,
@@ -457,18 +480,17 @@ impl SizeUnit {
 #[cfg(test)]
 mod tests {
     use std::fs::remove_dir;
-
     use crate::bloom_filter;
 
     use super::*;
-// Generate test to find keys after compaction
+    // Generate test to find keys after compaction
     #[test]
     fn storage_engine_create() {
         let path = PathBuf::new().join("bump");
         let mut s_engine = StorageEngine::new(path.clone()).unwrap();
 
         // Specify the number of random strings to generate
-        let num_strings = 50000;
+        let num_strings = 5000;
 
         // Specify the length of each random string
         let string_length = 10;
@@ -485,26 +507,28 @@ mod tests {
         }
         // let compactor = Compactor::new();
 
-        // let compaction_opt = s_engine.run_compaction();
-        // match compaction_opt {
-        //     Ok(_) => {
-        //         println!("Compaction is successful");
-        //         println!(
-        //             "Length of bucket after compaction {:?}",
-        //             s_engine.buckets.buckets.len()
-        //         );
-        //         println!(
-        //             "Length of bloom filters after compaction {:?}",
-        //             s_engine.bloom_filters.len()
-        //         );
-        //     }
-        //     Err(err) => {
-        //         println!("Error during compaction {}", err)
-        //     }
-        // }
-        // for key in random_strings{
-        //     assert_eq!(s_engine.get(&key).unwrap(), "boyode");
-        // }
+        let compaction_opt = s_engine.run_compaction();
+        match compaction_opt {
+            Ok(_) => {
+                println!("Compaction is successful");
+                println!(
+                    "Length of bucket after compaction {:?}",
+                    s_engine.buckets.buckets.len()
+                );
+                println!(
+                    "Length of bloom filters after compaction {:?}",
+                    s_engine.bloom_filters.len()
+                );
+            }
+            Err(err) => {
+                println!("Error during compaction {}", err)
+            }
+        }
+        random_strings.sort();
+        for key in random_strings{
+            println!("KEY FOUND {}", key);
+            assert_eq!(s_engine.get(&key).unwrap().0, b"boyode");
+        }
         // let value1 = wt.get(k1);
         // let value2 = wt.get(k2);
         // let value3 = wt.get(k3);

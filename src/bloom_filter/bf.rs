@@ -1,3 +1,4 @@
+use bit_vec::BitVec;
 use std::{
     collections::hash_map::DefaultHasher,
     fs::{File, OpenOptions},
@@ -9,8 +10,8 @@ use std::{
         Arc, Mutex,
     },
 };
-use bit_vec::BitVec;
-use crate::compaction::SSTablePath;
+
+use crate::sstable::SSTablePath;
 
 #[derive(Debug)]
 pub struct BloomFilter {
@@ -19,7 +20,6 @@ pub struct BloomFilter {
     pub no_of_elements: AtomicU32, // number of elements in the bloom filter
     pub bit_vec: Arc<Mutex<BitVec>>, // store the bit array each representing 0 or 1 meaning true or false
 }
-
 
 impl BloomFilter {
     pub(crate) fn new(false_positive_rate: f64, no_of_elements: usize) -> Self {
@@ -70,6 +70,24 @@ impl BloomFilter {
         self.sstable_path = Some(sstable_path);
     }
 
+    pub(crate) fn get_sstable_paths_that_contains_key<T: Hash>(
+        bloom_filters: &Vec<BloomFilter>,
+        key: &T,
+    ) -> Option<Vec<SSTablePath>> {
+        let mut sstables: Vec<SSTablePath> = Vec::new();
+        for bloom_filter in bloom_filters {
+            if bloom_filter.contains(key) {
+                println!("FOUND AT THIS PATH {:?} {}", bloom_filter.sstable_path.clone().unwrap().get_path(), bloom_filter.sstable_path.clone().unwrap().get_hotness());
+                if let Some(path) = &bloom_filter.sstable_path {
+                    sstables.push(path.to_owned());
+                }
+            }
+        }
+        if sstables.is_empty() {
+            return None;
+        }
+        Some(sstables)
+    }
 
     pub fn clear(&self) -> Self {
         let mut bits = self.bit_vec.lock().expect("Failed to lock file");
@@ -104,8 +122,8 @@ impl BloomFilter {
         self.no_of_hash_func as usize
     }
 
-      /// Get SSTable path
-      pub(crate) fn get_sstable_path(&self) -> &SSTablePath {
+    /// Get SSTable path
+    pub(crate) fn get_sstable_path(&self) -> &SSTablePath {
         // Retrieve the element count atomically.
         self.sstable_path.as_ref().unwrap()
     }

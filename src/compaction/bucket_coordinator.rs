@@ -1,6 +1,6 @@
 use crate::bloom_filter::{self, BloomFilter};
 use crate::memtable::InMemoryTable;
-use crate::sstable::SSTable;
+use crate::sstable::{SSTable, SSTablePath};
 use std::collections::HashMap;
 use std::path::Path;
 use std::{fs, io};
@@ -26,29 +26,7 @@ pub struct Bucket {
     pub(crate) avarage_size: usize,
     pub(crate) sstables: Vec<SSTablePath>,
 }
-#[derive(Debug, Clone)]
-pub struct SSTablePath{
-    pub(crate) file_path: PathBuf,
-    pub(crate) hotness: u64
-}
-impl  SSTablePath{
-    pub fn  new(file_path: PathBuf)-> Self{
-     Self{
-       file_path,
-       hotness:0
-     }
-    }
-    pub fn increase_hotness(&mut self){
-       self.hotness+=1;
-    }
-    pub fn get_path(&self)-> PathBuf{
-        self.file_path.clone()
-     }
 
-     pub fn get_hotness(&self)-> u64{
-        self.hotness
-     }
-}
 
 pub trait IndexWithSizeInBytes {
     fn get_index(&self) -> Arc<SkipMap<Vec<u8>, (usize, u64)>>; // usize for value offset, u64 to store entry creation date in milliseconds

@@ -73,7 +73,7 @@ impl ValueLog {
         return Ok(value_offset.try_into().unwrap());
     }
 
-    pub(crate) fn get(&mut self, start_offset: usize) -> io::Result<Option<String>> {
+    pub(crate) fn get(&mut self, start_offset: usize) -> io::Result<Option<Vec<u8>>> {
         let mut log_file = self.file.lock().map_err(|poison_err| {
             io::Error::new(
                 io::ErrorKind::Other,
@@ -126,7 +126,7 @@ impl ValueLog {
         if bytes_read == 0 {
             return Ok(None);
         }
-        Ok(Some(String::from_utf8_lossy(&value).to_string()))
+        Ok(Some(value))
     }
 
     pub(crate) fn recover(&mut self, start_offset: usize) -> io::Result<Vec<ValueLogEntry>> {
@@ -152,7 +152,7 @@ impl ValueLog {
             let bytes_read = log_file.read(&mut key_len_bytes)?;
             if bytes_read == 0 {
                 return Err(io::Error::new(
-                    io::ErrorKind::Other,
+                    io::ErrorKind::UnexpectedEof,
                     format!("Error while reading entries from value log file"),
                 ));
             }
