@@ -1,9 +1,9 @@
-use crate::bloom_filter::{self, BloomFilter};
-use crate::memtable::InMemoryTable;
+
+
 use crate::sstable::{SSTable, SSTablePath};
 use crossbeam_skiplist::SkipMap;
 use std::collections::HashMap;
-use std::path::Path;
+
 use std::{fs, io};
 use std::{path::PathBuf, sync::Arc};
 use uuid::Uuid;
@@ -97,7 +97,7 @@ impl BucketMap {
                     && (table.size() < (bucket.avarage_size as f64 * BUCKET_HIGH) as usize)
                     
                     // or the (sstable size is less than min sstabke size) and (bucket avg is less than the min sstable size )
-                    || ((table.size() as usize) < MIN_SSTABLE_SIZE && bucket.avarage_size  < MIN_SSTABLE_SIZE)
+                    || (table.size() < MIN_SSTABLE_SIZE && bucket.avarage_size  < MIN_SSTABLE_SIZE)
             {
                 let mut sstable = SSTable::new(bucket.dir.clone(), true);
                 sstable.set_index(table.get_index());
@@ -210,7 +210,6 @@ impl BucketMap {
                 let sstables_remaining = bucket
                     .sstables
                     .get(sst_paths.len()..)
-                    .clone()
                     .unwrap_or_default();
 
                 if !sstables_remaining.is_empty() {

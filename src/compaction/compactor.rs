@@ -1,13 +1,12 @@
-use std::{cmp::Ordering, collections::HashMap, io, mem, path::PathBuf, sync::Arc};
+use std::{cmp::Ordering, collections::HashMap, io, path::PathBuf, sync::Arc};
 
 use crossbeam_skiplist::SkipMap;
 use uuid::Uuid;
 
 use crate::{
-    bloom_filter::{self, BloomFilter},
-    memtable::{Entry, DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MEMTABLE_CAPACITY},
-    sstable::{self, SSTable, SSTablePath},
-    storage_engine::SizeUnit,
+    bloom_filter::{BloomFilter},
+    memtable::{Entry},
+    sstable::{SSTable, SSTablePath},
 };
 
 use super::{bucket_coordinator::Bucket, BucketMap};
@@ -31,7 +30,7 @@ impl MergedSSTable {
 
 impl Compactor {
     pub fn new() -> Self {
-        return Self;
+        Self
     }
 
     pub fn run_compaction(
@@ -127,7 +126,7 @@ impl Compactor {
         sstables_to_delete: &Vec<(Uuid, Vec<SSTablePath>)>,
         bloom_filters_with_both_old_and_new_sstables: &mut Vec<BloomFilter>,
     ) -> Option<bool> {
-        let all_sstables_deleted = buckets.delete_sstables(&sstables_to_delete);
+        let all_sstables_deleted = buckets.delete_sstables(sstables_to_delete);
 
         // if all sstables were not deleted then don't remove the associated bloom filters
         // although this can lead to redundancy bloom filters are in-memory and its also less costly
@@ -163,7 +162,7 @@ impl Compactor {
             });
         bloom_filters_with_both_old_and_new_sstables.clear();
         bloom_filters_with_both_old_and_new_sstables
-            .extend(bloom_filters_map.into_iter().map(|(_, bf)| bf));
+            .extend(bloom_filters_map.into_values());
         Some(true)
     }
 
@@ -194,7 +193,7 @@ impl Compactor {
                 bloom_filter: new_bloom_filter,
             })
         });
-        if merged_sstbales.len() == 0 {
+        if merged_sstbales.is_empty() {
             return None;
         }
         Some(merged_sstbales)

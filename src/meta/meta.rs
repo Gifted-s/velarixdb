@@ -1,4 +1,4 @@
-use std::fs::{File, OpenOptions};
+use std::fs::{OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
@@ -78,7 +78,7 @@ impl Meta {
 
         // Create a NaiveDateTime from seconds and microseconds
         let naive_datetime =
-            NaiveDateTime::from_timestamp_opt(seconds.into(), micros_remainder as u32 * 1000);
+            NaiveDateTime::from_timestamp_opt(seconds.into(), micros_remainder * 1000);
 
         // Convert NaiveDateTime to DateTime<Utc>
         let created_utc: DateTime<Utc> =
@@ -96,7 +96,7 @@ impl Meta {
         // Create a NaiveDateTime from seconds and microseconds
         let modified_date_naive_datetime = NaiveDateTime::from_timestamp_opt(
             date_modified_seconds.into(),
-            micros_remainder as u32 * 1000,
+            micros_remainder * 1000,
         );
 
         // Convert NaiveDateTime to DateTime<Utc>

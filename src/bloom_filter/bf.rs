@@ -1,10 +1,7 @@
 use bit_vec::BitVec;
 use std::{
     collections::hash_map::DefaultHasher,
-    fs::{File, OpenOptions},
     hash::{Hash, Hasher},
-    io::{self, Read, Write},
-    path::PathBuf,
     sync::{
         atomic::{AtomicU32, Ordering},
         Arc, Mutex,
@@ -47,7 +44,7 @@ impl BloomFilter {
     pub(crate) fn set<T: Hash>(&mut self, key: &T) {
         let mut bits = self.bit_vec.lock().expect("Failed to lock file");
         for i in 0..self.no_of_hash_func {
-            let hash = self.calculate_hash(key, i as usize);
+            let hash = self.calculate_hash(key, i);
             let index = (hash % bits.len() as u64) as usize;
             bits.set(index, true)
         }
@@ -57,7 +54,7 @@ impl BloomFilter {
     pub(crate) fn contains<T: Hash>(&self, key: &T) -> bool {
         let bits = self.bit_vec.lock().expect("Failed to lock file");
         for i in 0..self.no_of_hash_func {
-            let hash = self.calculate_hash(key, i as usize);
+            let hash = self.calculate_hash(key, i);
             let index = (hash % bits.len() as u64) as usize;
             if !bits[index] {
                 return false;
@@ -113,13 +110,13 @@ impl BloomFilter {
     /// Returns the current number of elements inserted into the Bloom filter.
     pub(crate) fn num_bits(&self) -> usize {
         // Retrieve the element count atomically.
-        self.bit_vec.lock().unwrap().len() as usize
+        self.bit_vec.lock().unwrap().len()
     }
 
     /// Returns the current number of hash functions.
     pub(crate) fn num_of_hash_functions(&self) -> usize {
         // Retrieve the element count atomically.
-        self.no_of_hash_func as usize
+        self.no_of_hash_func
     }
 
     /// Get SSTable path
@@ -138,7 +135,7 @@ impl BloomFilter {
     fn calculate_no_of_bits(no_of_elements: usize, false_positive_rate: f64) -> u32 {
         let no_bits =
             -((no_of_elements as f64 * false_positive_rate.ln()) / ((2_f64.ln()).powi(2))).ceil();
-        return no_bits as u32;
+        no_bits as u32
     }
 
     fn calculate_no_of_hash_function(no_of_bits: u32, no_of_elements: u32) -> u32 {
@@ -162,10 +159,7 @@ impl Clone for BloomFilter {
 #[cfg(test)]
 
 mod tests {
-    use std::{
-        fs::{self, remove_dir},
-        path,
-    };
+    
 
     use super::*;
 
@@ -179,7 +173,7 @@ mod tests {
             -((no_of_elements as f64 * false_positive_rate.ln()) / ((2_f64.ln()).powi(2))).ceil();
 
         let expected_no_hash_func =
-            ((no_bits as f64 / no_of_elements as f64) * (2_f64.ln()).ceil()) as usize;
+            ((no_bits / no_of_elements as f64) * (2_f64.ln()).ceil()) as usize;
 
         assert_eq!(bloom_filter.num_elements(), 0);
         assert_eq!(bloom_filter.no_of_hash_func, expected_no_hash_func);

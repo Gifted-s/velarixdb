@@ -1,23 +1,22 @@
 use crate::{
-    bloom_filter::{self, BloomFilter},
+    bloom_filter::{BloomFilter},
     compaction::{Bucket, BucketMap, Compactor},
     memtable::{Entry, InMemoryTable, DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MEMTABLE_CAPACITY},
     sstable::{SSTable, SSTablePath},
-    value_log::{ValueLog, VLOG_FILE_NAME},
+    value_log::{ValueLog},
 };
-use chrono::{DateTime, Utc};
+use chrono::{Utc};
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
-use serde::de::value;
+
 use std::{
-    clone,
     collections::HashMap,
     fs,
     io::{self, Error},
     mem,
-    path::{Component, Path, PathBuf},
+    path::{PathBuf},
 };
-use std::{cmp, hash::Hash};
+use std::{hash::Hash};
 
 pub(crate) static DEFAULT_ALLOW_PREFETCH: bool = true;
 pub(crate) static DEFAULT_PREFETCH_SIZE: usize = 32;
@@ -143,7 +142,7 @@ impl StorageEngine<Vec<u8>> {
                                 }
                                 //println!("Found at this SSTABLE {:?}", sst_path.get_path());
                             }
-                            Err(err) => {
+                            Err(_err) => {
                                 // println!("Key was not found for this sstable {:?}", sst_path.get_path());
                                 // return Err(err), // Return the error directly
                             }
@@ -416,7 +415,7 @@ impl StorageEngine<Vec<u8>> {
             Err(err) => {
                 println!(
                     "Error retrieving entries from value logs inner {}",
-                    err.to_string()
+                    err
                 )
             }
         }
@@ -462,7 +461,7 @@ impl DirPath {
     fn get_dir(&self) -> &str {
         self.root
             .to_str()
-            .expect("Failed to convert pathj to string")
+            .expect("Failed to convert path to string")
     }
 }
 impl SizeUnit {
@@ -478,8 +477,8 @@ impl SizeUnit {
 
 #[cfg(test)]
 mod tests {
-    use crate::bloom_filter;
-    use std::fs::remove_dir;
+    
+    
 
     use super::*;
     // Generate test to find keys after compaction

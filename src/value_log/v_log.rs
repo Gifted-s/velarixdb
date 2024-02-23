@@ -70,7 +70,7 @@ impl ValueLog {
             .expect("Failed to write to value log entry");
         log_file.flush()?;
 
-        return Ok(value_offset.try_into().unwrap());
+        Ok(value_offset.try_into().unwrap())
     }
 
     pub(crate) fn get(&mut self, start_offset: usize) -> io::Result<Option<Vec<u8>>> {
@@ -153,7 +153,7 @@ impl ValueLog {
             if bytes_read == 0 {
                 return Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
-                    format!("Error while reading entries from value log file"),
+                    "Error while reading entries from value log file".to_string(),
                 ));
             }
             let key_len = u32::from_le_bytes(key_len_bytes);
@@ -164,7 +164,7 @@ impl ValueLog {
             if bytes_read == 0 {
                 return Err(io::Error::new(
                     io::ErrorKind::Other,
-                    format!("Error while reading entries from value log file"),
+                    "Error while reading entries from value log file".to_string(),
                 ));
             }
             let val_len = u32::from_le_bytes(val_len_bytes);
@@ -175,7 +175,7 @@ impl ValueLog {
             if bytes_read == 0 {
                 return Err(io::Error::new(
                     io::ErrorKind::Other,
-                    format!("Error while reading entries from value log file"),
+                    "Error while reading entries from value log file".to_string(),
                 ));
             }
             let created_at = u64::from_le_bytes(creation_date_bytes);
@@ -185,7 +185,7 @@ impl ValueLog {
             if bytes_read == 0 {
                 return Err(io::Error::new(
                     io::ErrorKind::Other,
-                    format!("Error while reading entries from value log file"),
+                    "Error while reading entries from value log file".to_string(),
                 ));
             }
 
@@ -195,7 +195,7 @@ impl ValueLog {
             if bytes_read == 0 {
                 return Err(io::Error::new(
                     io::ErrorKind::Other,
-                    format!("Error while reading entries from value log file"),
+                    "Error while reading entries from value log file".to_string(),
                 ));
             }
             entries.push(ValueLogEntry {
@@ -242,7 +242,7 @@ impl ValueLogEntry {
 
         serialized_data.extend_from_slice(&(self.value.len() as u32).to_le_bytes());
 
-        serialized_data.extend_from_slice(&(self.created_at as u64).to_le_bytes());
+        serialized_data.extend_from_slice(&self.created_at.to_le_bytes());
 
         serialized_data.extend_from_slice(&self.key);
 

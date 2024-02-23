@@ -1,21 +1,20 @@
-use chrono::{DateTime, Utc};
+use chrono::{Utc};
 use crossbeam_skiplist::SkipMap;
-use num_traits::{ops::bytes, ToBytes};
-use serde::de::value::Error;
+use num_traits::{ToBytes};
+
 use std::{
     cmp::Ordering,
     fs::{self, OpenOptions},
-    io::{self, Read, Seek, SeekFrom, Write},
+    io::{self, Read, Write},
     mem,
     path::{Path, PathBuf},
-    rc::Rc,
     sync::{Arc, Mutex},
 };
 
 use crate::{
     bloom_filter::BloomFilter,
     compaction::IndexWithSizeInBytes,
-    memtable::{Entry, DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MEMTABLE_CAPACITY},
+    memtable::{Entry, DEFAULT_FALSE_POSITIVE_RATE},
 };
 
 pub(crate) struct SSTable {
@@ -120,7 +119,7 @@ impl SSTable {
                 + entry.key.len()
                 + mem::size_of::<u32>()
                 + mem::size_of::<u64>();
-            let mut entry_vec = Vec::with_capacity(entry_len as usize);
+            let mut entry_vec = Vec::with_capacity(entry_len);
 
             //add key len
             entry_vec.extend_from_slice(&(entry.key.len() as u32).to_le_bytes());
@@ -132,7 +131,7 @@ impl SSTable {
             entry_vec.extend_from_slice(&(entry.val_offset as u32).to_le_bytes());
 
             //write date created in milliseconds
-            entry_vec.extend_from_slice(&(entry.created_at as u64).to_le_bytes());
+            entry_vec.extend_from_slice(&entry.created_at.to_le_bytes());
 
             //write to file
             locked_file.write_all(&entry_vec).unwrap();
@@ -221,11 +220,7 @@ impl SSTable {
     }
 
     pub(crate) fn get_value_from_index(&self, key: &[u8]) -> Option<(usize, u64)> {
-        if let Some(entry) = self.index.get(key) {
-            Some(entry.value().to_owned())
-        } else {
-            None
-        }
+        self.index.get(key).map(|entry| entry.value().to_owned())
     }
 
     fn compare_offsets(offset_a: usize, offset_b: usize) -> Ordering {
@@ -297,7 +292,7 @@ impl SSTable {
             if bytes_read == 0 {
                 return Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
-                    format!("File read ended expectedly"),
+                    "File read ended expectedly".to_string(),
                 ));
             }
             let mut val_offset_bytes = [0; mem::size_of::<u32>()];
@@ -305,7 +300,7 @@ impl SSTable {
             if bytes_read == 0 {
                 return Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
-                    format!("File read ended expectedly"),
+                    "File read ended expectedly".to_string(),
                 ));
             }
             let mut created_at_bytes = [0; mem::size_of::<u64>()];
@@ -313,12 +308,12 @@ impl SSTable {
             if bytes_read == 0 {
                 return Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
-                    format!("File read ended expectedly"),
+                    "File read ended expectedly".to_string(),
                 ));
             }
             let created_at = u64::from_le_bytes(created_at_bytes);
             let value_offset = u32::from_le_bytes(val_offset_bytes);
-            index.insert(key, (value_offset as usize, created_at as u64));
+            index.insert(key, (value_offset as usize, created_at));
         }
         let created_at = Utc::now().timestamp_millis() as u64;
         Ok(Some(SSTable {
