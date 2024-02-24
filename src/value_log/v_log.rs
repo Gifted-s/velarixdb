@@ -6,22 +6,24 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use crate::consts::VLOG_FILE_NAME;
+
 pub struct ValueLog {
     file: Arc<Mutex<File>>,
 }
 
-pub(crate) static VLOG_FILE_NAME: &str = "val_log.bin";
+
 #[derive(PartialEq, Debug)]
-pub(crate) struct ValueLogEntry {
-    pub(crate) ksize: usize,
-    pub(crate) vsize: usize,
-    pub(crate) key: Vec<u8>,
-    pub(crate) value: Vec<u8>,
-    pub(crate) created_at: u64, // date to milliseconds
+pub struct ValueLogEntry {
+    pub ksize: usize,
+    pub vsize: usize,
+    pub key: Vec<u8>,
+    pub value: Vec<u8>,
+    pub created_at: u64, // date to milliseconds
 }
 
 impl ValueLog {
-    pub(crate) fn new(dir: &PathBuf) -> io::Result<Self> {
+    pub fn new(dir: &PathBuf) -> io::Result<Self> {
         let dir_path = PathBuf::from(dir);
 
         if !dir_path.exists() {
@@ -41,7 +43,7 @@ impl ValueLog {
         })
     }
 
-    pub(crate) fn append(
+    pub fn append(
         &self,
         key: &Vec<u8>,
         value: &Vec<u8>,
@@ -73,7 +75,7 @@ impl ValueLog {
         Ok(value_offset.try_into().unwrap())
     }
 
-    pub(crate) fn get(&mut self, start_offset: usize) -> io::Result<Option<Vec<u8>>> {
+    pub fn get(&mut self, start_offset: usize) -> io::Result<Option<Vec<u8>>> {
         let mut log_file = self.file.lock().map_err(|poison_err| {
             io::Error::new(
                 io::ErrorKind::Other,
@@ -129,7 +131,7 @@ impl ValueLog {
         Ok(Some(value))
     }
 
-    pub(crate) fn recover(&mut self, start_offset: usize) -> io::Result<Vec<ValueLogEntry>> {
+    pub fn recover(&mut self, start_offset: usize) -> io::Result<Vec<ValueLogEntry>> {
         let mut log_file = self.file.lock().map_err(|poison_err| {
             io::Error::new(
                 io::ErrorKind::Other,
@@ -210,7 +212,7 @@ impl ValueLog {
 }
 
 impl ValueLogEntry {
-    pub(crate) fn new(
+    pub fn new(
         ksize: usize,
         vsize: usize,
         key: Vec<u8>,
@@ -250,7 +252,8 @@ impl ValueLogEntry {
 
         serialized_data
     }
-
+    
+    #[allow(dead_code)]
     fn deserialize(serialized_data: &[u8]) -> io::Result<Self> {
         if serialized_data.len() < 20 {
             return Err(io::Error::new(

@@ -1,3 +1,4 @@
+use crate::consts::{BUCKET_DIRECTORY_PREFIX, BUCKET_HIGH, BUCKET_LOW, MAX_TRESHOLD, MIN_SSTABLE_SIZE, MIN_TRESHOLD};
 use crate::sstable::{SSTable, SSTablePath};
 use crossbeam_skiplist::SkipMap;
 use std::collections::HashMap;
@@ -6,12 +7,7 @@ use std::{fs, io};
 use std::{path::PathBuf, sync::Arc};
 use uuid::Uuid;
 
-const BUCKET_LOW: f64 = 0.5;
-const BUCKET_HIGH: f64 = 1.5;
-const MIN_SSTABLE_SIZE: usize = 32;
-const MIN_TRESHOLD: usize = 4;
-const MAX_TRESHOLD: usize = 32;
-const BUCKET_DIRECTORY_PREFIX: &str = "bucket";
+
 #[derive(Debug)]
 pub struct BucketMap {
     pub dir: PathBuf,

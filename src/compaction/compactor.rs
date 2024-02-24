@@ -12,10 +12,10 @@ use crate::{
 use super::{bucket_coordinator::Bucket, BucketMap};
 
 pub struct Compactor;
-pub(crate) struct MergedSSTable {
-    sstable: SSTable,
-    hotness: u64,
-    bloom_filter: BloomFilter,
+pub struct MergedSSTable {
+    pub sstable: SSTable,
+    pub hotness: u64,
+    pub bloom_filter: BloomFilter,
 }
 
 impl MergedSSTable {

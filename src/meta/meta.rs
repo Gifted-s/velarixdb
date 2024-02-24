@@ -6,25 +6,26 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 
 #[derive(Debug)]
 pub struct Meta {
-    path: PathBuf,
-    v_log_tail: u32,
-    v_log_head: u32,
-    created_at: DateTime<Utc>,
-    last_modified: DateTime<Utc>,
+    pub path: PathBuf,
+    pub v_log_tail: u32,
+    pub v_log_head: u32,
+    pub created_at: DateTime<Utc>,
+    pub last_modified: DateTime<Utc>,
 }
 
 impl Meta {
-    pub fn new(path: &PathBuf, head: u32, tail: u32) -> Self {
+    pub fn new(path: &PathBuf) -> Self {
         let created_at = Utc::now();
         let last_modified = Utc::now();
         Self {
             path: PathBuf::from(path),
-            v_log_tail: tail,
-            v_log_head: head,
+            v_log_tail: 0,
+            v_log_head: 0,
             created_at,
             last_modified,
         }
     }
+
     // tried useing serde for serialization but DateTime type doesn't implement Serialize trait(will do that later but for now we write in bytes)
     pub fn write_to_file(&self) -> io::Result<()> {
         let mut file = OpenOptions::new()

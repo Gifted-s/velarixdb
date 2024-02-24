@@ -1,2 +1,2 @@
 mod storage;
-pub(crate) use storage::SizeUnit;
+pub use storage::SizeUnit;

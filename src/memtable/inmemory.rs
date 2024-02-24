@@ -1,34 +1,34 @@
 use crate::bloom_filter::BloomFilter;
 use crate::compaction::IndexWithSizeInBytes;
+use crate::consts::{DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MEMTABLE_CAPACITY, THUMB_STONE};
 //use crate::memtable::val_option::ValueOption;
 use crate::storage_engine::SizeUnit;
 use chrono::{DateTime, Utc};
 use crossbeam_skiplist::SkipMap;
 
-use std::cmp::{self};
+use std::cmp;
 use std::io;
-use std::{hash::Hash, sync::Arc};
-pub(crate) static DEFAULT_MEMTABLE_CAPACITY: usize = SizeUnit::Kilobytes.to_bytes(1);
+use std::{
+    hash::Hash,
+    sync::Arc,
+};
 
-pub(crate) static THUMB_STONE: usize = 0;
-
-pub(crate) static DEFAULT_FALSE_POSITIVE_RATE: f64 = 1e-100;
 
 #[derive(PartialOrd, PartialEq, Copy, Clone)]
 pub struct Entry<K: Hash + PartialOrd, V> {
-    pub(crate) key: K,
-    pub(crate) val_offset: V,
-    pub(crate) created_at: u64,
+    pub key: K,
+    pub val_offset: V,
+    pub created_at: u64,
 }
 #[derive(Clone, Debug)]
 pub struct InMemoryTable<K: Hash + PartialOrd + cmp::Ord> {
-    pub(crate) index: Arc<SkipMap<K, (usize, u64)>>, // TODO: write a method to return this, never return property directly
-    pub(crate) bloom_filter: BloomFilter, // TODO: write a method to return this, never return property directly
-    pub(crate) false_positive_rate: f64,
-    pub(crate) size: usize,
-    pub(crate) size_unit: SizeUnit,
-    pub(crate) capacity: usize,
-    pub(crate) created_at: DateTime<Utc>,
+    pub index: Arc<SkipMap<K, (usize, u64)>>, // TODO: write a method to return this, never return property directly
+    pub bloom_filter: BloomFilter, // TODO: write a method to return this, never return property directly
+    pub false_positive_rate: f64,
+    pub size: usize,
+    pub size_unit: SizeUnit,
+    pub capacity: usize,
+    pub created_at: DateTime<Utc>,
 }
 
 impl IndexWithSizeInBytes for InMemoryTable<Vec<u8>> {
@@ -51,7 +51,7 @@ impl Entry<Vec<u8>, usize> {
 }
 
 impl InMemoryTable<Vec<u8>> {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self::with_specified_capacity_and_rate(
             SizeUnit::Bytes,
             DEFAULT_MEMTABLE_CAPACITY,
@@ -59,7 +59,7 @@ impl InMemoryTable<Vec<u8>> {
         )
     }
 
-    pub(crate) fn with_specified_capacity_and_rate(
+    pub fn with_specified_capacity_and_rate(
         size_unit: SizeUnit,
         capacity: usize,
         false_positive_rate: f64,
@@ -87,7 +87,7 @@ impl InMemoryTable<Vec<u8>> {
         }
     }
 
-    pub(crate) fn insert(&mut self, entry: &Entry<Vec<u8>, usize>) -> io::Result<()> {
+    pub fn insert(&mut self, entry: &Entry<Vec<u8>, usize>) -> io::Result<()> {
         if !self.bloom_filter.contains(&entry.key) {
             self.bloom_filter.set(&entry.key.clone());
             self.index
@@ -106,20 +106,20 @@ impl InMemoryTable<Vec<u8>> {
         // it takes 4 bytes to store a 32 bit integer since 8 bits makes 1 byte
         let entry_length_byte = entry.key.len() + 4 + 8;
         self.size += entry_length_byte;
-        Ok(())
+        return Ok(());
     }
 
-    pub(crate) fn get(&mut self, key: &Vec<u8>) -> io::Result<Option<(usize, u64)>> {
+    pub fn get(&mut self, key: &Vec<u8>) -> io::Result<Option<(usize, u64)>> {
         if self.bloom_filter.contains(key) {
             println!("Found key in bloomfilter {:?}", key.to_vec());
-            if let Some(entry) = self.index.get(key) {
+            if let Some(entry) =  self.index.get(key){
                 return Ok(Some(*entry.value())); // returns value offset
             }
         }
         Ok(None)
     }
 
-    pub(crate) fn update(&mut self, entry: &Entry<Vec<u8>, usize>) -> io::Result<()> {
+    pub fn update(&mut self, entry: &Entry<Vec<u8>, usize>) -> io::Result<()> {
         if !self.bloom_filter.contains(&entry.key) {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
@@ -129,14 +129,14 @@ impl InMemoryTable<Vec<u8>> {
         // If the key already exist in the bloom filter then just insert into the entry alone
         self.index
             .insert(entry.key.to_vec(), (entry.val_offset, entry.created_at));
-        Ok(())
+        return Ok(());
     }
 
-    pub(crate) fn upsert(&mut self, entry: &Entry<Vec<u8>, usize>) -> io::Result<()> {
-        self.insert(entry)
+    pub fn upsert(&mut self, entry: &Entry<Vec<u8>, usize>) -> io::Result<()> {
+        self.insert(&entry)
     }
 
-    pub(crate) fn delete(&mut self, key: &Vec<u8>) -> io::Result<()> {
+    pub fn delete(&mut self, key: &Vec<u8>) -> io::Result<()> {
         if !self.bloom_filter.contains(key) {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
@@ -149,7 +149,7 @@ impl InMemoryTable<Vec<u8>> {
             key.to_vec(),
             (THUMB_STONE, created_at.timestamp_millis() as u64),
         );
-        Ok(())
+        return Ok(());
     }
     pub fn false_positive_rate(&mut self) -> f64 {
         self.false_positive_rate
@@ -177,7 +177,7 @@ impl InMemoryTable<Vec<u8>> {
     pub fn range() {}
 
     /// Clears all key-value entries in the MemTable.
-    pub(crate) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         let capacity_to_bytes = self.size_unit.to_bytes(self.capacity);
         let avg_entry_size = 100;
         let max_no_of_entries = capacity_to_bytes / avg_entry_size as usize;

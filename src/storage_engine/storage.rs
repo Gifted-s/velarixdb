@@ -1,15 +1,11 @@
 use crate::{
-    bloom_filter::BloomFilter,
-    compaction::{Bucket, BucketMap, Compactor},
-    memtable::{Entry, InMemoryTable, DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MEMTABLE_CAPACITY},
-    sstable::{SSTable, SSTablePath},
-    value_log::ValueLog,
+    bloom_filter::BloomFilter, compaction::{Bucket, BucketMap, Compactor}, consts::{
+        BUCKETS_DIRECTORY_NAME, DEFAULT_ALLOW_PREFETCH, DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MEMTABLE_CAPACITY, DEFAULT_PREFETCH_SIZE, META_DIRECTORY_NAME, VALUE_LOG_DIRECTORY_NAME
+    }, memtable::{Entry, InMemoryTable}, meta::Meta, sstable::{SSTable, SSTablePath}, value_log::ValueLog
 };
 use chrono::Utc;
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
-
-use std::hash::Hash;
 use std::{
     collections::HashMap,
     fs,
@@ -17,20 +13,21 @@ use std::{
     mem,
     path::PathBuf,
 };
+use std::{cmp, hash::Hash};
 
-pub(crate) static DEFAULT_ALLOW_PREFETCH: bool = true;
-pub(crate) static DEFAULT_PREFETCH_SIZE: usize = 32;
+
 
 pub struct StorageEngine<K: Hash + PartialOrd + std::cmp::Ord> {
-    pub(crate) dir: DirPath,
-    pub(crate) memtable: InMemoryTable<K>,
-    pub(crate) bloom_filters: Vec<BloomFilter>,
-    pub(crate) val_log: ValueLog,
-    pub(crate) buckets: BucketMap,
-    pub(crate) key_index: LevelsBiggestKeys,
-    pub(crate) allow_prefetch: bool,
-    pub(crate) prefetch_size: usize,
-    pub(crate) compactor: Compactor,
+    pub dir: DirPath,
+    pub memtable: InMemoryTable<K>,
+    pub bloom_filters: Vec<BloomFilter>,
+    pub val_log: ValueLog,
+    pub buckets: BucketMap,
+    pub key_index: LevelsBiggestKeys,
+    pub allow_prefetch: bool,
+    pub prefetch_size: usize,
+    pub compactor: Compactor,
+    pub meta: Meta,
 }
 
 pub struct LevelsBiggestKeys {
@@ -42,7 +39,7 @@ impl LevelsBiggestKeys {
     }
 }
 
-pub struct DirPath {
+    pub struct DirPath {
     root: PathBuf,
     val_log: PathBuf,
     buckets: PathBuf,
@@ -126,7 +123,7 @@ impl StorageEngine<Vec<u8>> {
             offset = value_offset;
             most_recent_insert_time = creation_date;
         } else {
-            // Step 2: If key does not exist in MemTable then we can load sstables that probaby contains this key from bloom filter
+            // Step 2: If key does not exist in MemTable then we can load sstables that probaby contains this key fr8om bloom filter
             let sstable_paths =
                 BloomFilter::get_sstable_paths_that_contains_key(&self.bloom_filters, &key);
             match sstable_paths {
@@ -142,7 +139,7 @@ impl StorageEngine<Vec<u8>> {
                                 }
                                 //println!("Found at this SSTABLE {:?}", sst_path.get_path());
                             }
-                            Err(_err) => {
+                            Err(err) => {
                                 // println!("Key was not found for this sstable {:?}", sst_path.get_path());
                                 // return Err(err), // Return the error directly
                             }
@@ -249,6 +246,7 @@ impl StorageEngine<Vec<u8>> {
 
         let key_index = LevelsBiggestKeys::new(Vec::new());
         let vlog = ValueLog::new(vlog_path)?;
+        let meta = Meta::new(&dir.meta);
         if vlog_empty {
             let memtable = InMemoryTable::with_specified_capacity_and_rate(
                 size_unit,
@@ -266,6 +264,7 @@ impl StorageEngine<Vec<u8>> {
                 allow_prefetch,
                 prefetch_size,
                 compactor: Compactor::new(),
+                meta
             });
         }
 
@@ -371,6 +370,7 @@ impl StorageEngine<Vec<u8>> {
                 key_index,
                 allow_prefetch,
                 prefetch_size,
+                meta,
                 compactor: Compactor::new(),
             }),
             Err(err) => Err(io::Error::new(
@@ -402,6 +402,7 @@ impl StorageEngine<Vec<u8>> {
                     // and we retrieved this from the sstable, therefore should not re-write the initial entry in
                     // memtable since it's already in the sstable
                     if most_recent_offset != head_offset {
+                        println!("E {:?}", e);
                         memtable.insert(&entry)?;
                     }
                     most_recent_offset += mem::size_of::<u32>() // Entry Length
@@ -413,7 +414,10 @@ impl StorageEngine<Vec<u8>> {
                 }
             }
             Err(err) => {
-                println!("Error retrieving entries from value logs inner {}", err)
+                println!(
+                    "Error retrieving entries from value logs inner {}",
+                    err.to_string()
+                )
             }
         }
         Ok(memtable)
@@ -442,11 +446,11 @@ impl StorageEngine<Vec<u8>> {
 }
 
 impl DirPath {
-    fn build(root_path: PathBuf) -> Self {
+    pub(crate) fn build(root_path: PathBuf) -> Self {
         let root = root_path;
-        let val_log = root.join("v_log");
-        let buckets = root.join("buckets");
-        let meta = root.join("meta");
+        let val_log = root.join(VALUE_LOG_DIRECTORY_NAME);
+        let buckets = root.join(BUCKETS_DIRECTORY_NAME);
+        let meta = root.join(META_DIRECTORY_NAME);
         Self {
             root,
             val_log,
@@ -458,7 +462,7 @@ impl DirPath {
     fn get_dir(&self) -> &str {
         self.root
             .to_str()
-            .expect("Failed to convert path to string")
+            .expect("Failed to convert pathj to string")
     }
 }
 impl SizeUnit {
@@ -472,16 +476,10 @@ impl SizeUnit {
     }
 }
 
-fn generate_random_string(length: usize) -> String {
-    let rng = thread_rng();
-    rng.sample_iter(&Alphanumeric)
-        .take(length)
-        .map(|c| c as char)
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
+    use crate::bloom_filter;
+    use std::fs::remove_dir;
 
     use super::*;
     // Generate test to find keys after compaction
@@ -540,4 +538,12 @@ mod tests {
 
         // assert_eq!(value4, None);
     }
+}
+
+fn generate_random_string(length: usize) -> String {
+    let rng = thread_rng();
+    rng.sample_iter(&Alphanumeric)
+        .take(length)
+        .map(|c| c as char)
+        .collect()
 }

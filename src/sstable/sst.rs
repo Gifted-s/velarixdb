@@ -1,6 +1,5 @@
 use chrono::Utc;
 use crossbeam_skiplist::SkipMap;
-use num_traits::ToBytes;
 
 use std::{
     cmp::Ordering,
@@ -12,16 +11,14 @@ use std::{
 };
 
 use crate::{
-    bloom_filter::BloomFilter,
-    compaction::IndexWithSizeInBytes,
-    memtable::{Entry, DEFAULT_FALSE_POSITIVE_RATE},
+    bloom_filter::BloomFilter, compaction::IndexWithSizeInBytes, consts::DEFAULT_FALSE_POSITIVE_RATE, memtable::Entry
 };
 
-pub(crate) struct SSTable {
-    pub(crate) file_path: PathBuf,
-    pub(crate) index: Arc<SkipMap<Vec<u8>, (usize, u64)>>,
-    pub(crate) created_at: u64,
-    pub(crate) size: usize,
+pub struct SSTable {
+    pub file_path: PathBuf,
+    pub index: Arc<SkipMap<Vec<u8>, (usize, u64)>>,
+    pub created_at: u64,
+    pub size: usize,
 }
 
 impl IndexWithSizeInBytes for SSTable {
@@ -57,6 +54,7 @@ impl SSTablePath {
     }
 }
 
+#[allow(dead_code)]
 impl SSTable {
     pub(crate) fn new(dir: PathBuf, create_file: bool) -> Self {
         let created_at = Utc::now();
@@ -98,10 +96,7 @@ impl SSTable {
     pub(crate) fn write_to_file(&self) -> io::Result<()> {
         // Open the file in write mode with the append flag.
         let file_path = PathBuf::from(&self.file_path);
-        let file = OpenOptions::new()
-            
-            .append(true)
-            .open(file_path)?;
+        let file = OpenOptions::new().append(true).open(file_path)?;
 
         let file_mutex = Mutex::new(file);
 
@@ -154,7 +149,7 @@ impl SSTable {
         Ok(())
     }
 
-    // for now we assume that we have only have one sstable but in the future we will have levels table for biggest keys
+
     pub(crate) fn get(&self, searched_key: &[u8]) -> io::Result<(usize, u64)> {
         // Open the file in read mode
         let file_path = PathBuf::from(&self.file_path);

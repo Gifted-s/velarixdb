@@ -1,2 +1,2 @@
 mod bf;
-pub(crate) use bf::BloomFilter;
+pub use bf::BloomFilter;

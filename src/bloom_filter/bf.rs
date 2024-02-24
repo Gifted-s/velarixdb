@@ -19,7 +19,7 @@ pub struct BloomFilter {
 }
 
 impl BloomFilter {
-    pub(crate) fn new(false_positive_rate: f64, no_of_elements: usize) -> Self {
+    pub fn new(false_positive_rate: f64, no_of_elements: usize) -> Self {
         assert!(
             false_positive_rate >= 0.0,
             "False positive rate can not be les than or equal to zero"
@@ -63,11 +63,11 @@ impl BloomFilter {
         true
     }
 
-    pub(crate) fn set_sstable_path(&mut self, sstable_path: SSTablePath) {
+    pub fn set_sstable_path(&mut self, sstable_path: SSTablePath) {
         self.sstable_path = Some(sstable_path);
     }
 
-    pub(crate) fn get_sstable_paths_that_contains_key<T: Hash>(
+    pub fn get_sstable_paths_that_contains_key<T: Hash>(
         bloom_filters: &Vec<BloomFilter>,
         key: &T,
     ) -> Option<Vec<SSTablePath>> {
@@ -86,7 +86,7 @@ impl BloomFilter {
         Some(sstables)
     }
 
-    pub fn clear(&self) -> Self {
+    pub fn clear(&mut self) -> Self {
         let mut bits = self.bit_vec.lock().expect("Failed to lock file");
         for i in 0..bits.len() {
             bits.set(i, false);
@@ -100,27 +100,27 @@ impl BloomFilter {
             bit_vec: Arc::new(Mutex::new(bit_vec)),
         }
     }
-
+    
     /// Returns the current number of elements inserted into the Bloom filter.
-    pub(crate) fn num_elements(&self) -> usize {
+   pub fn num_elements(&self) -> usize {
         // Retrieve the element count atomically.
         self.no_of_elements.load(Ordering::Relaxed) as usize
     }
 
     /// Returns the current number of elements inserted into the Bloom filter.
-    pub(crate) fn num_bits(&self) -> usize {
+   pub  fn num_bits(&self) -> usize {
         // Retrieve the element count atomically.
         self.bit_vec.lock().unwrap().len()
     }
 
     /// Returns the current number of hash functions.
-    pub(crate) fn num_of_hash_functions(&self) -> usize {
+   pub  fn num_of_hash_functions(&self) -> usize {
         // Retrieve the element count atomically.
         self.no_of_hash_func
     }
 
     /// Get SSTable path
-    pub(crate) fn get_sstable_path(&self) -> &SSTablePath {
+    pub fn get_sstable_path(&self) -> &SSTablePath {
         // Retrieve the element count atomically.
         self.sstable_path.as_ref().unwrap()
     }
@@ -128,7 +128,7 @@ impl BloomFilter {
     fn calculate_hash<T: Hash>(&self, key: &T, seed: usize) -> u64 {
         let mut hasher = DefaultHasher::new();
         key.hash(&mut hasher);
-        hasher.write_usize(seed);
+        hasher.write_u64(seed as u64);
         hasher.finish()
     }
 
