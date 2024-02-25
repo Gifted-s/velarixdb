@@ -13,9 +13,9 @@ use crate::sstable::SSTablePath;
 #[derive(Debug)]
 pub struct BloomFilter {
     pub sstable_path: Option<SSTablePath>,
-    pub no_of_hash_func: usize, // number of hash functions to used by the bloom filter
-    pub no_of_elements: AtomicU32, // number of elements in the bloom filter
-    pub bit_vec: Arc<Mutex<BitVec>>, // store the bit array each representing 0 or 1 meaning true or false
+    pub no_of_hash_func: usize, 
+    pub no_of_elements: AtomicU32,
+    pub bit_vec: Arc<Mutex<BitVec>>,
 }
 
 impl BloomFilter {
