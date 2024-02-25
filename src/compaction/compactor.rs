@@ -1,12 +1,10 @@
-use std::{cmp::Ordering, collections::HashMap, io, path::PathBuf, sync::Arc};
+use std::{cmp::Ordering, collections::HashMap, path::PathBuf, sync::Arc};
 
 use crossbeam_skiplist::SkipMap;
 use uuid::Uuid;
 
 use crate::{
-    bloom_filter::BloomFilter,
-    memtable::Entry,
-    sstable::{SSTable, SSTablePath},
+    bloom_filter::BloomFilter, err::StorageEngineError, memtable::Entry, sstable::{SSTable, SSTablePath}
 };
 
 use super::{bucket_coordinator::Bucket, BucketMap};
@@ -37,7 +35,7 @@ impl Compactor {
         &self,
         buckets: &mut BucketMap,
         bloom_filters: &mut Vec<BloomFilter>,
-    ) -> io::Result<bool> {
+    ) -> Result<bool, StorageEngineError> {
         let mut number_of_compactions = 0;
         // The compaction loop will keep running until there
         // are no more buckets with more than minimum treshold size
@@ -90,8 +88,7 @@ impl Compactor {
 
             println!(
         "Expected number of new SSTables written to disk : {}, Actual number of SSTables written {}",
-         expected_sstables_to_be_writtten_to_disk, actual_number_of_sstables_written_to_disk 
-        );
+         expected_sstables_to_be_writtten_to_disk, actual_number_of_sstables_written_to_disk);
 
             if expected_sstables_to_be_writtten_to_disk == actual_number_of_sstables_written_to_disk
             {
@@ -109,10 +106,7 @@ impl Compactor {
                         );
                     }
                     None => {
-                        return Err(io::Error::new(
-                            io::ErrorKind::BrokenPipe,
-                            "Bloom Filter was not updated successfully",
-                        ));
+                        return Err(StorageEngineError::CompactionPartiallyFailed(String::from("Compaction cleanup failed but sstable merge was successful")));
                     }
                 }
             }

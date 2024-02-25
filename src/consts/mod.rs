@@ -26,8 +26,8 @@ pub const MIN_TRESHOLD: usize = 4;
 
 pub const MAX_TRESHOLD: usize = 32;
 
-pub static DEFAULT_ALLOW_PREFETCH: bool = true;
+pub const DEFAULT_ALLOW_PREFETCH: bool = true;
 
-pub static DEFAULT_PREFETCH_SIZE: usize = 32;
+pub const DEFAULT_PREFETCH_SIZE: usize = 32;
 
-
+pub const EOF: &str = "EOF";

@@ -1,11 +1,21 @@
 use crate::{
-    bloom_filter::BloomFilter, compaction::{Bucket, BucketMap, Compactor}, consts::{
-        BUCKETS_DIRECTORY_NAME, DEFAULT_ALLOW_PREFETCH, DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MEMTABLE_CAPACITY, DEFAULT_PREFETCH_SIZE, META_DIRECTORY_NAME, VALUE_LOG_DIRECTORY_NAME
-    }, memtable::{Entry, InMemoryTable}, meta::Meta, sstable::{SSTable, SSTablePath}, value_log::ValueLog
+    bloom_filter::BloomFilter,
+    compaction::{Bucket, BucketMap, Compactor},
+    consts::{
+        BUCKETS_DIRECTORY_NAME, DEFAULT_ALLOW_PREFETCH, DEFAULT_FALSE_POSITIVE_RATE,
+        DEFAULT_MEMTABLE_CAPACITY, DEFAULT_PREFETCH_SIZE, META_DIRECTORY_NAME,
+        VALUE_LOG_DIRECTORY_NAME,
+    },
+    err::StorageEngineError,
+    memtable::{Entry, InMemoryTable},
+    meta::Meta,
+    sstable::{SSTable, SSTablePath},
+    value_log::ValueLog,
 };
 use chrono::Utc;
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
+use std::{cmp, hash::Hash};
 use std::{
     collections::HashMap,
     fs,
@@ -13,9 +23,8 @@ use std::{
     mem,
     path::PathBuf,
 };
-use std::{cmp, hash::Hash};
 
-
+use crate::err::StorageEngineError::*;
 
 pub struct StorageEngine<K: Hash + PartialOrd + std::cmp::Ord> {
     pub dir: DirPath,
@@ -39,7 +48,7 @@ impl LevelsBiggestKeys {
     }
 }
 
-    pub struct DirPath {
+pub struct DirPath {
     root: PathBuf,
     val_log: PathBuf,
     buckets: PathBuf,
@@ -55,14 +64,14 @@ pub enum SizeUnit {
 }
 
 impl StorageEngine<Vec<u8>> {
-    pub fn new(dir: PathBuf) -> io::Result<Self> {
+    pub fn new(dir: PathBuf) -> Result<Self, StorageEngineError> {
         let dir = DirPath::build(dir);
 
         StorageEngine::with_capacity(dir, SizeUnit::Bytes, DEFAULT_MEMTABLE_CAPACITY)
     }
 
     /// A Result indicating success or an `io::Error` if an error occurred.
-    pub fn put(&mut self, key: &str, value: &str) -> io::Result<bool> {
+    pub fn put(&mut self, key: &str, value: &str) -> Result<bool, StorageEngineError> {
         // Convert the key and value into Vec<u8> from given &str.
         let key = &key.as_bytes().to_vec();
         let value = &value.as_bytes().to_vec();
@@ -99,7 +108,9 @@ impl StorageEngine<Vec<u8>> {
                             );
                         }
                         Err(err) => {
-                            return Err(io::Error::new(err.kind(), err.to_string()));
+                            return Err(FlushToDiskError {
+                                error: Box::new(err),
+                            });
                         }
                     }
                 }
@@ -132,10 +143,12 @@ impl StorageEngine<Vec<u8>> {
                     for sst_path in paths.iter() {
                         let sstable = SSTable::new_with_exisiting_file_path(sst_path.get_path());
                         match sstable.get(&key) {
-                            Ok((value_offset, created_at)) => {
-                                if created_at > most_recent_insert_time {
-                                    offset = value_offset;
-                                    most_recent_insert_time = created_at;
+                            Ok(result) => {
+                                if let Some((value_offset, created_at)) = result {
+                                    if created_at > most_recent_insert_time {
+                                        offset = value_offset;
+                                        most_recent_insert_time = created_at;
+                                    }
                                 }
                                 //println!("Found at this SSTABLE {:?}", sst_path.get_path());
                             }
@@ -161,12 +174,12 @@ impl StorageEngine<Vec<u8>> {
         Err(io::Error::new(io::ErrorKind::NotFound, "Key Not Found"))
     }
 
-    pub fn update(&mut self, key: &str, value: &str) -> io::Result<bool> {
+    pub fn update(&mut self, key: &str, value: &str) -> Result<bool, StorageEngineError> {
         // Call set method defined in StorageEngine.
         self.put(key, value)
     }
 
-    pub fn clear(mut self) -> io::Result<Self> {
+    pub fn clear(mut self) -> Result<Self, StorageEngineError> {
         // Get the current capacity.
         let capacity = self.memtable.capacity();
 
@@ -194,7 +207,7 @@ impl StorageEngine<Vec<u8>> {
     }
 
     // if write + head offset is greater than size then flush to disk
-    fn flush_memtable(&mut self) -> io::Result<()> {
+    fn flush_memtable(&mut self) -> Result<(), StorageEngineError> {
         let hotness = 1;
         let insert_result = self
             .buckets
@@ -216,11 +229,15 @@ impl StorageEngine<Vec<u8>> {
                 self.memtable.clear();
                 Ok(())
             }
-            Err(err) => Err(io::Error::new(err.kind(), err.to_string())),
+            Err(err) => Err(err),
         }
     }
 
-    fn with_capacity(dir: DirPath, size_unit: SizeUnit, capacity: usize) -> io::Result<Self> {
+    fn with_capacity(
+        dir: DirPath,
+        size_unit: SizeUnit,
+        capacity: usize,
+    ) -> Result<Self, StorageEngineError> {
         Self::with_capacity_and_rate(
             dir,
             size_unit,
@@ -238,11 +255,13 @@ impl StorageEngine<Vec<u8>> {
         false_positive_rate: f64,
         allow_prefetch: bool,
         prefetch_size: usize,
-    ) -> io::Result<Self> {
+    ) -> Result<Self, StorageEngineError> {
         let vlog_path = &dir.val_log;
         let buckets_path = dir.buckets.clone();
         let vlog_exit = vlog_path.exists();
-        let vlog_empty = !vlog_exit || fs::metadata(vlog_path)?.len() == 0;
+        let vlog = ValueLog::new(vlog_path);
+        let vlog_empty =
+            !vlog_exit || fs::metadata(vlog_path).map_err(GetFileMetaDataError)?.len() == 0;
 
         let key_index = LevelsBiggestKeys::new(Vec::new());
         let vlog = ValueLog::new(vlog_path)?;
@@ -264,7 +283,7 @@ impl StorageEngine<Vec<u8>> {
                 allow_prefetch,
                 prefetch_size,
                 compactor: Compactor::new(),
-                meta
+                meta,
             });
         }
 
@@ -274,9 +293,21 @@ impl StorageEngine<Vec<u8>> {
         let mut most_recent_head_offset = 0;
 
         // engine_root/buckets/bucket{id}
-        for buckets_directories in fs::read_dir(buckets_path.clone())? {
+        for buckets_directories in
+            fs::read_dir(buckets_path.clone()).map_err(|err| BucketDirectoryOpenError {
+                path: buckets_path.clone(),
+                error: err,
+            })?
+        {
             //  engine_root/buckets/bucket{id}/sstable_{timestamp}_.db
-            for bucket_dir in fs::read_dir(buckets_directories.as_ref().unwrap().path())? {
+            for bucket_dir in
+                fs::read_dir(buckets_directories.as_ref().unwrap().path()).map_err(|err| {
+                    BucketDirectoryOpenError {
+                        path: buckets_directories.as_ref().unwrap().path(),
+                        error: err,
+                    }
+                })?
+            {
                 if let Ok(entry) = bucket_dir {
                     let sstable_path_str = entry.path();
                     // Check if the entry is a file
@@ -286,63 +317,55 @@ impl StorageEngine<Vec<u8>> {
                             Self::get_bucket_id_from_full_bucket_path(sstable_path_str.clone());
                         let sst_path = SSTablePath::new(sstable_path_str.clone());
 
-                        match uuid::Uuid::parse_str(&bucket_id) {
-                            Ok(bucket_uuid) => {
-                                // If bucket already exisit in recovered bucket then just append sstable to its sstables vector
-                                if let Some(b) = recovered_buckets.get(&bucket_uuid) {
-                                    let mut temp_sstables = b.sstables.clone();
-                                    temp_sstables.push(sst_path.clone());
-                                    let updated_bucket =
-                                        Bucket::new_with_id_dir_average_and_sstables(
-                                            buckets_directories.as_ref().unwrap().path(),
-                                            bucket_uuid,
-                                            temp_sstables.to_owned(),
-                                            0,
-                                        );
-                                    recovered_buckets.insert(bucket_uuid, updated_bucket);
-                                } else {
-                                    // Create new bucket
-                                    let updated_bucket =
-                                        Bucket::new_with_id_dir_average_and_sstables(
-                                            buckets_directories.as_ref().unwrap().path(),
-                                            bucket_uuid,
-                                            vec![sst_path.clone()],
-                                            0,
-                                        );
-                                    recovered_buckets.insert(bucket_uuid, updated_bucket);
-                                }
-
-                                let sstable_from_file = SSTable::from_file(
-                                    PathBuf::new().join(sstable_path_str.clone()),
-                                );
-                                let sstable = sstable_from_file.as_ref().unwrap().as_ref().unwrap();
-
-                                // We need to fetch the most recent write offset so it can
-                                // use it to recover entries not written into sstables from value log
-                                let fetch_result = sstable.get_value_from_index(b"head");
-                                match fetch_result {
-                                    Some((head_offset, date_created)) => {
-                                        if date_created > most_recent_head_timestamp {
-                                            most_recent_head_offset = head_offset;
-                                            most_recent_head_timestamp = date_created;
-                                        }
-                                    }
-                                    None => {}
-                                }
-
-                                let mut bf =
-                                    SSTable::build_bloomfilter_from_sstable(&sstable.index);
-                                bf.set_sstable_path(sst_path.clone());
-                                // update bloom filters
-                                bloom_filters.push(bf)
+                        let bucket_uuid = uuid::Uuid::parse_str(&bucket_id).map_err(|err| {
+                            InvaidUUIDParseString {
+                                input_string: bucket_id,
+                                error: err,
                             }
-                            Err(err) => {
-                                return Err(Error::new(
-                                    io::ErrorKind::InvalidInput,
-                                    err.to_string(),
-                                ))
-                            }
+                        })?;
+                        // If bucket already exisit in recovered bucket then just append sstable to its sstables vector
+                        if let Some(b) = recovered_buckets.get(&bucket_uuid) {
+                            let mut temp_sstables = b.sstables.clone();
+                            temp_sstables.push(sst_path.clone());
+                            let updated_bucket = Bucket::new_with_id_dir_average_and_sstables(
+                                buckets_directories.as_ref().unwrap().path(),
+                                bucket_uuid,
+                                temp_sstables.to_owned(),
+                                0,
+                            );
+                            recovered_buckets.insert(bucket_uuid, updated_bucket);
+                        } else {
+                            // Create new bucket
+                            let updated_bucket = Bucket::new_with_id_dir_average_and_sstables(
+                                buckets_directories.as_ref().unwrap().path(),
+                                bucket_uuid,
+                                vec![sst_path.clone()],
+                                0,
+                            );
+                            recovered_buckets.insert(bucket_uuid, updated_bucket);
                         }
+
+                        let sstable_from_file =
+                            SSTable::from_file(PathBuf::new().join(sstable_path_str.clone()));
+                        let sstable = sstable_from_file.as_ref().unwrap().as_ref().unwrap();
+
+                        // We need to fetch the most recent write offset so it can
+                        // use it to recover entries not written into sstables from value log
+                        let fetch_result = sstable.get_value_from_index(b"head");
+                        match fetch_result {
+                            Some((head_offset, date_created)) => {
+                                if date_created > most_recent_head_timestamp {
+                                    most_recent_head_offset = head_offset;
+                                    most_recent_head_timestamp = date_created;
+                                }
+                            }
+                            None => {}
+                        }
+
+                        let mut bf = SSTable::build_bloomfilter_from_sstable(&sstable.index);
+                        bf.set_sstable_path(sst_path.clone());
+                        // update bloom filters
+                        bloom_filters.push(bf)
                     }
                 }
             }
@@ -373,10 +396,7 @@ impl StorageEngine<Vec<u8>> {
                 meta,
                 compactor: Compactor::new(),
             }),
-            Err(err) => Err(io::Error::new(
-                err.kind(),
-                "Error retriving entries from value logs",
-            )),
+            Err(err) => Err(MemTableRecoveryError(Box::new(err))),
         }
     }
     fn recover_memtable(
@@ -385,7 +405,7 @@ impl StorageEngine<Vec<u8>> {
         false_positive_rate: f64,
         vlog_path: &PathBuf,
         head_offset: usize,
-    ) -> io::Result<InMemoryTable<Vec<u8>>> {
+    ) -> Result<InMemoryTable<Vec<u8>>, StorageEngineError> {
         let mut memtable = InMemoryTable::with_specified_capacity_and_rate(
             size_unit,
             capacity,
@@ -423,7 +443,7 @@ impl StorageEngine<Vec<u8>> {
         Ok(memtable)
     }
 
-    fn run_compaction(&mut self) -> io::Result<bool> {
+    fn run_compaction(&mut self) -> Result<bool, StorageEngineError> {
         self.compactor
             .run_compaction(&mut self.buckets, &mut self.bloom_filters)
     }

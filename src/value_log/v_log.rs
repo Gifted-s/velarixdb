@@ -6,12 +6,11 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::consts::VLOG_FILE_NAME;
-
+use crate::{consts::VLOG_FILE_NAME, err::StorageEngineError};
+use StorageEngineError::*;
 pub struct ValueLog {
     file: Arc<Mutex<File>>,
 }
-
 
 #[derive(PartialEq, Debug)]
 pub struct ValueLogEntry {
@@ -23,11 +22,14 @@ pub struct ValueLogEntry {
 }
 
 impl ValueLog {
-    pub fn new(dir: &PathBuf) -> io::Result<Self> {
+    pub fn new(dir: &PathBuf) -> Result<Self, StorageEngineError> {
         let dir_path = PathBuf::from(dir);
 
         if !dir_path.exists() {
-            fs::create_dir_all(&dir_path)?;
+            fs::create_dir_all(&dir_path).map_err(|err| VLogDirectoryCreationError {
+                path: dir_path.clone(),
+                error: err,
+            })?;
         }
 
         let file_path = dir_path.join(VLOG_FILE_NAME);
@@ -36,19 +38,18 @@ impl ValueLog {
             .read(true)
             .append(true)
             .create(true)
-            .open(file_path)?;
+            .open(file_path)
+            .map_err(|err| VLogFileCreationError {
+                path: dir_path,
+                error: err,
+            })?;
 
         Ok(Self {
             file: Arc::new(Mutex::new(log_file)),
         })
     }
 
-    pub fn append(
-        &self,
-        key: &Vec<u8>,
-        value: &Vec<u8>,
-        created_at: u64,
-    ) -> io::Result<usize> {
+    pub fn append(&self, key: &Vec<u8>, value: &Vec<u8>, created_at: u64) -> io::Result<usize> {
         let mut log_file = self.file.lock().map_err(|poison_err| {
             io::Error::new(
                 io::ErrorKind::Other,
@@ -212,13 +213,7 @@ impl ValueLog {
 }
 
 impl ValueLogEntry {
-    pub fn new(
-        ksize: usize,
-        vsize: usize,
-        key: Vec<u8>,
-        value: Vec<u8>,
-        created_at: u64,
-    ) -> Self {
+    pub fn new(ksize: usize, vsize: usize, key: Vec<u8>, value: Vec<u8>, created_at: u64) -> Self {
         Self {
             ksize,
             vsize,
@@ -252,7 +247,7 @@ impl ValueLogEntry {
 
         serialized_data
     }
-    
+
     #[allow(dead_code)]
     fn deserialize(serialized_data: &[u8]) -> io::Result<Self> {
         if serialized_data.len() < 20 {

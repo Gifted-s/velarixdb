@@ -1,6 +1,7 @@
 use crate::bloom_filter::BloomFilter;
 use crate::compaction::IndexWithSizeInBytes;
 use crate::consts::{DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MEMTABLE_CAPACITY, THUMB_STONE};
+use crate::err::StorageEngineError;
 //use crate::memtable::val_option::ValueOption;
 use crate::storage_engine::SizeUnit;
 use chrono::{DateTime, Utc};
@@ -8,11 +9,7 @@ use crossbeam_skiplist::SkipMap;
 
 use std::cmp;
 use std::io;
-use std::{
-    hash::Hash,
-    sync::Arc,
-};
-
+use std::{hash::Hash, sync::Arc};
 
 #[derive(PartialOrd, PartialEq, Copy, Clone)]
 pub struct Entry<K: Hash + PartialOrd, V> {
@@ -87,7 +84,7 @@ impl InMemoryTable<Vec<u8>> {
         }
     }
 
-    pub fn insert(&mut self, entry: &Entry<Vec<u8>, usize>) -> io::Result<()> {
+    pub fn insert(&mut self, entry: &Entry<Vec<u8>, usize>) -> Result<(), StorageEngineError> {
         if !self.bloom_filter.contains(&entry.key) {
             self.bloom_filter.set(&entry.key.clone());
             self.index
@@ -106,13 +103,13 @@ impl InMemoryTable<Vec<u8>> {
         // it takes 4 bytes to store a 32 bit integer since 8 bits makes 1 byte
         let entry_length_byte = entry.key.len() + 4 + 8;
         self.size += entry_length_byte;
-        return Ok(());
+        Ok(())
     }
 
     pub fn get(&mut self, key: &Vec<u8>) -> io::Result<Option<(usize, u64)>> {
         if self.bloom_filter.contains(key) {
             println!("Found key in bloomfilter {:?}", key.to_vec());
-            if let Some(entry) =  self.index.get(key){
+            if let Some(entry) = self.index.get(key) {
                 return Ok(Some(*entry.value())); // returns value offset
             }
         }
@@ -129,10 +126,10 @@ impl InMemoryTable<Vec<u8>> {
         // If the key already exist in the bloom filter then just insert into the entry alone
         self.index
             .insert(entry.key.to_vec(), (entry.val_offset, entry.created_at));
-        return Ok(());
+        Ok(())
     }
 
-    pub fn upsert(&mut self, entry: &Entry<Vec<u8>, usize>) -> io::Result<()> {
+    pub fn upsert(&mut self, entry: &Entry<Vec<u8>, usize>) -> Result<(), StorageEngineError> {
         self.insert(&entry)
     }
 
@@ -149,7 +146,7 @@ impl InMemoryTable<Vec<u8>> {
             key.to_vec(),
             (THUMB_STONE, created_at.timestamp_millis() as u64),
         );
-        return Ok(());
+        Ok(())
     }
     pub fn false_positive_rate(&mut self) -> f64 {
         self.false_positive_rate

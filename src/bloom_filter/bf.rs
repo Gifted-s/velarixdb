@@ -100,21 +100,21 @@ impl BloomFilter {
             bit_vec: Arc::new(Mutex::new(bit_vec)),
         }
     }
-    
+
     /// Returns the current number of elements inserted into the Bloom filter.
-   pub fn num_elements(&self) -> usize {
+    pub fn num_elements(&self) -> usize {
         // Retrieve the element count atomically.
         self.no_of_elements.load(Ordering::Relaxed) as usize
     }
 
     /// Returns the current number of elements inserted into the Bloom filter.
-   pub  fn num_bits(&self) -> usize {
+    pub fn num_bits(&self) -> usize {
         // Retrieve the element count atomically.
         self.bit_vec.lock().unwrap().len()
     }
 
     /// Returns the current number of hash functions.
-   pub  fn num_of_hash_functions(&self) -> usize {
+    pub fn num_of_hash_functions(&self) -> usize {
         // Retrieve the element count atomically.
         self.no_of_hash_func
     }

@@ -1,12 +1,14 @@
-use crate::consts::{BUCKET_DIRECTORY_PREFIX, BUCKET_HIGH, BUCKET_LOW, MAX_TRESHOLD, MIN_SSTABLE_SIZE, MIN_TRESHOLD};
+use crate::consts::{
+    BUCKET_DIRECTORY_PREFIX, BUCKET_HIGH, BUCKET_LOW, MAX_TRESHOLD, MIN_SSTABLE_SIZE, MIN_TRESHOLD,
+};
+use crate::err::StorageEngineError;
 use crate::sstable::{SSTable, SSTablePath};
 use crossbeam_skiplist::SkipMap;
 use std::collections::HashMap;
 
-use std::{fs, io};
+use std::fs;
 use std::{path::PathBuf, sync::Arc};
 use uuid::Uuid;
-
 
 #[derive(Debug)]
 pub struct BucketMap {
@@ -20,7 +22,7 @@ pub struct Bucket {
     pub(crate) avarage_size: usize,
     pub(crate) sstables: Vec<SSTablePath>,
 }
-
+use StorageEngineError::*;
 pub trait IndexWithSizeInBytes {
     fn get_index(&self) -> Arc<SkipMap<Vec<u8>, (usize, u64)>>; // usize for value offset, u64 to store entry creation date in milliseconds
     fn size(&self) -> usize;
@@ -80,46 +82,37 @@ impl BucketMap {
         &mut self,
         table: &T,
         hotness: u64,
-    ) -> io::Result<SSTablePath> {
+    ) -> Result<SSTablePath, StorageEngineError> {
         let added_to_bucket = false;
 
         for (_, bucket) in &mut self.buckets {
             // if (bucket low * bucket avg) is less than sstable size
-            if (bucket.avarage_size as f64 * BUCKET_LOW  < table.size() as f64) 
-        
+            if (bucket.avarage_size as f64 * BUCKET_LOW  < table.size() as f64)
                     // and sstable size is less than (bucket avg * bucket high)
                     && (table.size() < (bucket.avarage_size as f64 * BUCKET_HIGH) as usize)
-                    
                     // or the (sstable size is less than min sstabke size) and (bucket avg is less than the min sstable size )
                     || (table.size() < MIN_SSTABLE_SIZE && bucket.avarage_size  < MIN_SSTABLE_SIZE)
             {
                 let mut sstable = SSTable::new(bucket.dir.clone(), true);
                 sstable.set_index(table.get_index());
-                match sstable.write_to_file() {
-                    Ok(_) => {
-                        // add sstable to bucket
-                        let sstable_path = SSTablePath {
-                            file_path: sstable.get_path(),
-                            hotness,
-                        };
-                        bucket.sstables.push(sstable_path.clone());
-                        bucket
-                            .sstables
-                            .iter_mut()
-                            .for_each(|s| s.increase_hotness());
-                        bucket.avarage_size = (bucket
-                            .sstables
-                            .iter()
-                            .map(|s| fs::metadata(s.get_path()).unwrap().len())
-                            .sum::<u64>()
-                            / bucket.sstables.len() as u64)
-                            as usize;
-                        return Ok(sstable_path);
-                    }
-                    Err(err) => {
-                        return Err(io::Error::new(err.kind(), err.to_string()));
-                    }
-                }
+                sstable.write_to_file()?;
+                // add sstable to bucket
+                let sstable_path = SSTablePath {
+                    file_path: sstable.get_path(),
+                    hotness,
+                };
+                bucket.sstables.push(sstable_path.clone());
+                bucket
+                    .sstables
+                    .iter_mut()
+                    .for_each(|s| s.increase_hotness());
+                bucket.avarage_size = (bucket
+                    .sstables
+                    .iter()
+                    .map(|s| fs::metadata(s.get_path()).unwrap().len())
+                    .sum::<u64>()
+                    / bucket.sstables.len() as u64) as usize;
+                return Ok(sstable_path);
             }
         }
 
@@ -128,29 +121,21 @@ impl BucketMap {
             let mut bucket = Bucket::new(self.dir.clone());
             let mut sstable = SSTable::new(bucket.dir.clone(), true);
             sstable.set_index(table.get_index());
-            match sstable.write_to_file() {
-                Ok(_) => {
-                    // add sstable to bucket
-                    let sstable_path = SSTablePath {
-                        file_path: sstable.get_path(),
-                        hotness: 1,
-                    };
-                    bucket.sstables.push(sstable_path.clone());
-                    bucket.avarage_size = fs::metadata(sstable.get_path()).unwrap().len() as usize;
-                    self.buckets.insert(bucket.id, bucket);
+            sstable.write_to_file()?;
 
-                    return Ok(sstable_path);
-                }
-                Err(err) => {
-                    return Err(io::Error::new(err.kind(), err.to_string()));
-                }
-            }
+            // add sstable to bucket
+            let sstable_path = SSTablePath {
+                file_path: sstable.get_path(),
+                hotness: 1,
+            };
+            bucket.sstables.push(sstable_path.clone());
+            bucket.avarage_size = fs::metadata(sstable.get_path()).unwrap().len() as usize;
+            self.buckets.insert(bucket.id, bucket);
+
+            return Ok(sstable_path);
         }
 
-        Err(io::Error::new(
-            io::ErrorKind::Other,
-            "No condition for insertion was stisfied",
-        ))
+        Err(FailedToInsertSSTableToBucketError)
     }
 
     pub fn extract_buckets_to_compact(&self) -> (Vec<Bucket>, Vec<(Uuid, Vec<SSTablePath>)>) {
