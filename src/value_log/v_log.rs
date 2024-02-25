@@ -6,7 +6,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::{consts::VLOG_FILE_NAME, err::StorageEngineError};
+use crate::{
+    consts::{EOF, VLOG_FILE_NAME},
+    err::StorageEngineError,
+};
 use StorageEngineError::*;
 pub struct ValueLog {
     file: Arc<Mutex<File>>,
@@ -49,13 +52,16 @@ impl ValueLog {
         })
     }
 
-    pub fn append(&self, key: &Vec<u8>, value: &Vec<u8>, created_at: u64) -> io::Result<usize> {
-        let mut log_file = self.file.lock().map_err(|poison_err| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("Failed to lock file {:?}", poison_err),
-            )
-        })?;
+    pub fn append(
+        &self,
+        key: &Vec<u8>,
+        value: &Vec<u8>,
+        created_at: u64,
+    ) -> Result<usize, StorageEngineError> {
+        let mut log_file = self
+            .file
+            .lock()
+            .map_err(|poison_err| FileLockError(poison_err.to_string()))?;
         let v_log_entry = ValueLogEntry::new(
             key.len(),
             value.len(),
@@ -66,28 +72,39 @@ impl ValueLog {
         let serialized_data = v_log_entry.serialize();
 
         // Get the current offset before writing(this will be the offset of the value stored in the memtable)
-        let value_offset = log_file.seek(io::SeekFrom::End(0))?;
+        let value_offset = log_file
+            .seek(io::SeekFrom::End(0))
+            .map_err(|err| FileSeekError(err))?;
 
         log_file
             .write_all(&serialized_data)
             .expect("Failed to write to value log entry");
-        log_file.flush()?;
+        log_file
+            .flush()
+            .map_err(|error| VLogFileWriteError(error.to_string()))?;
 
         Ok(value_offset.try_into().unwrap())
     }
 
-    pub fn get(&mut self, start_offset: usize) -> io::Result<Option<Vec<u8>>> {
-        let mut log_file = self.file.lock().map_err(|poison_err| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("Failed to lock file {:?}", poison_err),
-            )
-        })?;
-        log_file.seek(SeekFrom::Start(start_offset as u64))?;
+    pub fn get(&mut self, start_offset: usize) -> Result<Option<Vec<u8>>, StorageEngineError> {
+        let mut log_file = self
+            .file
+            .lock()
+            .map_err(|poison_err| FileLockError(poison_err.to_string()))?;
+        log_file
+            .seek(SeekFrom::Start(start_offset as u64))
+            .map_err(|err| ValueLogFileReadError {
+                error: io::Error::new(err.kind(), EOF),
+            })?;
 
         // get entry length
         let mut entry_len_bytes = [0; mem::size_of::<u32>()];
-        let bytes_read = log_file.read(&mut entry_len_bytes)?;
+        let bytes_read =
+            log_file
+                .read(&mut entry_len_bytes)
+                .map_err(|err| ValueLogFileReadError {
+                    error: io::Error::new(err.kind(), EOF),
+                })?;
         if bytes_read == 0 {
             return Ok(None);
         }
@@ -95,7 +112,12 @@ impl ValueLog {
 
         // get key length
         let mut key_len_bytes = [0; mem::size_of::<u32>()];
-        let bytes_read = log_file.read(&mut key_len_bytes)?;
+        let bytes_read =
+            log_file
+                .read(&mut key_len_bytes)
+                .map_err(|err| ValueLogFileReadError {
+                    error: io::Error::new(err.kind(), EOF),
+                })?;
         if bytes_read == 0 {
             return Ok(None);
         }
@@ -103,7 +125,12 @@ impl ValueLog {
 
         // get value length
         let mut val_len_bytes = [0; mem::size_of::<u32>()];
-        let bytes_read = log_file.read(&mut val_len_bytes)?;
+        let bytes_read =
+            log_file
+                .read(&mut val_len_bytes)
+                .map_err(|err| ValueLogFileReadError {
+                    error: io::Error::new(err.kind(), EOF),
+                })?;
         if bytes_read == 0 {
             return Ok(None);
         }
@@ -111,20 +138,33 @@ impl ValueLog {
 
         // get date length
         let mut creation_date_bytes = [0; mem::size_of::<u64>()];
-        let mut bytes_read = log_file.read(&mut creation_date_bytes)?;
+        let mut bytes_read =
+            log_file
+                .read(&mut creation_date_bytes)
+                .map_err(|err| ValueLogFileReadError {
+                    error: io::Error::new(err.kind(), EOF),
+                })?;
         if bytes_read == 0 {
             return Ok(None);
         }
         let _ = u64::from_le_bytes(creation_date_bytes);
 
         let mut key = vec![0; key_len as usize];
-        bytes_read = log_file.read(&mut key)?;
+        bytes_read = log_file
+            .read(&mut key)
+            .map_err(|err| ValueLogFileReadError {
+                error: io::Error::new(err.kind(), EOF),
+            })?;
         if bytes_read == 0 {
             return Ok(None);
         }
 
         let mut value = vec![0; val_len as usize];
-        bytes_read = log_file.read(&mut value)?;
+        bytes_read = log_file
+            .read(&mut value)
+            .map_err(|err| ValueLogFileReadError {
+                error: io::Error::new(err.kind(), EOF),
+            })?;
 
         if bytes_read == 0 {
             return Ok(None);
@@ -132,19 +172,27 @@ impl ValueLog {
         Ok(Some(value))
     }
 
-    pub fn recover(&mut self, start_offset: usize) -> io::Result<Vec<ValueLogEntry>> {
-        let mut log_file = self.file.lock().map_err(|poison_err| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("Failed to lock file {:?}", poison_err),
-            )
-        })?;
-        log_file.seek(SeekFrom::Start(start_offset as u64))?;
+    pub fn recover(
+        &mut self,
+        start_offset: usize,
+    ) -> Result<Vec<ValueLogEntry>, StorageEngineError> {
+        let mut log_file = self
+            .file
+            .lock()
+            .map_err(|poison_err| FileLockError(poison_err.to_string()))?;
+        log_file
+            .seek(SeekFrom::Start(start_offset as u64))
+            .map_err(|err| FileSeekError(err))?;
         let mut entries = Vec::new();
         loop {
             // get entry length
             let mut entry_len_bytes = [0; mem::size_of::<u32>()];
-            let bytes_read = log_file.read(&mut entry_len_bytes)?;
+            let bytes_read =
+                log_file
+                    .read(&mut entry_len_bytes)
+                    .map_err(|err| ValueLogFileReadError {
+                        error: io::Error::new(err.kind(), EOF),
+                    })?;
             if bytes_read == 0 {
                 return Ok(entries);
             }
@@ -152,54 +200,77 @@ impl ValueLog {
 
             // get key length
             let mut key_len_bytes = [0; mem::size_of::<u32>()];
-            let bytes_read = log_file.read(&mut key_len_bytes)?;
+            let bytes_read =
+                log_file
+                    .read(&mut key_len_bytes)
+                    .map_err(|err| ValueLogFileReadError {
+                        error: io::Error::new(err.kind(), EOF),
+                    })?;
             if bytes_read == 0 {
-                return Err(io::Error::new(
+                return Err(UnexpectedEOF(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
-                    "Error while reading entries from value log file".to_string(),
-                ));
+                    EOF,
+                )));
             }
             let key_len = u32::from_le_bytes(key_len_bytes);
 
             // get value length
             let mut val_len_bytes = [0; mem::size_of::<u32>()];
-            let bytes_read = log_file.read(&mut val_len_bytes)?;
+            let bytes_read =
+                log_file
+                    .read(&mut val_len_bytes)
+                    .map_err(|err| ValueLogFileReadError {
+                        error: io::Error::new(err.kind(), EOF),
+                    })?;
             if bytes_read == 0 {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "Error while reading entries from value log file".to_string(),
-                ));
+                return Err(UnexpectedEOF(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    EOF,
+                )));
             }
             let val_len = u32::from_le_bytes(val_len_bytes);
 
             // get date length
             let mut creation_date_bytes = [0; mem::size_of::<u64>()];
-            let mut bytes_read = log_file.read(&mut creation_date_bytes)?;
+            let mut bytes_read =
+                log_file
+                    .read(&mut creation_date_bytes)
+                    .map_err(|err| ValueLogFileReadError {
+                        error: io::Error::new(err.kind(), EOF),
+                    })?;
             if bytes_read == 0 {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "Error while reading entries from value log file".to_string(),
-                ));
+                return Err(UnexpectedEOF(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    EOF,
+                )));
             }
             let created_at = u64::from_le_bytes(creation_date_bytes);
 
             let mut key = vec![0; key_len as usize];
-            bytes_read = log_file.read(&mut key)?;
+            bytes_read = log_file
+                .read(&mut key)
+                .map_err(|err| ValueLogFileReadError {
+                    error: io::Error::new(err.kind(), EOF),
+                })?;
             if bytes_read == 0 {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "Error while reading entries from value log file".to_string(),
-                ));
+                return Err(UnexpectedEOF(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    EOF,
+                )));
             }
 
             let mut value = vec![0; val_len as usize];
-            bytes_read = log_file.read(&mut value)?;
+            bytes_read = log_file
+                .read(&mut value)
+                .map_err(|err| ValueLogFileReadError {
+                    error: io::Error::new(err.kind(), EOF),
+                })?;
 
             if bytes_read == 0 {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "Error while reading entries from value log file".to_string(),
-                ));
+                return Err(UnexpectedEOF(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    EOF,
+                )));
             }
             entries.push(ValueLogEntry {
                 ksize: key_len as usize,

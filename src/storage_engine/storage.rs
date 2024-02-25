@@ -78,53 +78,48 @@ impl StorageEngine<Vec<u8>> {
         let created_at = Utc::now().timestamp_millis() as u64;
 
         // Write to value log first which returns the offset
-        let v_offset_opt = self.val_log.append(key, value, created_at);
-        match v_offset_opt {
-            Ok(v_offset) => {
-                // then check if the length of the memtable + head offset > than memtable length
-                // we will later store the head offset in the sstable
-                // 4 bytes to store length of key "head"
-                // 4 bytes to store the actual key "head"
-                // 4 bytes to store the head offset
-                // 8 bytes to store the head entry creation date
-                if self.memtable.size() + 20 >= self.memtable.capacity() {
-                    let capacity = self.memtable.capacity();
-                    let size_unit = self.memtable.size_unit();
-                    let false_positive_rate = self.memtable.false_positive_rate();
-                    let head_offset = self.memtable.index.iter().max_by_key(|e| e.value().0);
-                    let head_entry = Entry::new(
-                        b"head".to_vec(),
-                        head_offset.unwrap().value().0,
-                        Utc::now().timestamp_millis() as u64,
+        let v_offset = self.val_log.append(key, value, created_at)?;
+
+        // then check if the length of the memtable + head offset > than memtable length
+        // we will later store the head offset in the sstable
+        // 4 bytes to store length of key "head"
+        // 4 bytes to store the actual key "head"
+        // 4 bytes to store the head offset
+        // 8 bytes to store the head entry creation date
+        if self.memtable.size() + 20 >= self.memtable.capacity() {
+            let capacity = self.memtable.capacity();
+            let size_unit = self.memtable.size_unit();
+            let false_positive_rate = self.memtable.false_positive_rate();
+            let head_offset = self.memtable.index.iter().max_by_key(|e| e.value().0);
+            let head_entry = Entry::new(
+                b"head".to_vec(),
+                head_offset.unwrap().value().0,
+                Utc::now().timestamp_millis() as u64,
+            );
+            let _ = self.memtable.insert(&head_entry);
+            let flush_result = self.flush_memtable();
+            match flush_result {
+                Ok(_) => {
+                    self.memtable = InMemoryTable::with_specified_capacity_and_rate(
+                        size_unit,
+                        capacity,
+                        false_positive_rate,
                     );
-                    let _ = self.memtable.insert(&head_entry);
-                    let flush_result = self.flush_memtable();
-                    match flush_result {
-                        Ok(_) => {
-                            self.memtable = InMemoryTable::with_specified_capacity_and_rate(
-                                size_unit,
-                                capacity,
-                                false_positive_rate,
-                            );
-                        }
-                        Err(err) => {
-                            return Err(FlushToDiskError {
-                                error: Box::new(err),
-                            });
-                        }
-                    }
                 }
-                let entry = Entry::new(key.to_vec(), v_offset.try_into().unwrap(), created_at);
-                self.memtable.insert(&entry)?;
-                return Ok(true);
+                Err(err) => {
+                    return Err(FlushToDiskError {
+                        error: Box::new(err),
+                    });
+                }
             }
-            Err(err) => io::Error::new(err.kind(), "Could not write entry to value log"),
-        };
+        }
+        let entry = Entry::new(key.to_vec(), v_offset.try_into().unwrap(), created_at);
+        self.memtable.insert(&entry)?;
         Ok(true)
     }
 
     // A Result indicating success or an `io::Error` if an error occurred.
-    pub fn get(&mut self, key: &str) -> io::Result<(Vec<u8>, u64)> {
+    pub fn get(&mut self, key: &str) -> Result<(Vec<u8>, u64), StorageEngineError> {
         let key = key.as_bytes().to_vec();
         let mut offset = 0;
         let mut most_recent_insert_time = 0;
@@ -159,19 +154,19 @@ impl StorageEngine<Vec<u8>> {
                         }
                     }
                 }
-                None => return Err(io::Error::new(io::ErrorKind::NotFound, "Key Not Found")),
+                None => return Err(KeyNotFoundInAnySSTableError),
             }
         }
         // most_recent_insert_time cannot be zero unless did not find this key in any sstable
         if most_recent_insert_time > 0 {
             // Step 5: Read value from value log based on offset
-            let value: Option<Vec<u8>> = self.val_log.get(offset).unwrap();
+            let value: Option<Vec<u8>> = self.val_log.get(offset)?;
             match value {
                 Some(v) => return Ok((v, most_recent_insert_time)),
-                None => return Err(io::Error::new(io::ErrorKind::NotFound, "Key Not Found")),
+                None => return Err(KeyNotFoundInValueLogError),
             };
         }
-        Err(io::Error::new(io::ErrorKind::NotFound, "Key Not Found"))
+        Err(KeyNotFound(Box::new(KeyNotFoundInAnySSTableError)))
     }
 
     pub fn update(&mut self, key: &str, value: &str) -> Result<bool, StorageEngineError> {
@@ -352,14 +347,12 @@ impl StorageEngine<Vec<u8>> {
                         // We need to fetch the most recent write offset so it can
                         // use it to recover entries not written into sstables from value log
                         let fetch_result = sstable.get_value_from_index(b"head");
-                        match fetch_result {
-                            Some((head_offset, date_created)) => {
-                                if date_created > most_recent_head_timestamp {
-                                    most_recent_head_offset = head_offset;
-                                    most_recent_head_timestamp = date_created;
-                                }
+
+                        if let Some((head_offset, date_created)) = fetch_result {
+                            if date_created > most_recent_head_timestamp {
+                                most_recent_head_offset = head_offset;
+                                most_recent_head_timestamp = date_created;
                             }
-                            None => {}
                         }
 
                         let mut bf = SSTable::build_bloomfilter_from_sstable(&sstable.index);

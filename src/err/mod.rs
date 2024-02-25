@@ -29,7 +29,7 @@ pub enum StorageEngineError {
     #[error("Error occured while flushing to disk")]
     FlushToDiskError {
         #[source]
-        error: Box<Self>, // Flush to disk can be caused by any of the error above
+        error: Box<Self>, // Flush to disk can be caused by any of the errors above
     },
 
     /// There was an error while atttempting to create value log directory
@@ -39,6 +39,14 @@ pub enum StorageEngineError {
     /// There was an error while atttempting to create value log file
     #[error("Failed to create v_log.bin file `{path}`: {error}")]
     VLogFileCreationError { path: PathBuf, error: io::Error },
+
+    /// There was an error while atttempting to write to value log file
+    #[error("Failed to write to value log file")]
+    VLogFileWriteError(String),
+
+    /// There was an error while atttempting to seek in file
+    #[error("File seek error")]
+    FileSeekError(#[source] io::Error),
 
     /// There was an error inserting entry to memtable
     #[error("Error occured while inserting entry to memtable value  Key: `{key}` Value: `{value_offset}`")]
@@ -60,6 +68,26 @@ pub enum StorageEngineError {
     #[error("File read ended unexpectedly")]
     UnexpectedEOF(#[source] io::Error),
 
+    #[error("File lock unsuccessful")]
+    FileLockError(String),
+
     #[error("Compaction partially failed reason : {0}")]
     CompactionPartiallyFailed(String),
+
+    #[error("No SS Tables contains the searched key")]
+    KeyNotFoundInAnySSTableError,
+
+    #[error("Key does not exist in value log")]
+    KeyNotFoundInValueLogError,
+
+    #[error("Key not found, reason: ")]
+    KeyNotFound(#[source] Box<Self>),
+
+    /// There was an error while atttempting to read from value log file
+    #[error("Failed to read value log file : {error}")]
+    ValueLogFileReadError { error: io::Error },
+
+    /// There was an error while atttempting to read from sstbale file
+    #[error("Failed to open value log directory `{error}`")]
+    ValueLogDirectoryOpenError { error: io::Error },
 }
