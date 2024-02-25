@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use crossbeam_skiplist::SkipMap;
 
 use std::cmp;
-use std::io;
+
 use std::{hash::Hash, sync::Arc};
 
 #[derive(PartialOrd, PartialEq, Copy, Clone)]
@@ -106,7 +106,7 @@ impl InMemoryTable<Vec<u8>> {
         Ok(())
     }
 
-    pub fn get(&mut self, key: &Vec<u8>) -> io::Result<Option<(usize, u64)>> {
+    pub fn get(&mut self, key: &Vec<u8>) -> Result<Option<(usize, u64)>, StorageEngineError> {
         if self.bloom_filter.contains(key) {
             println!("Found key in bloomfilter {:?}", key.to_vec());
             if let Some(entry) = self.index.get(key) {
@@ -116,12 +116,9 @@ impl InMemoryTable<Vec<u8>> {
         Ok(None)
     }
 
-    pub fn update(&mut self, entry: &Entry<Vec<u8>, usize>) -> io::Result<()> {
+    pub fn update(&mut self, entry: &Entry<Vec<u8>, usize>) -> Result<(), StorageEngineError> {
         if !self.bloom_filter.contains(&entry.key) {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                "Key does not exist",
-            ));
+            return Err(StorageEngineError::KeyNotFoundInMemTable);
         }
         // If the key already exist in the bloom filter then just insert into the entry alone
         self.index
@@ -133,12 +130,9 @@ impl InMemoryTable<Vec<u8>> {
         self.insert(&entry)
     }
 
-    pub fn delete(&mut self, key: &Vec<u8>) -> io::Result<()> {
+    pub fn delete(&mut self, key: &Vec<u8>) -> Result<(), StorageEngineError> {
         if !self.bloom_filter.contains(key) {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                "Key does not exist",
-            ));
+            return Err(StorageEngineError::KeyNotFoundInMemTable);
         }
         let created_at = Utc::now();
         // Insert thumb stone to indicate deletion
