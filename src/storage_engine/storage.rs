@@ -140,12 +140,8 @@ impl StorageEngine<Vec<u8>> {
                                         most_recent_insert_time = created_at;
                                     }
                                 }
-                                //println!("Found at this SSTABLE {:?}", sst_path.get_path());
                             }
-                            Err(err) => {
-                                // println!("Key was not found for this sstable {:?}", sst_path.get_path());
-                                // return Err(err), // Return the error directly
-                            }
+                            Err(_) => {}
                         }
                     }
                 }
@@ -478,12 +474,12 @@ impl SizeUnit {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::bloom_filter;
-    use std::fs::remove_dir;
     use env_logger::init;
     use log::info;
-    use super::*;
-   
+    use std::fs::remove_dir;
+
     // Generate test to find keys after compaction
     #[test]
     fn storage_engine_create() {

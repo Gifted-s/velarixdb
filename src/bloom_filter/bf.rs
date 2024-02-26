@@ -74,7 +74,6 @@ impl BloomFilter {
         let mut sstables: Vec<SSTablePath> = Vec::new();
         for bloom_filter in bloom_filters {
             if bloom_filter.contains(key) {
-                //println!("FOUND AT THIS PATH {:?} {}", bloom_filter.sstable_path.clone().unwrap().get_path(), bloom_filter.sstable_path.clone().unwrap().get_hotness());
                 if let Some(path) = &bloom_filter.sstable_path {
                     sstables.push(path.to_owned());
                 }
