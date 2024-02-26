@@ -1,0 +1,30 @@
+
+
+1. We need to keep two pointers, head and tail
+
+2. Only the part of the vLog between the head and the tail contains valid values 
+   and will be searched during lookups.
+
+3. Read the first chunk of key-value pairs from the tail to head of the vLog
+
+4. Find which of those values are valid (not yet overwritten or deleted) by querying the LSM-tree.
+
+5. Append valid values back to the head of the vLog.
+
+6. Free the space occupied previously by the chunk 
+
+7. Update tail accordingly
+
+NOTE: To avoid losing any data if a crash happens during garbage collection
+ 
+    - The newly appended valid values and the new tail are persisted on the device before freeing space
+
+    - This is achieved by calling fsync()/sync_all() in Rust 
+
+    - It adds these new addresses and current tail to the LSM Tree in a synchronous manner
+
+    - The tail is stored in LSM Tree as <"tail", tail-vLog-offset">
+
+    - Finally, the free space in the vLog is claimed
+
+    - Schedular is configured to run garbage collection periodically

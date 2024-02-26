@@ -94,6 +94,10 @@ pub enum StorageEngineError {
     #[error("Key not found, reason: ")]
     KeyNotFound(#[source] Box<Self>),
 
+    /// Key not found in db
+    #[error("Key not found ")]
+    NotFoundInDB,
+
     /// There was an error while atttempting to read from value log file
     #[error("Failed to read value log file : {error}")]
     ValueLogFileReadError { error: io::Error },

@@ -97,19 +97,6 @@ impl ValueLog {
                 error: io::Error::new(err.kind(), EOF),
             })?;
 
-        // get entry length
-        let mut entry_len_bytes = [0; mem::size_of::<u32>()];
-        let bytes_read =
-            log_file
-                .read(&mut entry_len_bytes)
-                .map_err(|err| ValueLogFileReadError {
-                    error: io::Error::new(err.kind(), EOF),
-                })?;
-        if bytes_read == 0 {
-            return Ok(None);
-        }
-        let _entry_len = u32::from_le_bytes(entry_len_bytes);
-
         // get key length
         let mut key_len_bytes = [0; mem::size_of::<u32>()];
         let bytes_read =
@@ -185,19 +172,6 @@ impl ValueLog {
             .map_err(|err| FileSeekError(err))?;
         let mut entries = Vec::new();
         loop {
-            // get entry length
-            let mut entry_len_bytes = [0; mem::size_of::<u32>()];
-            let bytes_read =
-                log_file
-                    .read(&mut entry_len_bytes)
-                    .map_err(|err| ValueLogFileReadError {
-                        error: io::Error::new(err.kind(), EOF),
-                    })?;
-            if bytes_read == 0 {
-                return Ok(entries);
-            }
-            let _entry_len = u32::from_le_bytes(entry_len_bytes);
-
             // get key length
             let mut key_len_bytes = [0; mem::size_of::<u32>()];
             let bytes_read =
@@ -207,10 +181,7 @@ impl ValueLog {
                         error: io::Error::new(err.kind(), EOF),
                     })?;
             if bytes_read == 0 {
-                return Err(UnexpectedEOF(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    EOF,
-                )));
+                return Ok(entries);
             }
             let key_len = u32::from_le_bytes(key_len_bytes);
 
@@ -297,14 +268,11 @@ impl ValueLogEntry {
     fn serialize(&self) -> Vec<u8> {
         let entry_len = mem::size_of::<u32>()
             + mem::size_of::<u32>()
-            + mem::size_of::<u32>()
             + mem::size_of::<u64>()
             + self.key.len()
             + self.value.len();
 
         let mut serialized_data = Vec::with_capacity(entry_len);
-
-        serialized_data.extend_from_slice(&(entry_len as u32).to_le_bytes());
 
         serialized_data.extend_from_slice(&(self.key.len() as u32).to_le_bytes());
 
@@ -321,27 +289,6 @@ impl ValueLogEntry {
 
     #[allow(dead_code)]
     fn deserialize(serialized_data: &[u8]) -> io::Result<Self> {
-        if serialized_data.len() < 20 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "invalid length of serialized data",
-            ));
-        }
-
-        let entry_len = u32::from_le_bytes([
-            serialized_data[0],
-            serialized_data[1],
-            serialized_data[2],
-            serialized_data[3],
-        ]) as usize;
-
-        if serialized_data.len() != entry_len {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "invalid length of serialized data",
-            ));
-        }
-
         let key_len = u32::from_le_bytes([
             serialized_data[4],
             serialized_data[5],
@@ -401,7 +348,7 @@ mod tests {
         );
         let serialized_data = original_entry.serialize();
 
-        let expected_entry_len = 4 + 4 + 4 + 8 + key.len() + value.len();
+        let expected_entry_len = 4 + 4 + 8 + key.len() + value.len();
 
         assert_eq!(serialized_data.len(), expected_entry_len);
 
