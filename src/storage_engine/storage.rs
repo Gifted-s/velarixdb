@@ -13,16 +13,11 @@ use crate::{
     value_log::ValueLog,
 };
 use chrono::Utc;
+use log::info;
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
-use std::{cmp, hash::Hash};
-use std::{
-    collections::HashMap,
-    fs,
-    io::{self, Error},
-    mem,
-    path::PathBuf,
-};
+use std::hash::Hash;
+use std::{collections::HashMap, fs, mem, path::PathBuf};
 
 use crate::err::StorageEngineError::*;
 
@@ -406,33 +401,25 @@ impl StorageEngine<Vec<u8>> {
         );
 
         let mut vlog = ValueLog::new(&vlog_path.clone())?;
-        match vlog.recover(head_offset) {
-            Ok(entries) => {
-                let mut most_recent_offset = head_offset;
-                for e in entries {
-                    let entry = Entry::new(e.key.to_owned(), most_recent_offset, e.created_at);
-                    // Since the most recent offset is the offset we start reading entries from in value log
-                    // and we retrieved this from the sstable, therefore should not re-write the initial entry in
-                    // memtable since it's already in the sstable
-                    if most_recent_offset != head_offset {
-                        println!("E {:?}", e);
-                        memtable.insert(&entry)?;
-                    }
-                    most_recent_offset += mem::size_of::<u32>() // Entry Length
+        let mut most_recent_offset = head_offset;
+        let entries = vlog.recover(head_offset)?;
+
+        for e in entries {
+            let entry = Entry::new(e.key.to_owned(), most_recent_offset, e.created_at);
+            // Since the most recent offset is the offset we start reading entries from in value log
+            // and we retrieved this from the sstable, therefore should not re-write the initial entry in
+            // memtable since it's already in the sstable
+            if most_recent_offset != head_offset {
+                memtable.insert(&entry)?;
+            }
+            most_recent_offset += mem::size_of::<u32>() // Entry Length
                         + mem::size_of::<u32>() // Key Size -> for fetching key length
                         + mem::size_of::<u32>() // Value Length -> for fetching value length
                         + mem::size_of::<u64>() // Date Length
                         + e.key.len() // Key Length
                         + e.value.len(); // Value Length
-                }
-            }
-            Err(err) => {
-                println!(
-                    "Error retrieving entries from value logs inner {}",
-                    err.to_string()
-                )
-            }
         }
+
         Ok(memtable)
     }
 
@@ -493,11 +480,14 @@ impl SizeUnit {
 mod tests {
     use crate::bloom_filter;
     use std::fs::remove_dir;
-
+    use env_logger::init;
+    use log::info;
     use super::*;
+   
     // Generate test to find keys after compaction
     #[test]
     fn storage_engine_create() {
+        init();
         let path = PathBuf::new().join("bump");
         let mut s_engine = StorageEngine::new(path.clone()).unwrap();
 
@@ -522,23 +512,23 @@ mod tests {
         let compaction_opt = s_engine.run_compaction();
         match compaction_opt {
             Ok(_) => {
-                println!("Compaction is successful");
-                println!(
+                info!("Compaction is successful");
+                info!(
                     "Length of bucket after compaction {:?}",
                     s_engine.buckets.buckets.len()
                 );
-                println!(
+                info!(
                     "Length of bloom filters after compaction {:?}",
                     s_engine.bloom_filters.len()
                 );
             }
             Err(err) => {
-                println!("Error during compaction {}", err)
+                info!("Error during compaction {}", err)
             }
         }
         random_strings.sort();
         for key in random_strings {
-            println!("KEY FOUND {}", key);
+            info!("KEY FOUND {}", key);
             assert_eq!(s_engine.get(&key).unwrap().0, b"boyode");
         }
         // let value1 = wt.get(k1);

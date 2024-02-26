@@ -10,6 +10,8 @@ bit-vec = "0.6.3"
 chrono = "0.4.31"
 crossbeam-epoch = "0.9.18"
 crossbeam-skiplist = "0.1.3"
+env_logger = "0.11.2"
+log = "0.4.20"
 num-traits = "0.2.17"
 rand = "0.8.5"
 serde = { version = "1.0.195", features = ["derive"] }

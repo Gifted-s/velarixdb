@@ -1,10 +1,13 @@
-use std::{cmp::Ordering, collections::HashMap, path::PathBuf, sync::Arc};
-
 use crossbeam_skiplist::SkipMap;
+use log::{error, info, warn};
+use std::{cmp::Ordering, collections::HashMap, path::PathBuf, sync::Arc};
 use uuid::Uuid;
 
 use crate::{
-    bloom_filter::BloomFilter, err::StorageEngineError, memtable::Entry, sstable::{SSTable, SSTablePath}
+    bloom_filter::BloomFilter,
+    err::StorageEngineError,
+    memtable::Entry,
+    sstable::{SSTable, SSTablePath},
 };
 
 use super::{bucket_coordinator::Bucket, BucketMap};
@@ -78,7 +81,7 @@ impl Compactor {
                                     actual_number_of_sstables_written_to_disk += 1;
                                 }
                                 Err(_) => {
-                                    println!("merged SSTable was not written to disk ")
+                                    error!("merged SSTable was not written to disk ")
                                 }
                             }
                         })
@@ -86,9 +89,9 @@ impl Compactor {
                 None => {}
             }
 
-            println!(
-        "Expected number of new SSTables written to disk : {}, Actual number of SSTables written {}",
-         expected_sstables_to_be_writtten_to_disk, actual_number_of_sstables_written_to_disk);
+            info!(
+              "Expected number of new SSTables written to disk : {}, Actual number of SSTables written {}",
+               expected_sstables_to_be_writtten_to_disk, actual_number_of_sstables_written_to_disk);
 
             if expected_sstables_to_be_writtten_to_disk == actual_number_of_sstables_written_to_disk
             {
@@ -99,16 +102,20 @@ impl Compactor {
                     bloom_filters,
                 );
                 match bloom_filter_updated_opt {
-                    Some(bloom_filter_updated) => {
-                        println!(
+                    Some(is_bloom_filter_updated) => {
+                        info!(
                             "{} COMPACTION COMPLETED SUCCESSFULLY : {}",
-                            number_of_compactions, bloom_filter_updated
+                            number_of_compactions, is_bloom_filter_updated
                         );
                     }
                     None => {
-                        return Err(StorageEngineError::CompactionPartiallyFailed(String::from("Compaction cleanup failed but sstable merge was successful")));
+                        return Err(StorageEngineError::CompactionPartiallyFailed(String::from(
+                            "Compaction cleanup failed but sstable merge was successful",
+                        )));
                     }
                 }
+            } else {
+                warn!("Cannot remove obsolete sstables from disk because not every merged sstable was written to disk")
             }
         }
     }
