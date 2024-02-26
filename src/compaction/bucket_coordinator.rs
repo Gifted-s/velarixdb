@@ -5,7 +5,7 @@ use crate::err::StorageEngineError;
 use crate::sstable::{SSTable, SSTablePath};
 use crossbeam_skiplist::SkipMap;
 use std::collections::HashMap;
-
+use log::{info, error};
 use std::fs;
 use std::{path::PathBuf, sync::Arc};
 use uuid::Uuid;
@@ -199,9 +199,9 @@ impl BucketMap {
                     buckets_to_delete.push(bucket_id);
 
                     if let Err(err) = fs::remove_dir_all(&bucket.dir) {
-                        eprintln!("Error removing directory: {}", err);
+                        error!("Bucket directory deletion error: bucket id={}, path={:?}, err={:?} ", bucket_id, bucket.dir, err);
                     } else {
-                        println!("Bucket successfully removed with bucket id {}", bucket_id);
+                        info!("Bucket successfully removed with bucket id {}", bucket_id);
                     }
                 }
             }
@@ -210,9 +210,9 @@ impl BucketMap {
                 if SSTable::file_exists(&PathBuf::new().join(sst.get_path())) {
                     if let Err(err) = fs::remove_file(&sst.file_path) {
                         all_sstables_deleted = false;
-                        eprintln!("Error deleting SS Table file: {}", err);
+                        error!("SStable file table delete path={:?}, err={:?} ", sst.file_path, err);
                     } else {
-                        println!("SS Table deleted successfully.");
+                        info!("SS Table deleted successfully.");
                     }
                 }
             }
