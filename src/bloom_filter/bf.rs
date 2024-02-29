@@ -13,7 +13,7 @@ use crate::sstable::SSTablePath;
 #[derive(Debug)]
 pub struct BloomFilter {
     pub sstable_path: Option<SSTablePath>,
-    pub no_of_hash_func: usize, 
+    pub no_of_hash_func: usize,
     pub no_of_elements: AtomicU32,
     pub bit_vec: Arc<Mutex<BitVec>>,
 }

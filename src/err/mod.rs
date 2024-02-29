@@ -74,13 +74,26 @@ pub enum StorageEngineError {
     #[error("File lock unsuccessful")]
     FileLockError(String),
 
+    /// Error occured during compaction
+    #[error("Compaction failed reason : {0}")]
+    CompactionFailed(String),
+
     /// Partial error occured during compaction
-    #[error("Compaction partially failed reason : {0}")]
+    #[error("Compaction partially failed failed reason : {0}")]
     CompactionPartiallyFailed(String),
 
     /// No SSTable contains the key searched
     #[error("No SS Tables contains the searched key")]
     KeyNotFoundInAnySSTableError,
+
+    #[error("Key found as tombstone in sstable")]
+    KeyFoundAsTombstoneInSSTableError,
+
+    #[error("Key found as tombstone in memtable")]
+    KeyFoundAsTombstoneInMemtableError,
+
+    #[error("Key found as tombstone in value log")]
+    KeyFoundAsTombstoneInValueLogError,
 
     /// Memtable does not contain key
     #[error("Memtable does not contains the searched key")]
@@ -105,4 +118,8 @@ pub enum StorageEngineError {
     /// There was an error while atttempting to open v_log directory
     #[error("Failed to open value log directory `{error}`")]
     ValueLogDirectoryOpenError { error: io::Error },
+
+    /// Tombstone check failed error can happens during compaction
+    #[error("Tombstone check failed {0}")]
+    TombStoneCheckFailed(String),
 }

@@ -22,13 +22,13 @@ use StorageEngineError::*;
 
 pub struct SSTable {
     pub file_path: PathBuf,
-    pub index: Arc<SkipMap<Vec<u8>, (usize, u64)>>,
+    pub index: Arc<SkipMap<Vec<u8>, (usize, u64, bool)>>,
     pub created_at: u64,
     pub size: usize,
 }
 
 impl IndexWithSizeInBytes for SSTable {
-    fn get_index(&self) -> Arc<SkipMap<Vec<u8>, (usize, u64)>> {
+    fn get_index(&self) -> Arc<SkipMap<Vec<u8>, (usize, u64, bool)>> {
         Arc::clone(&self.index)
     }
     fn size(&self) -> usize {
@@ -117,7 +117,7 @@ impl SSTable {
 
         let mut locked_file = file_mutex.lock().unwrap();
         self.index.iter().for_each(|e| {
-            let entry = Entry::new(e.key().clone(), e.value().0, e.value().1);
+            let entry = Entry::new(e.key().clone(), e.value().0, e.value().1, e.value().2);
 
             // mem::size_of function is efficient because the size is known at compile time so
             // during compilation this will be replaced  with the actual size during compilation i.e number of bytes to store the type
@@ -125,7 +125,8 @@ impl SSTable {
             let entry_len = mem::size_of::<u32>()
                 + entry.key.len()
                 + mem::size_of::<u32>()
-                + mem::size_of::<u64>();
+                + mem::size_of::<u64>()
+                + mem::size_of::<u8>();
             let mut entry_vec = Vec::with_capacity(entry_len);
 
             //add key len
@@ -139,6 +140,9 @@ impl SSTable {
 
             //write date created in milliseconds
             entry_vec.extend_from_slice(&entry.created_at.to_le_bytes());
+
+             //write is tombstone to file
+             entry_vec.push(entry.is_tombstone as u8);
 
             //write to file
             locked_file.write_all(&entry_vec).unwrap();
@@ -164,7 +168,7 @@ impl SSTable {
     pub(crate) fn get(
         &self,
         searched_key: &[u8],
-    ) -> Result<Option<(usize, u64)>, StorageEngineError> {
+    ) -> Result<Option<(usize, u64, bool)>, StorageEngineError> {
         // Open the file in read mode
         let file_path = PathBuf::from(&self.file_path);
         let file = OpenOptions::new()
@@ -236,25 +240,47 @@ impl SSTable {
                     EOF,
                 )));
             }
+
+            let mut is_tombstone_byte = [0; 1];
+            bytes_read =
+                locked_file
+                    .read(&mut is_tombstone_byte)
+                    .map_err(|err| SSTableFileReadError {
+                        path: file_path.clone(),
+                        error: err,
+                    })?;
+            if bytes_read == 0 {
+                return Err(UnexpectedEOF(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    EOF,
+                )));
+            }
+
+
+
+
             let created_at = u64::from_le_bytes(created_at_bytes);
             let value_offset = u32::from_le_bytes(val_offset_bytes);
+            let is_tombstone = is_tombstone_byte[0] == 1;
 
             if key == searched_key {
-                return Ok(Some((value_offset as usize, created_at)));
+                return Ok(Some((value_offset as usize, created_at, is_tombstone)));
             }
         }
     }
 
     pub(crate) fn build_bloomfilter_from_sstable(
-        index: &Arc<SkipMap<Vec<u8>, (usize, u64)>>,
+        index: &Arc<SkipMap<Vec<u8>, (usize, u64, bool)>>,
     ) -> BloomFilter {
+
+        //TODO: FALSE POS should be from config
         // Rebuild the bloom filter since a new sstable has been created
         let mut new_bloom_filter = BloomFilter::new(DEFAULT_FALSE_POSITIVE_RATE, index.len());
         index.iter().for_each(|e| new_bloom_filter.set(e.key()));
         new_bloom_filter
     }
 
-    pub(crate) fn get_value_from_index(&self, key: &[u8]) -> Option<(usize, u64)> {
+    pub(crate) fn get_value_from_index(&self, key: &[u8]) -> Option<(usize, u64, bool)> {
         self.index.get(key).map(|entry| entry.value().to_owned())
     }
 
@@ -272,19 +298,19 @@ impl SSTable {
         self.size
     }
 
-    pub(crate) fn set_index(&mut self, index: Arc<SkipMap<Vec<u8>, (usize, u64)>>) {
+    pub(crate) fn set_index(&mut self, index: Arc<SkipMap<Vec<u8>, (usize, u64, bool)>>) {
         self.index = index;
         self.set_sst_size_from_index();
     }
 
-    pub(crate) fn get_index(&self) -> Arc<SkipMap<Vec<u8>, (usize, u64)>> {
+    pub(crate) fn get_index(&self) -> Arc<SkipMap<Vec<u8>, (usize, u64, bool)>> {
         self.index.clone()
     }
     pub(crate) fn set_sst_size_from_index(&mut self) {
         self.size = self
             .index
             .iter()
-            .map(|e| e.key().len() + mem::size_of::<usize>() + mem::size_of::<u64>())
+            .map(|e| e.key().len() + mem::size_of::<usize>() + mem::size_of::<u64>() + mem::size_of::<u8>())
             .sum::<usize>();
     }
 
@@ -375,9 +401,26 @@ impl SSTable {
                     EOF,
                 )));
             }
+
+            let mut is_tombstone_byte = [0; 1];
+            bytes_read =
+                locked_file
+                    .read(&mut is_tombstone_byte)
+                    .map_err(|err| SSTableFileReadError {
+                        path: sstable_file_path.clone(),
+                        error: err,
+                    })?;
+            if bytes_read == 0 {
+                return Err(UnexpectedEOF(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    EOF,
+                )));
+            }
+
             let created_at = u64::from_le_bytes(created_at_bytes);
             let value_offset = u32::from_le_bytes(val_offset_bytes);
-            index.insert(key, (value_offset as usize, created_at));
+            let is_tombstone = is_tombstone_byte[0] == 1;
+            index.insert(key, (value_offset as usize, created_at, is_tombstone));
         }
         let created_at = Utc::now().timestamp_millis() as u64;
         Ok(Some(SSTable {

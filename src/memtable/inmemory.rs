@@ -1,6 +1,6 @@
 use crate::bloom_filter::BloomFilter;
 use crate::compaction::IndexWithSizeInBytes;
-use crate::consts::{DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MEMTABLE_CAPACITY, THUMB_STONE};
+use crate::consts::{DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MEMTABLE_CAPACITY};
 use crate::err::StorageEngineError;
 //use crate::memtable::val_option::ValueOption;
 use crate::storage_engine::SizeUnit;
@@ -16,10 +16,11 @@ pub struct Entry<K: Hash + PartialOrd, V> {
     pub key: K,
     pub val_offset: V,
     pub created_at: u64,
+    pub is_tombstone: bool,
 }
 #[derive(Clone, Debug)]
 pub struct InMemoryTable<K: Hash + PartialOrd + cmp::Ord> {
-    pub index: Arc<SkipMap<K, (usize, u64)>>, // TODO: write a method to return this, never return property directly
+    pub index: Arc<SkipMap<K, (usize, u64, bool)>>, // TODO: write a method to return this, never return property directly
     pub bloom_filter: BloomFilter, // TODO: write a method to return this, never return property directly
     pub false_positive_rate: f64,
     pub size: usize,
@@ -29,7 +30,7 @@ pub struct InMemoryTable<K: Hash + PartialOrd + cmp::Ord> {
 }
 
 impl IndexWithSizeInBytes for InMemoryTable<Vec<u8>> {
-    fn get_index(&self) -> Arc<SkipMap<Vec<u8>, (usize, u64)>> {
+    fn get_index(&self) -> Arc<SkipMap<Vec<u8>, (usize, u64, bool)>> {
         Arc::clone(&self.index)
     }
     fn size(&self) -> usize {
@@ -38,12 +39,21 @@ impl IndexWithSizeInBytes for InMemoryTable<Vec<u8>> {
 }
 
 impl Entry<Vec<u8>, usize> {
-    pub fn new(key: Vec<u8>, val_offset: usize, created_at: u64) -> Self {
+    pub fn new(key: Vec<u8>, val_offset: usize, created_at: u64, is_tombstone: bool) -> Self {
         Entry {
             key,
             val_offset,
             created_at,
+            is_tombstone,
         }
+    }
+
+
+    pub fn has_expired(&self, ttl: u64) -> bool {
+        // Current time
+        let current_time = Utc::now();
+        let current_timestamp = current_time.timestamp_millis() as u64;
+        current_timestamp > (self.created_at + ttl)
     }
 }
 
@@ -87,28 +97,33 @@ impl InMemoryTable<Vec<u8>> {
     pub fn insert(&mut self, entry: &Entry<Vec<u8>, usize>) -> Result<(), StorageEngineError> {
         if !self.bloom_filter.contains(&entry.key) {
             self.bloom_filter.set(&entry.key.clone());
-            self.index
-                .insert(entry.key.to_owned(), (entry.val_offset, entry.created_at));
+            self.index.insert(
+                entry.key.to_owned(),
+                (entry.val_offset, entry.created_at, entry.is_tombstone),
+            );
 
             // key length + value offset length + date created length
-            // it takes 4 bytes to store a 32 bit integer since 8 bits makes 1 byte
-            let entry_length_byte = entry.key.len() + 4 + 8;
+            // it takes 4 bytes to store a 32 bit integer ande 1 byte for tombstone checker
+            let entry_length_byte = entry.key.len() + 4 + 8 + 1;
             self.size += entry_length_byte;
             return Ok(());
         }
         // If the key already exist in the bloom filter then just insert into the entry alone
-        self.index
-            .insert(entry.key.to_owned(), (entry.val_offset, entry.created_at));
+        self.index.insert(
+            entry.key.to_owned(),
+            (entry.val_offset, entry.created_at, entry.is_tombstone),
+        );
         // key length + value offset length + date created length
         // it takes 4 bytes to store a 32 bit integer since 8 bits makes 1 byte
-        let entry_length_byte = entry.key.len() + 4 + 8;
+        let entry_length_byte = entry.key.len() + 4 + 8 + 1;
         self.size += entry_length_byte;
         Ok(())
     }
 
-    pub fn get(&mut self, key: &Vec<u8>) -> Result<Option<(usize, u64)>, StorageEngineError> {
+    pub fn get(&mut self, key: &Vec<u8>) -> Result<Option<(usize, u64, bool)>, StorageEngineError> {
         if self.bloom_filter.contains(key) {
             if let Some(entry) = self.index.get(key) {
+                println!("FOUND IN MEMTABLE {:?}", entry);
                 return Ok(Some(*entry.value())); // returns value offset
             }
         }
@@ -120,8 +135,10 @@ impl InMemoryTable<Vec<u8>> {
             return Err(StorageEngineError::KeyNotFoundInMemTable);
         }
         // If the key already exist in the bloom filter then just insert into the entry alone
-        self.index
-            .insert(entry.key.to_vec(), (entry.val_offset, entry.created_at));
+        self.index.insert(
+            entry.key.to_vec(),
+            (entry.val_offset, entry.created_at, entry.is_tombstone),
+        );
         Ok(())
     }
 
@@ -129,15 +146,15 @@ impl InMemoryTable<Vec<u8>> {
         self.insert(&entry)
     }
 
-    pub fn delete(&mut self, key: &Vec<u8>) -> Result<(), StorageEngineError> {
-        if !self.bloom_filter.contains(key) {
+    pub fn delete(&mut self, entry: &Entry<Vec<u8>, usize>) -> Result<(), StorageEngineError> {
+        if !self.bloom_filter.contains(&entry.key) {
             return Err(StorageEngineError::KeyNotFoundInMemTable);
         }
         let created_at = Utc::now();
         // Insert thumb stone to indicate deletion
         self.index.insert(
-            key.to_vec(),
-            (THUMB_STONE, created_at.timestamp_millis() as u64),
+            entry.key.to_vec(),
+            (entry.val_offset, created_at.timestamp_millis() as u64, entry.is_tombstone),
         );
         Ok(())
     }
@@ -148,7 +165,7 @@ impl InMemoryTable<Vec<u8>> {
         self.size
     }
 
-    pub fn get_index(self) -> Arc<SkipMap<Vec<u8>, (usize, u64)>> {
+    pub fn get_index(self) -> Arc<SkipMap<Vec<u8>, (usize, u64, bool)>> {
         self.index.clone()
     }
 

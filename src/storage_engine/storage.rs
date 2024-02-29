@@ -1,10 +1,11 @@
 use crate::{
     bloom_filter::BloomFilter,
+    cfg::Config,
     compaction::{Bucket, BucketMap, Compactor},
     consts::{
         BUCKETS_DIRECTORY_NAME, DEFAULT_ALLOW_PREFETCH, DEFAULT_FALSE_POSITIVE_RATE,
-        DEFAULT_MEMTABLE_CAPACITY, DEFAULT_PREFETCH_SIZE, HEAD_ENTRY_LENGTH, META_DIRECTORY_NAME,
-        THUMB_STONE, VALUE_LOG_DIRECTORY_NAME,
+        DEFAULT_MEMTABLE_CAPACITY, DEFAULT_PREFETCH_SIZE, ENABLE_TTL, ENTRY_TTL, GC_THREAD_COUNT,
+        HEAD_ENTRY_LENGTH, META_DIRECTORY_NAME, TOMB_STONE, VALUE_LOG_DIRECTORY_NAME,
     },
     err::StorageEngineError,
     memtable::{Entry, InMemoryTable},
@@ -29,10 +30,9 @@ pub struct StorageEngine<K: Hash + PartialOrd + std::cmp::Ord> {
     pub val_log: ValueLog,
     pub buckets: BucketMap,
     pub key_index: LevelsBiggestKeys,
-    pub allow_prefetch: bool,
-    pub prefetch_size: usize,
     pub compactor: Compactor,
     pub meta: Meta,
+    pub config: Config,
 }
 
 pub struct LevelsBiggestKeys {
@@ -44,6 +44,7 @@ impl LevelsBiggestKeys {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct DirPath {
     root: PathBuf,
     val_log: PathBuf,
@@ -62,8 +63,27 @@ pub enum SizeUnit {
 impl StorageEngine<Vec<u8>> {
     pub fn new(dir: PathBuf) -> Result<Self, StorageEngineError> {
         let dir = DirPath::build(dir);
+        let default_config = Config::default();
 
-        StorageEngine::with_capacity(dir, SizeUnit::Bytes, DEFAULT_MEMTABLE_CAPACITY)
+        StorageEngine::with_default_capacity_and_config(
+            dir.clone(),
+            SizeUnit::Bytes,
+            DEFAULT_MEMTABLE_CAPACITY,
+            &default_config,
+        )
+    }
+
+    pub fn new_with_custom_config(
+        dir: PathBuf,
+        config: &Config,
+    ) -> Result<Self, StorageEngineError> {
+        let dir = DirPath::build(dir);
+        StorageEngine::with_default_capacity_and_config(
+            dir.clone(),
+            SizeUnit::Bytes,
+            DEFAULT_MEMTABLE_CAPACITY,
+            config,
+        )
     }
 
     /// A Result indicating success or an `StorageEngineError` if an error occurred.
@@ -72,9 +92,9 @@ impl StorageEngine<Vec<u8>> {
         let key = &key.as_bytes().to_vec();
         let value = &value.as_bytes().to_vec();
         let created_at = Utc::now().timestamp_millis() as u64;
-
+        let is_tombstone = false;
         // Write to value log first which returns the offset
-        let v_offset = self.val_log.append(key, value, created_at)?;
+        let v_offset = self.val_log.append(key, value, created_at, is_tombstone)?;
 
         // then check if the length of the memtable + head offset > than memtable length
         // store the head offset in the sstable for recovery in case of crash
@@ -87,6 +107,7 @@ impl StorageEngine<Vec<u8>> {
                 b"head".to_vec(),
                 head_offset.unwrap().value().0,
                 Utc::now().timestamp_millis() as u64,
+                false,
             );
             let _ = self.memtable.insert(&head_entry);
             let flush_result = self.flush_memtable();
@@ -105,7 +126,12 @@ impl StorageEngine<Vec<u8>> {
                 }
             }
         }
-        let entry = Entry::new(key.to_vec(), v_offset.try_into().unwrap(), created_at);
+        let entry = Entry::new(
+            key.to_vec(),
+            v_offset.try_into().unwrap(),
+            created_at,
+            is_tombstone,
+        );
         self.memtable.insert(&entry)?;
         Ok(true)
     }
@@ -117,9 +143,15 @@ impl StorageEngine<Vec<u8>> {
         let mut most_recent_insert_time = 0;
 
         // Step 1: Check if key exist in MemTable
-        if let Ok(Some((value_offset, creation_date))) = self.memtable.get(&key) {
+        if let Ok(Some((value_offset, creation_date, is_tombstone))) = self.memtable.get(&key) {
             offset = value_offset;
             most_recent_insert_time = creation_date;
+
+            if is_tombstone {
+                return Err(KeyFoundAsTombstoneInMemtableError);
+            }
+
+            println!("From memtable")
         } else {
             // Step 2: If key does not exist in MemTable then we can load sstables that probaby contains this key fr8om bloom filter
             let sstable_paths =
@@ -127,32 +159,43 @@ impl StorageEngine<Vec<u8>> {
             match sstable_paths {
                 Some(paths) => {
                     // Step 3: Get the most recent value offset from sstables
+                    let mut is_deleted = false;
                     for sst_path in paths.iter() {
                         let sstable = SSTable::new_with_exisiting_file_path(sst_path.get_path());
                         match sstable.get(&key) {
+                            
                             Ok(result) => {
-                                if let Some((value_offset, created_at)) = result {
+                                println!("This contains the key {:?}", result);
+                                if let Some((value_offset, created_at, is_tombstone)) = result {
                                     if created_at > most_recent_insert_time {
                                         offset = value_offset;
                                         most_recent_insert_time = created_at;
+                                        is_deleted = is_tombstone;
                                     }
                                 }
                             }
                             Err(_) => {}
                         }
                     }
+
+                    if most_recent_insert_time > 0 && is_deleted {
+                        return Err(KeyFoundAsTombstoneInSSTableError);
+                    }
                 }
-                None => return Err(KeyNotFoundInAnySSTableError),
+                None => {
+                    return Err(KeyNotFoundInAnySSTableError);
+                }
             }
         }
+
         // most_recent_insert_time cannot be zero unless did not find this key in any sstable
         if most_recent_insert_time > 0 {
             // Step 5: Read value from value log based on offset
-            let value: Option<Vec<u8>> = self.val_log.get(offset)?;
+            let value: Option<(Vec<u8>, bool)> = self.val_log.get(offset)?;
             match value {
-                Some(v) => {
-                    if THUMB_STONE.to_le_bytes().to_vec() == v {
-                        return Err(NotFoundInDB);
+                Some((v, is_tombstone)) => {
+                    if is_tombstone {
+                        return Err(KeyFoundAsTombstoneInValueLogError);
                     }
                     return Ok((v, most_recent_insert_time));
                 }
@@ -170,11 +213,12 @@ impl StorageEngine<Vec<u8>> {
 
         // Convert the key and value into Vec<u8> from given &str.
         let key = &key.as_bytes().to_vec();
-        let value = &THUMB_STONE.to_le_bytes().to_vec(); // Value will be a thumbstone
+        let value = &TOMB_STONE.to_le_bytes().to_vec(); // Value will be a thumbstone
         let created_at = Utc::now().timestamp_millis() as u64;
+        let is_tombstone = true;
 
         // Write to value log first which returns the offset
-        let v_offset = self.val_log.append(key, value, created_at)?;
+        let v_offset = self.val_log.append(key, value, created_at, is_tombstone)?;
 
         // then check if the length of the memtable + head offset > than memtable length
         // head offset is stored in sstable for recovery incase of crash
@@ -187,6 +231,7 @@ impl StorageEngine<Vec<u8>> {
                 b"head".to_vec(),
                 head_offset.unwrap().value().0,
                 Utc::now().timestamp_millis() as u64,
+                is_tombstone,
             );
             let _ = self.memtable.insert(&head_entry);
             let flush_result = self.flush_memtable();
@@ -205,7 +250,12 @@ impl StorageEngine<Vec<u8>> {
                 }
             }
         }
-        let entry = Entry::new(key.to_vec(), v_offset.try_into().unwrap(), created_at);
+        let entry = Entry::new(
+            key.to_vec(),
+            v_offset.try_into().unwrap(),
+            created_at,
+            is_tombstone,
+        );
         self.memtable.insert(&entry)?;
         Ok(true)
     }
@@ -215,7 +265,7 @@ impl StorageEngine<Vec<u8>> {
         self.put(key, value)
     }
 
-    pub fn clear(mut self) -> Result<Self, StorageEngineError> {
+    pub fn clear(&mut self) -> Result<Self, StorageEngineError> {
         // Get the current capacity.
         let capacity = self.memtable.capacity();
 
@@ -228,18 +278,12 @@ impl StorageEngine<Vec<u8>> {
         // Delete the memtable by calling the `clear` method defined in MemTable.
         self.memtable.clear();
 
-        // // Delete the wal by calling the `clear` method defined in ValueLog.
+        let config = self.config.clone();
+        // Delete the velue_log by calling the `clear` method defined in ValueLog.
         // self.val_log.clear()?;
 
         // Call the build method of StorageEngine and return a new instance.
-        StorageEngine::with_capacity_and_rate(
-            self.dir,
-            size_unit,
-            capacity,
-            false_positive_rate,
-            DEFAULT_ALLOW_PREFETCH,
-            DEFAULT_PREFETCH_SIZE,
-        )
+        StorageEngine::with_capacity_and_rate(self.dir.clone(), size_unit, capacity, &config)
     }
 
     // if write + head offset is greater than size then flush to disk
@@ -262,35 +306,26 @@ impl StorageEngine<Vec<u8>> {
                         .get_hotness()
                         .cmp(&a.get_sstable_path().get_hotness())
                 });
-                self.memtable.clear();
                 Ok(())
             }
             Err(err) => Err(err),
         }
     }
 
-    fn with_capacity(
+    fn with_default_capacity_and_config(
         dir: DirPath,
         size_unit: SizeUnit,
         capacity: usize,
+        config: &Config,
     ) -> Result<Self, StorageEngineError> {
-        Self::with_capacity_and_rate(
-            dir,
-            size_unit,
-            capacity,
-            DEFAULT_FALSE_POSITIVE_RATE,
-            DEFAULT_ALLOW_PREFETCH,
-            DEFAULT_PREFETCH_SIZE,
-        )
+        Self::with_capacity_and_rate(dir, size_unit, capacity, &config)
     }
 
     fn with_capacity_and_rate(
         dir: DirPath,
         size_unit: SizeUnit,
         capacity: usize,
-        false_positive_rate: f64,
-        allow_prefetch: bool,
-        prefetch_size: usize,
+        config: &Config,
     ) -> Result<Self, StorageEngineError> {
         let vlog_path = &dir.val_log;
         let buckets_path = dir.buckets.clone();
@@ -306,7 +341,7 @@ impl StorageEngine<Vec<u8>> {
             let memtable = InMemoryTable::with_specified_capacity_and_rate(
                 size_unit,
                 capacity,
-                false_positive_rate,
+                config.false_positive_rate,
             );
 
             return Ok(Self {
@@ -316,9 +351,8 @@ impl StorageEngine<Vec<u8>> {
                 buckets: BucketMap::new(buckets_path.clone()),
                 dir,
                 key_index,
-                allow_prefetch,
-                prefetch_size,
-                compactor: Compactor::new(),
+                compactor: Compactor::new(config.enable_ttl, config.entry_ttl_millis),
+                config: config.clone(),
                 meta,
             });
         }
@@ -389,7 +423,7 @@ impl StorageEngine<Vec<u8>> {
                         // use it to recover entries not written into sstables from value log
                         let fetch_result = sstable.get_value_from_index(b"head");
 
-                        if let Some((head_offset, date_created)) = fetch_result {
+                        if let Some((head_offset, date_created, _)) = fetch_result {
                             if date_created > most_recent_head_timestamp {
                                 most_recent_head_offset = head_offset;
                                 most_recent_head_timestamp = date_created;
@@ -412,7 +446,7 @@ impl StorageEngine<Vec<u8>> {
         let recover_result = StorageEngine::recover_memtable(
             size_unit,
             capacity,
-            false_positive_rate,
+            config.false_positive_rate,
             &dir.val_log,
             most_recent_head_offset,
         );
@@ -425,10 +459,9 @@ impl StorageEngine<Vec<u8>> {
                 buckets: buckets_map,
                 bloom_filters,
                 key_index,
-                allow_prefetch,
-                prefetch_size,
                 meta,
-                compactor: Compactor::new(),
+                compactor: Compactor::new(config.enable_ttl, config.entry_ttl_millis),
+                config: config.clone(),
             }),
             Err(err) => Err(MemTableRecoveryError(Box::new(err))),
         }
@@ -451,7 +484,12 @@ impl StorageEngine<Vec<u8>> {
         let entries = vlog.recover(head_offset)?;
 
         for e in entries {
-            let entry = Entry::new(e.key.to_owned(), most_recent_offset, e.created_at);
+            let entry = Entry::new(
+                e.key.to_owned(),
+                most_recent_offset,
+                e.created_at,
+                e.is_tombstone,
+            );
             // Since the most recent offset is the offset we start reading entries from in value log
             // and we retrieved this from the sstable, therefore should not re-write the initial entry in
             // memtable since it's already in the sstable
@@ -461,6 +499,7 @@ impl StorageEngine<Vec<u8>> {
             most_recent_offset += mem::size_of::<u32>() // Key Size -> for fetching key length
                         + mem::size_of::<u32>() // Value Length -> for fetching value length
                         + mem::size_of::<u64>() // Date Length
+                        + mem::size_of::<u8>() // tombstone marker
                         + e.key.len() // Key Length
                         + e.value.len(); // Value Length
         }
@@ -525,19 +564,17 @@ impl SizeUnit {
 mod tests {
     use super::*;
     use crate::bloom_filter;
-    use env_logger::init;
     use log::info;
     use std::fs::remove_dir;
 
     // Generate test to find keys after compaction
     #[test]
     fn storage_engine_create() {
-        init();
         let path = PathBuf::new().join("bump");
         let mut s_engine = StorageEngine::new(path.clone()).unwrap();
 
         // Specify the number of random strings to generate
-        let num_strings = 5000;
+        let num_strings = 10000;
 
         // Specify the length of each random string
         let string_length = 10;
@@ -574,10 +611,10 @@ mod tests {
         // sort to make fetch random
         random_strings.sort();
 
-        // for key in random_strings.clone() {
-        //     println!("KEY FOUND {}", key);
-        //     assert_eq!(s_engine.get(&key).unwrap().0, b"boyode");
-        // }
+        for key in random_strings.clone() {
+            assert_eq!(s_engine.get(&key).unwrap().0, b"boyode");
+        }
+
         println!("TO FIND {}", random_strings[0]);
         // assert_eq!(s_engine.delete(&random_strings[0]).unwrap(), true);
         let get_res = s_engine.get(&random_strings[0]);
@@ -589,6 +626,208 @@ mod tests {
                 println!("NOT FOUND AFTER DELETION {}", err.to_string())
             }
         }
+        // let value1 = wt.get(k1);
+        // let value2 = wt.get(k2);
+        // let value3 = wt.get(k3);
+        // let value4 = wt.get(k4);
+        // assert_eq!(value1.unwrap().as_str(), "boyode");
+        // assert_eq!(value2.unwrap().as_str(), "boyode");
+        // assert_eq!(value3.unwrap().as_str(), "boyode");
+
+        // assert_eq!(value4, None);
+    }
+
+    #[test]
+    fn storage_engine_compaction() {
+        let path = PathBuf::new().join("bump");
+        let mut s_engine = StorageEngine::new(path.clone()).unwrap();
+
+        // Specify the number of random strings to generate
+        let num_strings = 5000;
+
+        // Specify the length of each random string
+        let string_length = 10;
+        // Generate random strings and store them in a vector
+        let mut random_strings: Vec<String> = Vec::new();
+        for _ in 0..num_strings {
+            let random_string = generate_random_string(string_length);
+            random_strings.push(random_string);
+        }
+
+        // Insert the generated random strings
+        for (_, s) in random_strings.iter().enumerate() {
+            s_engine.put(s, "boyode").unwrap();
+        }
+
+        // sort to make fetch random
+        random_strings.sort();
+        let key = &random_strings[0];
+        // for key in random_strings.clone() {
+        //     println!("KEY FOUND {}", key);
+        //     assert_eq!(s_engine.get(&key).unwrap().0, b"boyode");
+        // }
+        // assert_eq!(s_engine.delete(&random_strings[0]).unwrap(), true);
+        let get_res = s_engine.get(key);
+        match get_res {
+            Ok(v) => {
+                println!("FOUND BEFORE COMPACTION {:?}", v)
+            }
+            Err(err) => {
+                println!("NOT FOUND AFTER DELETION {}", err.to_string())
+            }
+        }
+
+        let del_res = s_engine.delete(key);
+        match del_res {
+            Ok(v) => {
+                println!("KEY WAS DEETED{:?}", v)
+            }
+            Err(err) => {
+                println!("NOT NOT DELETED {}", err.to_string())
+            }
+        }
+        let _ = s_engine.flush_memtable();
+        s_engine.memtable.clear();
+
+        let get_res = s_engine.get(key);
+        match get_res {
+            Ok(v) => {
+                println!("FOUND AFTER DELETION {:?}", v)
+            }
+            Err(err) => {
+                println!("FOUND AS TUMSTONE AFTER DELETION  {}", err.to_string())
+            }
+        }
+
+        let compaction_opt = s_engine.run_compaction();
+        match compaction_opt {
+            Ok(_) => {
+                println!("Compaction is successful");
+                println!(
+                    "Length of bucket after compaction {:?}",
+                    s_engine.buckets.buckets.len()
+                );
+                println!(
+                    "Length of bloom filters after compaction {:?}",
+                    s_engine.bloom_filters.len()
+                );
+            }
+            Err(err) => {
+                info!("Error during compaction {}", err)
+            }
+        }
+
+        // Insert the generated random strings
+
+        let get_res = s_engine.get(key);
+        match get_res {
+            Ok(v) => {
+                println!("NOT FOUND AFTER DELETION {:?}", v)
+            }
+            Err(err) => {
+                println!("NOT FOUND AFTER COMPACTION ERR {}", err.to_string())
+            }
+        }
+
+        // let value1 = wt.get(k1);
+        // let value2 = wt.get(k2);
+        // let value3 = wt.get(k3);
+        // let value4 = wt.get(k4);
+        // assert_eq!(value1.unwrap().as_str(), "boyode");
+        // assert_eq!(value2.unwrap().as_str(), "boyode");
+        // assert_eq!(value3.unwrap().as_str(), "boyode");
+
+        // assert_eq!(value4, None);
+    }
+
+    #[test]
+    fn storage_engine_deletion() {
+        let path = PathBuf::new().join("bump");
+        let mut s_engine = StorageEngine::new(path.clone()).unwrap();
+
+        // Specify the number of random strings to generate
+        let num_strings = 5000;
+
+        // Specify the length of each random string
+        let string_length = 10;
+        // Generate random strings and store them in a vector
+        let mut random_strings: Vec<String> = Vec::new();
+        for _ in 0..num_strings {
+            let random_string = generate_random_string(string_length);
+            random_strings.push(random_string);
+        }
+
+        // Insert the generated random strings
+        for (_, s) in random_strings.iter().enumerate() {
+            s_engine.put(s, "boyode").unwrap();
+        }
+
+        // sort to make fetch random
+        random_strings.sort();
+        let key = &random_strings[0];
+
+        let get_res = s_engine.get(key);
+        match get_res {
+            Ok((value, _)) => {
+                assert_eq!(value, "boyode".as_bytes().to_vec());
+            }
+            Err(err) => {
+                assert_ne!(key.as_bytes().to_vec(), err.to_string().as_bytes().to_vec());
+            }
+        }
+
+        let del_res = s_engine.delete(key);
+        match del_res {
+            Ok(v) => {
+                assert_eq!(v, true);
+            }
+            Err(err) => {
+                assert!(err.to_string().is_empty())
+            }
+        }
+        let _ = s_engine.flush_memtable();
+        s_engine.memtable.clear();
+
+        let get_res = s_engine.get(key);
+        match get_res {
+            Ok((_, _)) => {
+                assert!(false, "Should not ne executed")
+            }
+            Err(err) => {
+                assert_eq!(StorageEngineError::KeyFoundAsTombstoneInSSTableError.to_string(), err.to_string())
+            }
+        }
+
+        let compaction_opt = s_engine.run_compaction();
+        match compaction_opt {
+            Ok(_) => {
+                println!("Compaction is successful");
+                println!(
+                    "Length of bucket after compaction {:?}",
+                    s_engine.buckets.buckets.len()
+                );
+                println!(
+                    "Length of bloom filters after compaction {:?}",
+                    s_engine.bloom_filters.len()
+                );
+            }
+            Err(err) => {
+                info!("Error during compaction {}", err)
+            }
+        }
+
+        // Insert the generated random strings
+        println!("trying to get this {}",key);
+        let get_res = s_engine.get(key);
+        match get_res {
+            Ok((_, _)) => {
+                assert!(false, "Should not ne executed")
+            }
+            Err(err) => {
+                assert_eq!(StorageEngineError::KeyNotFoundInAnySSTableError.to_string(), err.to_string())
+            }
+        }
+
         // let value1 = wt.get(k1);
         // let value2 = wt.get(k2);
         // let value3 = wt.get(k3);

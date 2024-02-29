@@ -1,18 +1,32 @@
 use crossbeam_skiplist::SkipMap;
 use log::{error, info, warn};
-use std::{cmp::Ordering, collections::HashMap, path::PathBuf, sync::Arc};
+use std::{
+    cmp::Ordering,
+    collections::HashMap,
+    fs,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 use uuid::Uuid;
 
+use super::{bucket_coordinator::Bucket, BucketMap};
 use crate::{
     bloom_filter::BloomFilter,
     err::StorageEngineError,
     memtable::Entry,
     sstable::{SSTable, SSTablePath},
 };
-
-use super::{bucket_coordinator::Bucket, BucketMap};
-
-pub struct Compactor;
+use StorageEngineError::*;
+#[derive(Clone, Debug)]
+pub struct Compactor {
+    // tombstones are considered and used to identify
+    // and remove deleted data during compaction
+    pub tombstones: HashMap<Vec<u8>, u64>,
+    // should compactor remove entry that has exceeded time to live?
+    pub use_ttl: bool,
+    // entry expected time to live
+    pub entry_ttl: u64,
+}
 pub struct MergedSSTable {
     pub sstable: SSTable,
     pub hotness: u64,
@@ -30,12 +44,16 @@ impl MergedSSTable {
 }
 
 impl Compactor {
-    pub fn new() -> Self {
-        Self
+    pub fn new(use_ttl: bool, entry_ttl: u64) -> Self {
+        Self {
+            tombstones: HashMap::new(),
+            use_ttl,
+            entry_ttl,
+        }
     }
 
     pub fn run_compaction(
-        &self,
+        &mut self,
         buckets: &mut BucketMap,
         bloom_filters: &mut Vec<BloomFilter>,
     ) -> Result<bool, StorageEngineError> {
@@ -57,65 +75,75 @@ impl Compactor {
             }
             number_of_compactions += 1;
             // Step 2: Merge SSTables in each buckct
-            let merged_sstable_opt = self.merge_sstables_in_buckets(&buckets_to_compact);
-            let mut actual_number_of_sstables_written_to_disk = 0;
-            let mut expected_sstables_to_be_writtten_to_disk = 0;
-            match merged_sstable_opt {
-                Some(merged_sstables) => {
+            match self.merge_sstables_in_buckets(&buckets_to_compact) {
+                Ok(merged_sstables) => {
+                    // Number of sstables actually written to disk
+                    let mut actual_number_of_sstables_written_to_disk = 0;
                     // Number of sstables expected to be inserted to disk
-                    expected_sstables_to_be_writtten_to_disk = merged_sstables.len();
+                    let expected_sstables_to_be_writtten_to_disk = merged_sstables.len();
 
-                    //Step 3: Write merged sstables to bucket map
-                    merged_sstables
-                        .into_iter()
-                        .enumerate()
-                        .for_each(|(_, mut m)| {
-                            let insert_result =
-                                buckets.insert_to_appropriate_bucket(&m.sstable, m.hotness);
-                            match insert_result {
-                                Ok(sst_file_path) => {
-                                    // Step 4: Map this bloom filter to its sstable file path
-                                    m.bloom_filter.set_sstable_path(sst_file_path);
-                                    // Step 5: Store the bloom filter in the bloom filters vector
-                                    bloom_filters.push(m.bloom_filter);
-                                    actual_number_of_sstables_written_to_disk += 1;
-                                }
-                                Err(_) => {
-                                    error!("merged SSTable was not written to disk ")
-                                }
+                    // Step 3: Write merged sstables to bucket map
+                    for (_, mut m) in merged_sstables.into_iter().enumerate() {
+                        match buckets.insert_to_appropriate_bucket(&m.sstable, m.hotness) {
+                            Ok(sst_file_path) => {
+                                // Step 4: Map this bloom filter to its sstable file path
+                                m.bloom_filter.set_sstable_path(sst_file_path);
+
+                                // Step 5: Store the bloom filter in the bloom filters vector
+                                bloom_filters.push(m.bloom_filter);
+                                actual_number_of_sstables_written_to_disk += 1;
                             }
-                        })
-                }
-                None => {}
-            }
+                            Err(err) => {
+                                // Step 6: Trigger recovery in case compaction failed at any point
 
-            info!(
-              "Expected number of new SSTables written to disk : {}, Actual number of SSTables written {}",
-               expected_sstables_to_be_writtten_to_disk, actual_number_of_sstables_written_to_disk);
+                                // Ensure that bloom filter is restored to the previous state by removing entries added so far in
+                                // the compaction process and also remove merged sstables written to disk so far to prevent unstable state
+                                while let Some(bf) = bloom_filters.pop() {
+                                    match fs::remove_file(bf.get_sstable_path().get_path()) {
+                                        Ok(()) => info!("Stale SSTable File successfully deleted."),
+                                        Err(e) => error!("Stale SSTable File not deleted. {}", e),
+                                    }
+                                    actual_number_of_sstables_written_to_disk -= 1;
+                                }
+                                error!("merged SSTable was not written to disk  {}", err);
+                                return Err(CompactionFailed(err.to_string()));
+                            }
+                        }
+                    }
 
-            if expected_sstables_to_be_writtten_to_disk == actual_number_of_sstables_written_to_disk
-            {
-                // Step 6:  Delete the sstables that we already merged from their previous buckets and update bloom filters
-                let bloom_filter_updated_opt = self.clean_up_after_compaction(
-                    buckets,
-                    &sstables_files_to_remove,
-                    bloom_filters,
-                );
-                match bloom_filter_updated_opt {
-                    Some(is_bloom_filter_updated) => {
-                        info!(
-                            "{} COMPACTION COMPLETED SUCCESSFULLY : {}",
-                            number_of_compactions, is_bloom_filter_updated
+                    info!(
+                        "Expected number of new SSTables written to disk : {}, Actual number of SSTables written {}",
+                         expected_sstables_to_be_writtten_to_disk, actual_number_of_sstables_written_to_disk);
+
+                    if expected_sstables_to_be_writtten_to_disk
+                        == actual_number_of_sstables_written_to_disk
+                    {
+                        // Step 6:  Delete the sstables that we already merged from their previous buckets and update bloom filters
+                        let bloom_filter_updated_opt = self.clean_up_after_compaction(
+                            buckets,
+                            &sstables_files_to_remove,
+                            bloom_filters,
                         );
-                    }
-                    None => {
-                        return Err(StorageEngineError::CompactionPartiallyFailed(String::from(
-                            "Compaction cleanup failed but sstable merge was successful",
-                        )));
+                        match bloom_filter_updated_opt {
+                            Some(is_bloom_filter_updated) => {
+                                // clear Tumbstone Map so as to not interfere with the next compaction process
+                                self.tombstones.clear();
+                                info!(
+                                    "{} COMPACTION COMPLETED SUCCESSFULLY : {}",
+                                    number_of_compactions, is_bloom_filter_updated
+                                );
+                            }
+                            None => {
+                                return Err(StorageEngineError::CompactionPartiallyFailed(String::from(
+                                      "Compaction cleanup failed but sstable merge was successful",
+                                  )));
+                            }
+                        }
+                    } else {
+                        warn!("Cannot remove obsolete sstables from disk because not every merged sstable was written to disk")
                     }
                 }
-            } else {
-                warn!("Cannot remove obsolete sstables from disk because not every merged sstable was written to disk")
+                Err(err) => return Err(CompactionFailed(err.to_string())),
             }
         }
     }
@@ -165,53 +193,64 @@ impl Compactor {
         Some(true)
     }
 
-    fn merge_sstables_in_buckets(&self, buckets: &Vec<Bucket>) -> Option<Vec<MergedSSTable>> {
-        let mut merged_sstbales: Vec<MergedSSTable> = Vec::new();
-
-        buckets.iter().for_each(|b| {
+    fn merge_sstables_in_buckets(
+        &mut self,
+        buckets: &Vec<Bucket>,
+    ) -> Result<Vec<MergedSSTable>, StorageEngineError> {
+        let mut merged_sstables: Vec<MergedSSTable> = Vec::new();
+        for b in buckets.iter() {
             let mut hotness = 0;
             let sstable_paths = &b.sstables;
-
             let mut merged_sstable = SSTable::new(b.dir.clone(), false);
-            sstable_paths.iter().for_each(|path| {
+            for path in sstable_paths.iter() {
                 hotness += path.hotness;
-                let sst_opt = SSTable::from_file(PathBuf::new().join(path.get_path())).unwrap();
+                let sst_opt = SSTable::from_file(PathBuf::new().join(path.get_path()))
+                    .map_err(|err| CompactionFailed(err.to_string()))?;
                 match sst_opt {
                     Some(sst) => {
-                        merged_sstable = self.merge_sstables(&merged_sstable, &sst);
+                        merged_sstable = self
+                            .merge_sstables(&merged_sstable, &sst)
+                            .map_err(|err| CompactionFailed(err.to_string()))?;
                     }
                     None => {}
                 }
-            });
+            }
 
             // Rebuild the bloom filter since a new sstable has been created
             let new_bloom_filter = SSTable::build_bloomfilter_from_sstable(&merged_sstable.index);
-            merged_sstbales.push(MergedSSTable {
+            merged_sstables.push(MergedSSTable {
                 sstable: merged_sstable,
                 hotness,
                 bloom_filter: new_bloom_filter,
             })
-        });
-        if merged_sstbales.is_empty() {
-            return None;
         }
-        Some(merged_sstbales)
+        if merged_sstables.is_empty() {
+            return Err(CompactionFailed(
+                "Merged SSTables cannot be empty".to_owned(),
+            ));
+        }
+        let filtered_sstables = self.check_tombsone_for_merged_sstables(merged_sstables);
+        Ok(filtered_sstables)
     }
 
-    fn merge_sstables(&self, sst1: &SSTable, sst2: &SSTable) -> SSTable {
+    fn merge_sstables(
+        &mut self,
+        sst1: &SSTable,
+        sst2: &SSTable,
+    ) -> Result<SSTable, StorageEngineError> {
         let mut new_sstable = SSTable::new(PathBuf::new(), false);
         let new_sstable_index = Arc::new(SkipMap::new());
         let mut merged_indexes = Vec::new();
         let index1 = sst1
             .get_index()
             .iter()
-            .map(|e| Entry::new(e.key().to_vec(), e.value().0, e.value().1))
+            .map(|e| Entry::new(e.key().to_vec(), e.value().0, e.value().1, e.value().2))
             .collect::<Vec<Entry<Vec<u8>, usize>>>();
 
         let index2 = sst2
             .get_index()
             .iter()
-            .map(|e| Entry::new(e.key().to_vec(), e.value().0, e.value().1))
+            .map(|e| Entry::new(e.key().to_vec(), e.value().0, e.value().1, e.value().2))
             .collect::<Vec<Entry<Vec<u8>, usize>>>();
 
         let (mut i, mut j) = (0, 0);
@@ -219,21 +258,24 @@ impl Compactor {
         while i < index1.len() && j < index2.len() {
             match index1[i].key.cmp(&index2[j].key) {
                 Ordering::Less => {
-                    // increase new_sstable size
-                    merged_indexes.push(index1[i].clone());
+                    self.tombstone_check(&index1[i], &mut merged_indexes)
+                        .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
                     i += 1;
                 }
                 Ordering::Equal => {
                     if index1[i].created_at > index2[j].created_at {
-                        merged_indexes.push(index1[i].clone());
+                        self.tombstone_check(&index1[i], &mut merged_indexes)
+                            .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
                     } else {
-                        merged_indexes.push(index2[j].clone());
+                        self.tombstone_check(&index2[j], &mut merged_indexes)
+                            .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
                     }
                     i += 1;
                     j += 1;
                 }
                 Ordering::Greater => {
-                    merged_indexes.push(index2[j].clone());
+                    self.tombstone_check(&index2[j], &mut merged_indexes)
+                        .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
                     j += 1;
                 }
             }
@@ -241,19 +283,117 @@ impl Compactor {
 
         // If there are any remaining elements in arr1, append them
         while i < index1.len() {
-            merged_indexes.push(index1[i].clone());
+            self.tombstone_check(&index1[i], &mut merged_indexes)
+                .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
             i += 1;
         }
 
         // If there are any remaining elements in arr2, append them
         while j < index2.len() {
-            merged_indexes.push(index2[j].clone());
+            self.tombstone_check(&index2[j], &mut merged_indexes)
+                .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
             j += 1;
         }
+
         merged_indexes.iter().for_each(|e| {
-            new_sstable_index.insert(e.key.to_owned(), (e.val_offset, e.created_at));
+            new_sstable_index.insert(
+                e.key.to_owned(),
+                (e.val_offset, e.created_at, e.is_tombstone),
+            );
         });
         new_sstable.set_index(new_sstable_index);
-        new_sstable
+        Ok(new_sstable)
+    }
+
+    fn tombstone_check(
+        &mut self,
+        entry: &Entry<Vec<u8>, usize>,
+        merged_indexes: &mut Vec<Entry<Vec<u8>, usize>>,
+    ) -> Result<bool, StorageEngineError> {
+        let mut insert_entry = false;
+        // If key has been mapped to any tombstone
+        if self.tombstones.contains_key(&entry.key) {
+            let tombstone_insertion_time = *self.tombstones.get(&entry.key).unwrap();
+
+            // Then check if entry is more recent than tombstone
+            if entry.created_at > tombstone_insertion_time {
+                // If entry key maps to a tombstone then update the tombstone hashmap
+                if entry.is_tombstone {
+                    self.tombstones.insert(entry.key.clone(), entry.created_at);
+                }
+                // otherwise attempt to insert entry because obviously
+                // this key was re-inserted after it was deleted
+                else {
+                    // if ttl was enabled then ensure entry has not expired before insertion
+                    if self.use_ttl {
+                        insert_entry = !entry.has_expired(self.entry_ttl);
+                    } else {
+                        insert_entry = true
+                    }
+                }
+            }
+        }
+        // If key was mapped to a tombstone and it does not exist in the
+        // tombstone hashmap then insert it
+        else {
+            if entry.is_tombstone {
+                println!(
+                    "HERE WE ARE TO REMOVE {:?}",
+                    String::from_utf8_lossy(&entry.key.clone())
+                );
+                self.tombstones.insert(entry.key.clone(), entry.created_at);
+                insert_entry = false;
+            } else {
+                // if ttl was enabled then ensure entry has not expired before insertion
+                if self.use_ttl {
+                    insert_entry = !entry.has_expired(self.entry_ttl);
+                } else {
+                    insert_entry = true
+                }
+            }
+        }
+
+        if insert_entry {
+            if entry.key == vec![98, 111, 121, 111, 100, 101] {
+                println!("Inserting deleted key")
+            }
+            merged_indexes.push(entry.clone())
+        }
+        Ok(true)
+    }
+
+    fn check_tombsone_for_merged_sstables(
+        &mut self,
+        merged_sstables: Vec<MergedSSTable>,
+    ) -> Vec<MergedSSTable> {
+        let mut filterd_merged_sstables: Vec<MergedSSTable> = Vec::new();
+        merged_sstables.iter().for_each(|m| {
+            let new_index: Arc<SkipMap<Vec<u8>, (usize, u64, bool)>> = Arc::new(SkipMap::new());
+            let mut new_sstable = SSTable::new(PathBuf::new(), false);
+            for entry in m.sstable.index.iter() {
+                if self.tombstones.contains_key(entry.key()) {
+                    let tombstone_timestamp = *self.tombstones.get(entry.key()).unwrap();
+                    if tombstone_timestamp < entry.value().1 {
+                        new_index.insert(
+                            entry.key().to_vec(),
+                            (entry.value().0, entry.value().1, entry.value().2),
+                        );
+                    }
+                } else {
+                    new_index.insert(
+                        entry.key().to_vec(),
+                        (entry.value().0, entry.value().1, entry.value().2),
+                    );
+                }
+            }
+            new_sstable.set_index(new_index);
+            filterd_merged_sstables.push(MergedSSTable {
+                sstable: new_sstable,
+                hotness: m.hotness,
+                bloom_filter: m.bloom_filter.clone(),
+            })
+        });
+
+        filterd_merged_sstables
     }
 }

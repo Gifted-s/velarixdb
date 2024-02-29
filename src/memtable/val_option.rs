@@ -2,7 +2,7 @@
 
 #[allow(dead_code)]
 pub enum ValueOption {
-    /// We might need to cache the raw value in memory if the size is very small, this will reduce 
+    /// We might need to cache the raw value in memory if the size is very small, this will reduce
     /// number of Disk IO made because value of smaller size can reside and fetched in memory before it is been flushed to disk
     Raw(Vec<u8>),
 

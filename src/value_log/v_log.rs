@@ -22,6 +22,7 @@ pub struct ValueLogEntry {
     pub key: Vec<u8>,
     pub value: Vec<u8>,
     pub created_at: u64, // date to milliseconds
+    pub is_tombstone: bool,
 }
 
 impl ValueLog {
@@ -57,6 +58,7 @@ impl ValueLog {
         key: &Vec<u8>,
         value: &Vec<u8>,
         created_at: u64,
+        is_tombstone: bool,
     ) -> Result<usize, StorageEngineError> {
         let mut log_file = self
             .file
@@ -68,6 +70,7 @@ impl ValueLog {
             key.to_vec(),
             value.to_vec(),
             created_at,
+            is_tombstone,
         );
         let serialized_data = v_log_entry.serialize();
 
@@ -86,7 +89,7 @@ impl ValueLog {
         Ok(value_offset.try_into().unwrap())
     }
 
-    pub fn get(&mut self, start_offset: usize) -> Result<Option<Vec<u8>>, StorageEngineError> {
+    pub fn get(&mut self, start_offset: usize) -> Result<Option<(Vec<u8>, bool)>, StorageEngineError> {
         let mut log_file = self
             .file
             .lock()
@@ -136,6 +139,20 @@ impl ValueLog {
         }
         let _ = u64::from_le_bytes(creation_date_bytes);
 
+        // get tombstone
+        let mut istombstone_bytes = [0; mem::size_of::<u8>()];
+        let mut bytes_read =
+            log_file
+                .read(&mut istombstone_bytes)
+                .map_err(|err| ValueLogFileReadError {
+                    error: io::Error::new(err.kind(), EOF),
+                })?;
+        if bytes_read == 0 {
+            return Ok(None);
+        }
+
+        let is_tombstone = istombstone_bytes[0] == 1;
+
         let mut key = vec![0; key_len as usize];
         bytes_read = log_file
             .read(&mut key)
@@ -156,7 +173,7 @@ impl ValueLog {
         if bytes_read == 0 {
             return Ok(None);
         }
-        Ok(Some(value))
+        Ok(Some((value, is_tombstone)))
     }
 
     pub fn recover(
@@ -215,6 +232,22 @@ impl ValueLog {
                     EOF,
                 )));
             }
+
+            // is tombstone
+            let mut istombstone_bytes = [0; mem::size_of::<u8>()];
+            let mut bytes_read =
+                log_file
+                    .read(&mut istombstone_bytes)
+                    .map_err(|err| ValueLogFileReadError {
+                        error: io::Error::new(err.kind(), EOF),
+                    })?;
+            if bytes_read == 0 {
+                return Err(UnexpectedEOF(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    EOF,
+                )));
+            }
+
             let created_at = u64::from_le_bytes(creation_date_bytes);
 
             let mut key = vec![0; key_len as usize];
@@ -243,25 +276,36 @@ impl ValueLog {
                     EOF,
                 )));
             }
+
+            let is_tombstone = istombstone_bytes[0] == 1;
             entries.push(ValueLogEntry {
                 ksize: key_len as usize,
                 vsize: val_len as usize,
                 key,
                 value,
                 created_at,
+                is_tombstone,
             })
         }
     }
 }
 
 impl ValueLogEntry {
-    pub fn new(ksize: usize, vsize: usize, key: Vec<u8>, value: Vec<u8>, created_at: u64) -> Self {
+    pub fn new(
+        ksize: usize,
+        vsize: usize,
+        key: Vec<u8>,
+        value: Vec<u8>,
+        created_at: u64,
+        is_tombstone: bool,
+    ) -> Self {
         Self {
             ksize,
             vsize,
             key,
             value,
             created_at,
+            is_tombstone,
         }
     }
 
@@ -270,7 +314,8 @@ impl ValueLogEntry {
             + mem::size_of::<u32>()
             + mem::size_of::<u64>()
             + self.key.len()
-            + self.value.len();
+            + self.value.len()
+            + mem::size_of::<u8>();
 
         let mut serialized_data = Vec::with_capacity(entry_len);
 
@@ -279,6 +324,8 @@ impl ValueLogEntry {
         serialized_data.extend_from_slice(&(self.value.len() as u32).to_le_bytes());
 
         serialized_data.extend_from_slice(&self.created_at.to_le_bytes());
+
+        serialized_data.push(self.is_tombstone as u8);
 
         serialized_data.extend_from_slice(&self.key);
 
@@ -314,6 +361,8 @@ impl ValueLogEntry {
             serialized_data[19],
         ]);
 
+        let is_tombstone = serialized_data[20] == 1;
+
         if serialized_data.len() != 20 + key_len + value_len {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -325,7 +374,12 @@ impl ValueLogEntry {
         let value = serialized_data[(20 + key_len)..].to_vec();
 
         Ok(ValueLogEntry::new(
-            key_len, value_len, key, value, created_at,
+            key_len,
+            value_len,
+            key,
+            value,
+            created_at,
+            is_tombstone,
         ))
     }
 }
@@ -339,16 +393,18 @@ mod tests {
         let key = vec![1, 2, 3];
         let value = vec![4, 5, 6];
         let created_at = 164343434343434;
+        let is_tombstone = false;
         let original_entry = ValueLogEntry::new(
             key.len(),
             value.len(),
             key.clone(),
             value.clone(),
             created_at,
+            is_tombstone,
         );
         let serialized_data = original_entry.serialize();
 
-        let expected_entry_len = 4 + 4 + 8 + key.len() + value.len();
+        let expected_entry_len = 4 + 4 + 8 + 1 + key.len() + value.len();
 
         assert_eq!(serialized_data.len(), expected_entry_len);
 

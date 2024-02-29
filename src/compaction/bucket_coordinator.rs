@@ -4,8 +4,8 @@ use crate::consts::{
 use crate::err::StorageEngineError;
 use crate::sstable::{SSTable, SSTablePath};
 use crossbeam_skiplist::SkipMap;
+use log::{error, info};
 use std::collections::HashMap;
-use log::{info, error};
 use std::fs;
 use std::{path::PathBuf, sync::Arc};
 use uuid::Uuid;
@@ -24,7 +24,7 @@ pub struct Bucket {
 }
 use StorageEngineError::*;
 pub trait IndexWithSizeInBytes {
-    fn get_index(&self) -> Arc<SkipMap<Vec<u8>, (usize, u64)>>; // usize for value offset, u64 to store entry creation date in milliseconds
+    fn get_index(&self) -> Arc<SkipMap<Vec<u8>, (usize, u64, bool)>>; // usize for value offset, u64 to store entry creation date in milliseconds
     fn size(&self) -> usize;
 }
 
@@ -199,7 +199,10 @@ impl BucketMap {
                     buckets_to_delete.push(bucket_id);
 
                     if let Err(err) = fs::remove_dir_all(&bucket.dir) {
-                        error!("Bucket directory deletion error: bucket id={}, path={:?}, err={:?} ", bucket_id, bucket.dir, err);
+                        error!(
+                            "Bucket directory deletion error: bucket id={}, path={:?}, err={:?} ",
+                            bucket_id, bucket.dir, err
+                        );
                     } else {
                         info!("Bucket successfully removed with bucket id {}", bucket_id);
                     }
@@ -210,7 +213,10 @@ impl BucketMap {
                 if SSTable::file_exists(&PathBuf::new().join(sst.get_path())) {
                     if let Err(err) = fs::remove_file(&sst.file_path) {
                         all_sstables_deleted = false;
-                        error!("SStable file table delete path={:?}, err={:?} ", sst.file_path, err);
+                        error!(
+                            "SStable file table delete path={:?}, err={:?} ",
+                            sst.file_path, err
+                        );
                     } else {
                         info!("SS Table deleted successfully.");
                     }

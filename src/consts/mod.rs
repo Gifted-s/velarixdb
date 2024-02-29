@@ -16,7 +16,13 @@ pub const VLOG_FILE_NAME: &str = "val_log.bin";
 
 pub const META_DIRECTORY_NAME: &str = "meta";
 
-pub const THUMB_STONE: usize = 0;
+pub const TOMB_STONE: usize = 0;
+
+pub const ENABLE_TTL: bool = false;
+
+// When data is written with a TTL, it is automatically deleted after the specified time.
+// For now this is set to a year in milliseconds
+pub const ENTRY_TTL: u64 = 365 * 86400000;
 
 pub const BUCKET_LOW: f64 = 0.5;
 
@@ -38,4 +44,5 @@ pub const EOF: &str = "EOF";
 // 4 bytes to store the actual key "head"
 // 4 bytes to store the head offset
 // 8 bytes to store the head entry creation date
-pub const HEAD_ENTRY_LENGTH: usize = 20;
+// 1 byte for tombstone marker
+pub const HEAD_ENTRY_LENGTH: usize = 21;
