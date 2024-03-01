@@ -128,7 +128,7 @@ impl ValueLog {
 
         // get date length
         let mut creation_date_bytes = [0; mem::size_of::<u64>()];
-        let mut bytes_read =
+        let bytes_read =
             log_file
                 .read(&mut creation_date_bytes)
                 .map_err(|err| ValueLogFileReadError {
@@ -220,7 +220,7 @@ impl ValueLog {
 
             // get date length
             let mut creation_date_bytes = [0; mem::size_of::<u64>()];
-            let mut bytes_read =
+            let bytes_read =
                 log_file
                     .read(&mut creation_date_bytes)
                     .map_err(|err| ValueLogFileReadError {

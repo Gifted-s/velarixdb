@@ -5,7 +5,7 @@ use std::{
     collections::HashMap,
     fs,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 use uuid::Uuid;
 

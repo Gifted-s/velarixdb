@@ -272,9 +272,6 @@ impl StorageEngine<Vec<u8>> {
         // Get the current size_unit.
         let size_unit = self.memtable.size_unit();
 
-        // Get the current false_positive_rate.
-        let false_positive_rate = self.memtable.false_positive_rate();
-
         // Delete the memtable by calling the `clear` method defined in MemTable.
         self.memtable.clear();
 
