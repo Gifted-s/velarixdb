@@ -1,6 +1,6 @@
 # BUMP STORAGE ENGINE
 
-A WISCKEY STORAGE
+A WISCKEY STORAGE Built for SSD paralelization
 
 // In progress ...
 
