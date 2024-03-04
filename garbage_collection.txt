@@ -11,7 +11,7 @@
 
 5. Append valid values back to the head of the vLog.
 
-6. Free the space occupied previously by the chunk 
+6. Free the space occupied previously by the chunk (using the punch hole feature in rust)
 
 7. Update tail accordingly
 

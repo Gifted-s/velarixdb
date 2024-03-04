@@ -123,7 +123,6 @@ impl InMemoryTable<Vec<u8>> {
     pub fn get(&mut self, key: &Vec<u8>) -> Result<Option<(usize, u64, bool)>, StorageEngineError> {
         if self.bloom_filter.contains(key) {
             if let Some(entry) = self.index.get(key) {
-                println!("FOUND IN MEMTABLE {:?}", entry);
                 return Ok(Some(*entry.value())); // returns value offset
             }
         }

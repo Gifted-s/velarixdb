@@ -1,12 +1,6 @@
 use crossbeam_skiplist::SkipMap;
 use log::{error, info, warn};
-use std::{
-    cmp::Ordering,
-    collections::HashMap,
-    fs,
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{cmp::Ordering, collections::HashMap, fs, path::PathBuf, sync::Arc};
 use uuid::Uuid;
 
 use super::{bucket_coordinator::Bucket, BucketMap};
@@ -71,6 +65,7 @@ impl Compactor {
 
             // Exit the compaction loop if there are no more buckets to compact
             if buckets_to_compact.is_empty() {
+                self.tombstones.clear();
                 return Ok(true);
             }
             number_of_compactions += 1;
@@ -127,7 +122,6 @@ impl Compactor {
                         match bloom_filter_updated_opt {
                             Some(is_bloom_filter_updated) => {
                                 // clear Tumbstone Map so as to not interfere with the next compaction process
-                                self.tombstones.clear();
                                 info!(
                                     "{} COMPACTION COMPLETED SUCCESSFULLY : {}",
                                     number_of_compactions, is_bloom_filter_updated
@@ -337,10 +331,6 @@ impl Compactor {
         // tombstone hashmap then insert it
         else {
             if entry.is_tombstone {
-                println!(
-                    "HERE WE ARE TO REMOVE {:?}",
-                    String::from_utf8_lossy(&entry.key.clone())
-                );
                 self.tombstones.insert(entry.key.clone(), entry.created_at);
                 insert_entry = false;
             } else {
@@ -354,9 +344,6 @@ impl Compactor {
         }
 
         if insert_entry {
-            if entry.key == vec![98, 111, 121, 111, 100, 101] {
-                println!("Inserting deleted key")
-            }
             merged_indexes.push(entry.clone())
         }
         Ok(true)
@@ -373,6 +360,7 @@ impl Compactor {
             for entry in m.sstable.index.iter() {
                 if self.tombstones.contains_key(entry.key()) {
                     let tombstone_timestamp = *self.tombstones.get(entry.key()).unwrap();
+
                     if tombstone_timestamp < entry.value().1 {
                         new_index.insert(
                             entry.key().to_vec(),

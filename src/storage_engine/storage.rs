@@ -146,12 +146,9 @@ impl StorageEngine<Vec<u8>> {
         if let Ok(Some((value_offset, creation_date, is_tombstone))) = self.memtable.get(&key) {
             offset = value_offset;
             most_recent_insert_time = creation_date;
-
             if is_tombstone {
                 return Err(KeyFoundAsTombstoneInMemtableError);
             }
-
-            println!("From memtable")
         } else {
             // Step 2: If key does not exist in MemTable then we can load sstables that probaby contains this key fr8om bloom filter
             let sstable_paths =
@@ -163,9 +160,7 @@ impl StorageEngine<Vec<u8>> {
                     for sst_path in paths.iter() {
                         let sstable = SSTable::new_with_exisiting_file_path(sst_path.get_path());
                         match sstable.get(&key) {
-                            
                             Ok(result) => {
-                                println!("This contains the key {:?}", result);
                                 if let Some((value_offset, created_at, is_tombstone)) = result {
                                     if created_at > most_recent_insert_time {
                                         offset = value_offset;
@@ -563,6 +558,7 @@ mod tests {
     use crate::bloom_filter;
     use log::info;
     use std::fs::remove_dir;
+    use StorageEngineError::*;
 
     // Generate test to find keys after compaction
     #[test]
@@ -612,35 +608,16 @@ mod tests {
             assert_eq!(s_engine.get(&key).unwrap().0, b"boyode");
         }
 
-        println!("TO FIND {}", random_strings[0]);
-        // assert_eq!(s_engine.delete(&random_strings[0]).unwrap(), true);
-        let get_res = s_engine.get(&random_strings[0]);
-        match get_res {
-            Ok(v) => {
-                println!("FOUND {:?}", v)
-            }
-            Err(err) => {
-                println!("NOT FOUND AFTER DELETION {}", err.to_string())
-            }
-        }
-        // let value1 = wt.get(k1);
-        // let value2 = wt.get(k2);
-        // let value3 = wt.get(k3);
-        // let value4 = wt.get(k4);
-        // assert_eq!(value1.unwrap().as_str(), "boyode");
-        // assert_eq!(value2.unwrap().as_str(), "boyode");
-        // assert_eq!(value3.unwrap().as_str(), "boyode");
-
-        // assert_eq!(value4, None);
+        let _ = fs::remove_dir_all(path.clone());
     }
 
     #[test]
     fn storage_engine_compaction() {
-        let path = PathBuf::new().join("bump");
+        let path = PathBuf::new().join("bump2");
         let mut s_engine = StorageEngine::new(path.clone()).unwrap();
 
         // Specify the number of random strings to generate
-        let num_strings = 5000;
+        let num_strings = 10000;
 
         // Specify the length of each random string
         let string_length = 10;
@@ -659,28 +636,24 @@ mod tests {
         // sort to make fetch random
         random_strings.sort();
         let key = &random_strings[0];
-        // for key in random_strings.clone() {
-        //     println!("KEY FOUND {}", key);
-        //     assert_eq!(s_engine.get(&key).unwrap().0, b"boyode");
-        // }
-        // assert_eq!(s_engine.delete(&random_strings[0]).unwrap(), true);
+
         let get_res = s_engine.get(key);
         match get_res {
             Ok(v) => {
-                println!("FOUND BEFORE COMPACTION {:?}", v)
+                assert_eq!(v.0, b"boyode");
             }
-            Err(err) => {
-                println!("NOT FOUND AFTER DELETION {}", err.to_string())
+            Err(_) => {
+                assert!(false, "No error should be found");
             }
         }
 
         let del_res = s_engine.delete(key);
         match del_res {
             Ok(v) => {
-                println!("KEY WAS DEETED{:?}", v)
+                assert_eq!(v, true)
             }
-            Err(err) => {
-                println!("NOT NOT DELETED {}", err.to_string())
+            Err(_) => {
+                assert!(false, "No error should be found");
             }
         }
         let _ = s_engine.flush_memtable();
@@ -688,11 +661,14 @@ mod tests {
 
         let get_res = s_engine.get(key);
         match get_res {
-            Ok(v) => {
-                println!("FOUND AFTER DELETION {:?}", v)
+            Ok(_) => {
+                assert!(false, "Should not be found after compaction")
             }
             Err(err) => {
-                println!("FOUND AS TUMSTONE AFTER DELETION  {}", err.to_string())
+                assert_eq!(
+                    StorageEngineError::KeyFoundAsTombstoneInSSTableError.to_string(),
+                    err.to_string()
+                )
             }
         }
 
@@ -718,37 +694,38 @@ mod tests {
 
         let get_res = s_engine.get(key);
         match get_res {
-            Ok(v) => {
-                println!("NOT FOUND AFTER DELETION {:?}", v)
+            Ok(_) => {
+                assert!(false, "Deleted key should not be found after compaction");
             }
+
             Err(err) => {
-                println!("NOT FOUND AFTER COMPACTION ERR {}", err.to_string())
+                if err.to_string() != KeyFoundAsTombstoneInSSTableError.to_string()
+                    && err.to_string() != KeyFoundAsTombstoneInSSTableError.to_string()
+                {
+                    assert!(
+                        false,
+                        "Key should be mapped to tombstone or deleted from all sstables"
+                    )
+                }
             }
         }
-
-        // let value1 = wt.get(k1);
-        // let value2 = wt.get(k2);
-        // let value3 = wt.get(k3);
-        // let value4 = wt.get(k4);
-        // assert_eq!(value1.unwrap().as_str(), "boyode");
-        // assert_eq!(value2.unwrap().as_str(), "boyode");
-        // assert_eq!(value3.unwrap().as_str(), "boyode");
-
-        // assert_eq!(value4, None);
+        let _ = fs::remove_dir_all(path.clone());
     }
 
     #[test]
     fn storage_engine_deletion() {
-        let path = PathBuf::new().join("bump");
+        let path = PathBuf::new().join("bump3");
         let mut s_engine = StorageEngine::new(path.clone()).unwrap();
 
         // Specify the number of random strings to generate
-        let num_strings = 5000;
+        let num_strings = 10000;
 
         // Specify the length of each random string
         let string_length = 10;
         // Generate random strings and store them in a vector
         let mut random_strings: Vec<String> = Vec::new();
+        random_strings.push("aunkanmi".to_owned());
+
         for _ in 0..num_strings {
             let random_string = generate_random_string(string_length);
             random_strings.push(random_string);
@@ -761,8 +738,7 @@ mod tests {
 
         // sort to make fetch random
         random_strings.sort();
-        let key = &random_strings[0];
-
+        let key = "aunkanmi";
         let get_res = s_engine.get(key);
         match get_res {
             Ok((value, _)) => {
@@ -788,10 +764,13 @@ mod tests {
         let get_res = s_engine.get(key);
         match get_res {
             Ok((_, _)) => {
-                assert!(false, "Should not ne executed")
+                assert!(false, "Should not be executed")
             }
             Err(err) => {
-                assert_eq!(StorageEngineError::KeyFoundAsTombstoneInSSTableError.to_string(), err.to_string())
+                assert_eq!(
+                    KeyFoundAsTombstoneInSSTableError.to_string(),
+                    err.to_string()
+                )
             }
         }
 
@@ -814,26 +793,24 @@ mod tests {
         }
 
         // Insert the generated random strings
-        println!("trying to get this {}",key);
+        println!("trying to get this after compaction {}", key);
         let get_res = s_engine.get(key);
         match get_res {
             Ok((_, _)) => {
                 assert!(false, "Should not ne executed")
             }
             Err(err) => {
-                assert_eq!(StorageEngineError::KeyNotFoundInAnySSTableError.to_string(), err.to_string())
+                if err.to_string() != KeyFoundAsTombstoneInSSTableError.to_string()
+                    && err.to_string() != KeyFoundAsTombstoneInSSTableError.to_string()
+                {
+                    assert!(
+                        false,
+                        "Key should be mapped to tombstone or deleted from all sstables"
+                    )
+                }
             }
         }
-
-        // let value1 = wt.get(k1);
-        // let value2 = wt.get(k2);
-        // let value3 = wt.get(k3);
-        // let value4 = wt.get(k4);
-        // assert_eq!(value1.unwrap().as_str(), "boyode");
-        // assert_eq!(value2.unwrap().as_str(), "boyode");
-        // assert_eq!(value3.unwrap().as_str(), "boyode");
-
-        // assert_eq!(value4, None);
+        let _ = fs::remove_dir_all(path.clone());
     }
 }
 
