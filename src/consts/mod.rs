@@ -40,9 +40,16 @@ pub const DEFAULT_PREFETCH_SIZE: usize = 32;
 
 pub const EOF: &str = "EOF";
 
+pub const HEAD_ENTRY_KEY: &[u8; 4] = b"head";
+
+pub const TAIL_ENTRY_KEY: &[u8; 4] = b"tail";
 // 4 bytes to store length of key "head"
 // 4 bytes to store the actual key "head"
 // 4 bytes to store the head offset
 // 8 bytes to store the head entry creation date
 // 1 byte for tombstone marker
 pub const HEAD_ENTRY_LENGTH: usize = 21;
+
+pub const VLOG_TAIL_ENTRY_LENGTH: usize = 21;
+
+

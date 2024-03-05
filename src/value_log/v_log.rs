@@ -3,7 +3,7 @@ use std::{
     io::{self, Read, Seek, SeekFrom, Write},
     mem,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
 use crate::{
@@ -12,7 +12,9 @@ use crate::{
 };
 use StorageEngineError::*;
 pub struct ValueLog {
-    file: Arc<Mutex<File>>,
+    pub file: Arc<File>,
+    pub head_offset: usize,
+    pub tail_offset: usize,
 }
 
 #[derive(PartialEq, Debug)]
@@ -49,21 +51,27 @@ impl ValueLog {
             })?;
 
         Ok(Self {
-            file: Arc::new(Mutex::new(log_file)),
+            file: Arc::new(log_file),
+            head_offset: 0,
+            tail_offset: 0,
         })
     }
 
+    pub fn set_head(&mut self, head: usize) {
+        self.head_offset = head;
+    }
+
+    pub fn set_tail(&mut self, tail: usize) {
+        self.tail_offset = tail;
+    }
+
     pub fn append(
-        &self,
+        &mut self,
         key: &Vec<u8>,
         value: &Vec<u8>,
         created_at: u64,
         is_tombstone: bool,
     ) -> Result<usize, StorageEngineError> {
-        let mut log_file = self
-            .file
-            .lock()
-            .map_err(|poison_err| FileLockError(poison_err.to_string()))?;
         let v_log_entry = ValueLogEntry::new(
             key.len(),
             value.len(),
@@ -75,26 +83,26 @@ impl ValueLog {
         let serialized_data = v_log_entry.serialize();
 
         // Get the current offset before writing(this will be the offset of the value stored in the memtable)
-        let value_offset = log_file
+        let value_offset = self
+            .file
             .seek(io::SeekFrom::End(0))
             .map_err(|err| FileSeekError(err))?;
 
-        log_file
+        self.file
             .write_all(&serialized_data)
             .expect("Failed to write to value log entry");
-        log_file
+        self.file
             .flush()
             .map_err(|error| VLogFileWriteError(error.to_string()))?;
 
         Ok(value_offset.try_into().unwrap())
     }
 
-    pub fn get(&mut self, start_offset: usize) -> Result<Option<(Vec<u8>, bool)>, StorageEngineError> {
-        let mut log_file = self
-            .file
-            .lock()
-            .map_err(|poison_err| FileLockError(poison_err.to_string()))?;
-        log_file
+    pub fn get(
+        &mut self,
+        start_offset: usize,
+    ) -> Result<Option<(Vec<u8>, bool)>, StorageEngineError> {
+        self.file
             .seek(SeekFrom::Start(start_offset as u64))
             .map_err(|err| ValueLogFileReadError {
                 error: io::Error::new(err.kind(), EOF),
@@ -103,7 +111,7 @@ impl ValueLog {
         // get key length
         let mut key_len_bytes = [0; mem::size_of::<u32>()];
         let bytes_read =
-            log_file
+            self.file
                 .read(&mut key_len_bytes)
                 .map_err(|err| ValueLogFileReadError {
                     error: io::Error::new(err.kind(), EOF),
@@ -116,7 +124,7 @@ impl ValueLog {
         // get value length
         let mut val_len_bytes = [0; mem::size_of::<u32>()];
         let bytes_read =
-            log_file
+            self.file
                 .read(&mut val_len_bytes)
                 .map_err(|err| ValueLogFileReadError {
                     error: io::Error::new(err.kind(), EOF),
@@ -129,7 +137,7 @@ impl ValueLog {
         // get date length
         let mut creation_date_bytes = [0; mem::size_of::<u64>()];
         let bytes_read =
-            log_file
+            self.file
                 .read(&mut creation_date_bytes)
                 .map_err(|err| ValueLogFileReadError {
                     error: io::Error::new(err.kind(), EOF),
@@ -142,7 +150,7 @@ impl ValueLog {
         // get tombstone
         let mut istombstone_bytes = [0; mem::size_of::<u8>()];
         let mut bytes_read =
-            log_file
+            self.file
                 .read(&mut istombstone_bytes)
                 .map_err(|err| ValueLogFileReadError {
                     error: io::Error::new(err.kind(), EOF),
@@ -154,7 +162,8 @@ impl ValueLog {
         let is_tombstone = istombstone_bytes[0] == 1;
 
         let mut key = vec![0; key_len as usize];
-        bytes_read = log_file
+        bytes_read = self
+            .file
             .read(&mut key)
             .map_err(|err| ValueLogFileReadError {
                 error: io::Error::new(err.kind(), EOF),
@@ -164,7 +173,8 @@ impl ValueLog {
         }
 
         let mut value = vec![0; val_len as usize];
-        bytes_read = log_file
+        bytes_read = self
+            .file
             .read(&mut value)
             .map_err(|err| ValueLogFileReadError {
                 error: io::Error::new(err.kind(), EOF),
@@ -180,11 +190,7 @@ impl ValueLog {
         &mut self,
         start_offset: usize,
     ) -> Result<Vec<ValueLogEntry>, StorageEngineError> {
-        let mut log_file = self
-            .file
-            .lock()
-            .map_err(|poison_err| FileLockError(poison_err.to_string()))?;
-        log_file
+        self.file
             .seek(SeekFrom::Start(start_offset as u64))
             .map_err(|err| FileSeekError(err))?;
         let mut entries = Vec::new();
@@ -192,7 +198,7 @@ impl ValueLog {
             // get key length
             let mut key_len_bytes = [0; mem::size_of::<u32>()];
             let bytes_read =
-                log_file
+                self.file
                     .read(&mut key_len_bytes)
                     .map_err(|err| ValueLogFileReadError {
                         error: io::Error::new(err.kind(), EOF),
@@ -205,7 +211,7 @@ impl ValueLog {
             // get value length
             let mut val_len_bytes = [0; mem::size_of::<u32>()];
             let bytes_read =
-                log_file
+                self.file
                     .read(&mut val_len_bytes)
                     .map_err(|err| ValueLogFileReadError {
                         error: io::Error::new(err.kind(), EOF),
@@ -221,7 +227,7 @@ impl ValueLog {
             // get date length
             let mut creation_date_bytes = [0; mem::size_of::<u64>()];
             let bytes_read =
-                log_file
+                self.file
                     .read(&mut creation_date_bytes)
                     .map_err(|err| ValueLogFileReadError {
                         error: io::Error::new(err.kind(), EOF),
@@ -236,7 +242,7 @@ impl ValueLog {
             // is tombstone
             let mut istombstone_bytes = [0; mem::size_of::<u8>()];
             let mut bytes_read =
-                log_file
+                self.file
                     .read(&mut istombstone_bytes)
                     .map_err(|err| ValueLogFileReadError {
                         error: io::Error::new(err.kind(), EOF),
@@ -251,7 +257,8 @@ impl ValueLog {
             let created_at = u64::from_le_bytes(creation_date_bytes);
 
             let mut key = vec![0; key_len as usize];
-            bytes_read = log_file
+            bytes_read = self
+                .file
                 .read(&mut key)
                 .map_err(|err| ValueLogFileReadError {
                     error: io::Error::new(err.kind(), EOF),
@@ -264,7 +271,8 @@ impl ValueLog {
             }
 
             let mut value = vec![0; val_len as usize];
-            bytes_read = log_file
+            bytes_read = self
+                .file
                 .read(&mut value)
                 .map_err(|err| ValueLogFileReadError {
                     error: io::Error::new(err.kind(), EOF),
@@ -286,6 +294,131 @@ impl ValueLog {
                 created_at,
                 is_tombstone,
             })
+        }
+    }
+
+    pub fn read_chunk_to_garbage_collect(
+        &mut self,
+        bytes_to_collect: usize,
+    ) -> Result<Vec<ValueLogEntry>, StorageEngineError> {
+        self.file
+            .seek(SeekFrom::Start(self.tail_offset as u64))
+            .map_err(|err| FileSeekError(err))?;
+        let mut entries = Vec::new();
+
+        let mut total_bytes_read = 0;
+
+        loop {
+            // get key length
+            let mut key_len_bytes = [0; mem::size_of::<u32>()];
+            let bytes_read =
+                self.file
+                    .read(&mut key_len_bytes)
+                    .map_err(|err| ValueLogFileReadError {
+                        error: io::Error::new(err.kind(), EOF),
+                    })?;
+            if bytes_read == 0 {
+                return Ok(entries);
+            }
+            total_bytes_read += bytes_read;
+            let key_len = u32::from_le_bytes(key_len_bytes);
+
+            // get value length
+            let mut val_len_bytes = [0; mem::size_of::<u32>()];
+            let bytes_read =
+                self.file
+                    .read(&mut val_len_bytes)
+                    .map_err(|err| ValueLogFileReadError {
+                        error: io::Error::new(err.kind(), EOF),
+                    })?;
+            if bytes_read == 0 {
+                return Err(UnexpectedEOF(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    EOF,
+                )));
+            }
+            total_bytes_read += bytes_read;
+            let val_len = u32::from_le_bytes(val_len_bytes);
+
+            // get date length
+            let mut creation_date_bytes = [0; mem::size_of::<u64>()];
+            let bytes_read =
+                self.file
+                    .read(&mut creation_date_bytes)
+                    .map_err(|err| ValueLogFileReadError {
+                        error: io::Error::new(err.kind(), EOF),
+                    })?;
+            if bytes_read == 0 {
+                return Err(UnexpectedEOF(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    EOF,
+                )));
+            }
+            total_bytes_read += bytes_read;
+
+            // is tombstone
+            let mut istombstone_bytes = [0; mem::size_of::<u8>()];
+            let mut bytes_read =
+                self.file
+                    .read(&mut istombstone_bytes)
+                    .map_err(|err| ValueLogFileReadError {
+                        error: io::Error::new(err.kind(), EOF),
+                    })?;
+            if bytes_read == 0 {
+                return Err(UnexpectedEOF(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    EOF,
+                )));
+            }
+            total_bytes_read += bytes_read;
+
+            let created_at = u64::from_le_bytes(creation_date_bytes);
+
+            let mut key = vec![0; key_len as usize];
+            bytes_read = self
+                .file
+                .read(&mut key)
+                .map_err(|err| ValueLogFileReadError {
+                    error: io::Error::new(err.kind(), EOF),
+                })?;
+            if bytes_read == 0 {
+                return Err(UnexpectedEOF(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    EOF,
+                )));
+            }
+            total_bytes_read += bytes_read;
+
+            let mut value = vec![0; val_len as usize];
+            bytes_read = self
+                .file
+                .read(&mut value)
+                .map_err(|err| ValueLogFileReadError {
+                    error: io::Error::new(err.kind(), EOF),
+                })?;
+
+            if bytes_read == 0 {
+                return Err(UnexpectedEOF(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    EOF,
+                )));
+            }
+            total_bytes_read += bytes_read;
+
+            let is_tombstone = istombstone_bytes[0] == 1;
+            entries.push(ValueLogEntry {
+                ksize: key_len as usize,
+                vsize: val_len as usize,
+                key,
+                value,
+                created_at,
+                is_tombstone,
+            });
+
+            // Ensure the size read from value log is approximately bytes expected to be garbage collected
+            if total_bytes_read >= bytes_to_collect {
+                return Ok(entries);
+            }
         }
     }
 }

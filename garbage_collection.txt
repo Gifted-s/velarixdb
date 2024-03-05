@@ -4,8 +4,8 @@
 
 2. Only the part of the vLog between the head and the tail contains valid values 
    and will be searched during lookups.
-
-3. Read the first chunk of key-value pairs from the tail to head of the vLog
+   
+3. Read some chunks of key-value pairs(Several Megabytes) from the tail to head of the vLog
 
 4. Find which of those values are valid (not yet overwritten or deleted) by querying the LSM-tree.
 

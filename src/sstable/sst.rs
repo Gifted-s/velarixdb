@@ -7,7 +7,7 @@ use std::{
     io::{self, Read, Write},
     mem,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
 use crate::{
@@ -102,7 +102,7 @@ impl SSTable {
     pub(crate) fn write_to_file(&self) -> Result<(), StorageEngineError> {
         // Open the file in write mode with the append flag.
         let file_path = PathBuf::from(&self.file_path);
-        let file = OpenOptions::new()
+        let mut file = OpenOptions::new()
             .append(true)
             .open(file_path.clone())
             .map_err(|err| SSTableFileOpenError {
@@ -110,12 +110,8 @@ impl SSTable {
                 error: err,
             })?;
 
-        let file_mutex = Mutex::new(file);
-
         // This will store the head offset(this stores the most recent value offset)
         let mut head_offset = 0;
-
-        let mut locked_file = file_mutex.lock().unwrap();
         self.index.iter().for_each(|e| {
             let entry = Entry::new(e.key().clone(), e.value().0, e.value().1, e.value().2);
 
@@ -141,15 +137,15 @@ impl SSTable {
             //write date created in milliseconds
             entry_vec.extend_from_slice(&entry.created_at.to_le_bytes());
 
-             //write is tombstone to file
-             entry_vec.push(entry.is_tombstone as u8);
+            //write is tombstone to file
+            entry_vec.push(entry.is_tombstone as u8);
 
             //write to file
-            locked_file.write_all(&entry_vec).unwrap();
+            file.write_all(&entry_vec).unwrap();
 
             assert!(entry_len == entry_vec.len(), "Incorrect entry size");
 
-            locked_file.flush().unwrap();
+            file.flush().unwrap();
 
             // We check that the head offset is less than the value offset because
             // there is no gurantee that the value offset of the next key will be greater than
@@ -171,7 +167,7 @@ impl SSTable {
     ) -> Result<Option<(usize, u64, bool)>, StorageEngineError> {
         // Open the file in read mode
         let file_path = PathBuf::from(&self.file_path);
-        let file = OpenOptions::new()
+        let mut file = OpenOptions::new()
             .read(true)
             .open(file_path.clone())
             .map_err(|err| SSTableFileOpenError {
@@ -179,17 +175,13 @@ impl SSTable {
                 error: err,
             })?;
 
-        let file_mutex = Mutex::new(file);
-
         // read bloom filter to check if the key possbly exists in the sstable
-        let mut locked_file = file_mutex.lock().unwrap();
 
         // search sstable for key
         loop {
             let mut key_len_bytes = [0; mem::size_of::<u32>()];
             let mut bytes_read =
-                locked_file
-                    .read(&mut key_len_bytes)
+                file.read(&mut key_len_bytes)
                     .map_err(|err| SSTableFileReadError {
                         path: file_path.clone(),
                         error: err,
@@ -200,8 +192,19 @@ impl SSTable {
             let key_len = u32::from_le_bytes(key_len_bytes);
 
             let mut key = vec![0; key_len as usize];
-            bytes_read = locked_file
-                .read(&mut key)
+            bytes_read = file.read(&mut key).map_err(|err| SSTableFileReadError {
+                path: file_path.clone(),
+                error: err,
+            })?;
+            if bytes_read == 0 {
+                return Err(UnexpectedEOF(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    EOF,
+                )));
+            }
+            let mut val_offset_bytes = [0; mem::size_of::<u32>()];
+            bytes_read = file
+                .read(&mut val_offset_bytes)
                 .map_err(|err| SSTableFileReadError {
                     path: file_path.clone(),
                     error: err,
@@ -212,28 +215,13 @@ impl SSTable {
                     EOF,
                 )));
             }
-            let mut val_offset_bytes = [0; mem::size_of::<u32>()];
-            bytes_read =
-                locked_file
-                    .read(&mut val_offset_bytes)
-                    .map_err(|err| SSTableFileReadError {
-                        path: file_path.clone(),
-                        error: err,
-                    })?;
-            if bytes_read == 0 {
-                return Err(UnexpectedEOF(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    EOF,
-                )));
-            }
             let mut created_at_bytes = [0; mem::size_of::<u64>()];
-            bytes_read =
-                locked_file
-                    .read(&mut created_at_bytes)
-                    .map_err(|err| SSTableFileReadError {
-                        path: file_path.clone(),
-                        error: err,
-                    })?;
+            bytes_read = file
+                .read(&mut created_at_bytes)
+                .map_err(|err| SSTableFileReadError {
+                    path: file_path.clone(),
+                    error: err,
+                })?;
             if bytes_read == 0 {
                 return Err(UnexpectedEOF(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
@@ -242,22 +230,18 @@ impl SSTable {
             }
 
             let mut is_tombstone_byte = [0; 1];
-            bytes_read =
-                locked_file
-                    .read(&mut is_tombstone_byte)
-                    .map_err(|err| SSTableFileReadError {
-                        path: file_path.clone(),
-                        error: err,
-                    })?;
+            bytes_read = file
+                .read(&mut is_tombstone_byte)
+                .map_err(|err| SSTableFileReadError {
+                    path: file_path.clone(),
+                    error: err,
+                })?;
             if bytes_read == 0 {
                 return Err(UnexpectedEOF(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
                     EOF,
                 )));
             }
-
-
-
 
             let created_at = u64::from_le_bytes(created_at_bytes);
             let value_offset = u32::from_le_bytes(val_offset_bytes);
@@ -272,7 +256,6 @@ impl SSTable {
     pub(crate) fn build_bloomfilter_from_sstable(
         index: &Arc<SkipMap<Vec<u8>, (usize, u64, bool)>>,
     ) -> BloomFilter {
-
         //TODO: FALSE POS should be from config
         // Rebuild the bloom filter since a new sstable has been created
         let mut new_bloom_filter = BloomFilter::new(DEFAULT_FALSE_POSITIVE_RATE, index.len());
@@ -310,7 +293,12 @@ impl SSTable {
         self.size = self
             .index
             .iter()
-            .map(|e| e.key().len() + mem::size_of::<usize>() + mem::size_of::<u64>() + mem::size_of::<u8>())
+            .map(|e| {
+                e.key().len()
+                    + mem::size_of::<usize>()
+                    + mem::size_of::<u64>()
+                    + mem::size_of::<u8>()
+            })
             .sum::<usize>();
     }
 
@@ -334,23 +322,20 @@ impl SSTable {
             return Ok(None);
         }
 
-        let file = OpenOptions::new()
+        let mut file = OpenOptions::new()
             .read(true)
             .open(sstable_file_path.clone())
             .map_err(|err| SSTableFileOpenError {
                 path: sstable_file_path.clone(),
                 error: err,
             })?;
-        let file_mutex = Mutex::new(file);
 
         // read bloom filter to check if the key possbly exists in the sstable
-        let mut locked_file = file_mutex.lock().unwrap();
         // search sstable for key
         loop {
             let mut key_len_bytes = [0; mem::size_of::<u32>()];
             let mut bytes_read =
-                locked_file
-                    .read(&mut key_len_bytes)
+                file.read(&mut key_len_bytes)
                     .map_err(|err| SSTableFileReadError {
                         path: sstable_file_path.clone(),
                         error: err,
@@ -361,8 +346,19 @@ impl SSTable {
             let key_len = u32::from_le_bytes(key_len_bytes);
 
             let mut key = vec![0; key_len as usize];
-            bytes_read = locked_file
-                .read(&mut key)
+            bytes_read = file.read(&mut key).map_err(|err| SSTableFileReadError {
+                path: sstable_file_path.clone(),
+                error: err,
+            })?;
+            if bytes_read == 0 {
+                return Err(UnexpectedEOF(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    EOF,
+                )));
+            }
+            let mut val_offset_bytes = [0; mem::size_of::<u32>()];
+            bytes_read = file
+                .read(&mut val_offset_bytes)
                 .map_err(|err| SSTableFileReadError {
                     path: sstable_file_path.clone(),
                     error: err,
@@ -373,28 +369,13 @@ impl SSTable {
                     EOF,
                 )));
             }
-            let mut val_offset_bytes = [0; mem::size_of::<u32>()];
-            bytes_read =
-                locked_file
-                    .read(&mut val_offset_bytes)
-                    .map_err(|err| SSTableFileReadError {
-                        path: sstable_file_path.clone(),
-                        error: err,
-                    })?;
-            if bytes_read == 0 {
-                return Err(UnexpectedEOF(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    EOF,
-                )));
-            }
             let mut created_at_bytes = [0; mem::size_of::<u64>()];
-            bytes_read =
-                locked_file
-                    .read(&mut created_at_bytes)
-                    .map_err(|err| SSTableFileReadError {
-                        path: sstable_file_path.clone(),
-                        error: err,
-                    })?;
+            bytes_read = file
+                .read(&mut created_at_bytes)
+                .map_err(|err| SSTableFileReadError {
+                    path: sstable_file_path.clone(),
+                    error: err,
+                })?;
             if bytes_read == 0 {
                 return Err(UnexpectedEOF(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
@@ -403,13 +384,12 @@ impl SSTable {
             }
 
             let mut is_tombstone_byte = [0; 1];
-            bytes_read =
-                locked_file
-                    .read(&mut is_tombstone_byte)
-                    .map_err(|err| SSTableFileReadError {
-                        path: sstable_file_path.clone(),
-                        error: err,
-                    })?;
+            bytes_read = file
+                .read(&mut is_tombstone_byte)
+                .map_err(|err| SSTableFileReadError {
+                    path: sstable_file_path.clone(),
+                    error: err,
+                })?;
             if bytes_read == 0 {
                 return Err(UnexpectedEOF(io::Error::new(
                     io::ErrorKind::UnexpectedEof,

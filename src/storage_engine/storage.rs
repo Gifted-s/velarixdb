@@ -3,9 +3,8 @@ use crate::{
     cfg::Config,
     compaction::{Bucket, BucketMap, Compactor},
     consts::{
-        BUCKETS_DIRECTORY_NAME, DEFAULT_ALLOW_PREFETCH, DEFAULT_FALSE_POSITIVE_RATE,
-        DEFAULT_MEMTABLE_CAPACITY, DEFAULT_PREFETCH_SIZE, ENABLE_TTL, ENTRY_TTL, GC_THREAD_COUNT,
-        HEAD_ENTRY_LENGTH, META_DIRECTORY_NAME, TOMB_STONE, VALUE_LOG_DIRECTORY_NAME,
+        BUCKETS_DIRECTORY_NAME, DEFAULT_MEMTABLE_CAPACITY, HEAD_ENTRY_KEY, HEAD_ENTRY_LENGTH,
+        META_DIRECTORY_NAME, TAIL_ENTRY_KEY, TOMB_STONE, VALUE_LOG_DIRECTORY_NAME,
     },
     err::StorageEngineError,
     memtable::{Entry, InMemoryTable},
@@ -103,8 +102,12 @@ impl StorageEngine<Vec<u8>> {
             let size_unit = self.memtable.size_unit();
             let false_positive_rate = self.memtable.false_positive_rate();
             let head_offset = self.memtable.index.iter().max_by_key(|e| e.value().0);
+
+            // reset head in vLog
+            self.val_log
+                .set_head(head_offset.clone().unwrap().value().0);
             let head_entry = Entry::new(
-                b"head".to_vec(),
+                HEAD_ENTRY_KEY.to_vec(),
                 head_offset.unwrap().value().0,
                 Utc::now().timestamp_millis() as u64,
                 false,
@@ -327,14 +330,30 @@ impl StorageEngine<Vec<u8>> {
             !vlog_exit || fs::metadata(vlog_path).map_err(GetFileMetaDataError)?.len() == 0;
 
         let key_index = LevelsBiggestKeys::new(Vec::new());
-        let vlog = ValueLog::new(vlog_path)?;
+        let mut vlog = ValueLog::new(vlog_path)?;
         let meta = Meta::new(&dir.meta);
         if vlog_empty {
-            let memtable = InMemoryTable::with_specified_capacity_and_rate(
+            let mut memtable = InMemoryTable::with_specified_capacity_and_rate(
                 size_unit,
                 capacity,
                 config.false_positive_rate,
             );
+
+            // if ValueLog is empty then we want to insert both tail and head offset as 0
+            let created_at = Utc::now().timestamp_millis() as u64;
+
+            let tail_offset = vlog.append(&TAIL_ENTRY_KEY.to_vec(), &vec![], created_at, false)?;
+            let tail_entry = Entry::new(TAIL_ENTRY_KEY.to_vec(), tail_offset, created_at, false);
+
+            let head_offset = vlog.append(&HEAD_ENTRY_KEY.to_vec(), &vec![], created_at, false)?;
+            let head_entry = Entry::new(HEAD_ENTRY_KEY.to_vec(), head_offset, created_at, false);
+
+            vlog.set_head(head_offset);
+            vlog.set_tail(tail_offset);
+
+            // insert tail and head to memtable
+            memtable.insert(&tail_entry.to_owned())?;
+            memtable.insert(&head_entry.to_owned())?;
 
             return Ok(Self {
                 memtable,
@@ -353,6 +372,9 @@ impl StorageEngine<Vec<u8>> {
         let mut bloom_filters: Vec<BloomFilter> = Vec::new();
         let mut most_recent_head_timestamp = 0;
         let mut most_recent_head_offset = 0;
+
+        let mut most_recent_tail_timestamp = 0;
+        let mut most_recent_tail_offset = 0;
 
         // engine_root/buckets/bucket{id}
         for buckets_directories in
@@ -413,12 +435,23 @@ impl StorageEngine<Vec<u8>> {
 
                         // We need to fetch the most recent write offset so it can
                         // use it to recover entries not written into sstables from value log
-                        let fetch_result = sstable.get_value_from_index(b"head");
+                        let head_entry = sstable.get_value_from_index(HEAD_ENTRY_KEY);
 
-                        if let Some((head_offset, date_created, _)) = fetch_result {
+                        let tail_entry = sstable.get_value_from_index(TAIL_ENTRY_KEY);
+
+                        // update head
+                        if let Some((head_offset, date_created, _)) = head_entry {
                             if date_created > most_recent_head_timestamp {
                                 most_recent_head_offset = head_offset;
                                 most_recent_head_timestamp = date_created;
+                            }
+                        }
+
+                        // update tail
+                        if let Some((tail_offset, date_created, _)) = tail_entry {
+                            if date_created > most_recent_tail_timestamp {
+                                most_recent_tail_offset = tail_offset;
+                                most_recent_tail_timestamp = date_created;
                             }
                         }
 
@@ -433,6 +466,10 @@ impl StorageEngine<Vec<u8>> {
 
         let mut buckets_map = BucketMap::new(buckets_path.clone());
         buckets_map.set_buckets(recovered_buckets);
+
+        // store vLog head and tail in memory
+        vlog.set_head(most_recent_head_offset);
+        vlog.set_tail(most_recent_tail_offset);
 
         // recover memtable
         let recover_result = StorageEngine::recover_memtable(
