@@ -17,6 +17,14 @@ pub enum StorageEngineError {
     #[error("Failed to read sstsable file `{path}`: {error}")]
     SSTableFileReadError { path: PathBuf, error: io::Error },
 
+    /// There was an error while atttempting to wrtie to a sstbale file
+    #[error("Failed to write to sstsable file `{path}`: {error}")]
+    SSTableWriteError { path: PathBuf, error: io::Error },
+
+    /// There was an error while atttempting to flush sstable write to disk
+    #[error("Failed to flush write to disk for sstable `{path}`: {error}")]
+    SSTableFlushError { path: PathBuf, error: io::Error },
+
     /// There was an error while atttempting to read from sstbale file
     #[error("Failed to open bucket directory `{path}`: {error}")]
     BucketDirectoryOpenError { path: PathBuf, error: io::Error },

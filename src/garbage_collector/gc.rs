@@ -77,7 +77,7 @@ impl GarbageCollector {
        // let valid_entries = Vec::new();
         // Step 1: Read chunks to garbage collect
         // TODO handle errors
-        let entries = engine.val_log.read_chunk_to_garbage_collect(SizeUnit::Kilobytes.to_bytes(1))?;
+        let _ = engine.val_log.read_chunk_to_garbage_collect(SizeUnit::Kilobytes.to_bytes(1)).await?;
         //tokio::join!();
         // Step 2: 
 

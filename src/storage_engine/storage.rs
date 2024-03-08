@@ -4,7 +4,7 @@ use crate::{
     compaction::{Bucket, BucketMap, Compactor},
     consts::{
         BUCKETS_DIRECTORY_NAME, DEFAULT_MEMTABLE_CAPACITY, HEAD_ENTRY_KEY, HEAD_ENTRY_LENGTH,
-        META_DIRECTORY_NAME, TAIL_ENTRY_KEY, TOMB_STONE, VALUE_LOG_DIRECTORY_NAME,
+        META_DIRECTORY_NAME, TAIL_ENTRY_KEY, TOMB_STONE_MARKER, VALUE_LOG_DIRECTORY_NAME,
     },
     err::StorageEngineError,
     memtable::{Entry, InMemoryTable},
@@ -13,8 +13,7 @@ use crate::{
     value_log::ValueLog,
 };
 use chrono::Utc;
-use log::info;
-use num_traits::ToBytes;
+
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 use std::hash::Hash;
@@ -22,6 +21,8 @@ use std::{collections::HashMap, fs, mem, path::PathBuf};
 
 use crate::err::StorageEngineError::*;
 
+
+#[derive(Clone, Debug)]
 pub struct StorageEngine<K: Hash + PartialOrd + std::cmp::Ord> {
     pub dir: DirPath,
     pub memtable: InMemoryTable<K>,
@@ -60,7 +61,7 @@ pub enum SizeUnit {
 }
 
 impl StorageEngine<Vec<u8>> {
-    pub fn new(dir: PathBuf) -> Result<Self, StorageEngineError> {
+    pub async fn new(dir: PathBuf) -> Result<Self, StorageEngineError> {
         let dir = DirPath::build(dir);
         let default_config = Config::default();
 
@@ -70,9 +71,10 @@ impl StorageEngine<Vec<u8>> {
             DEFAULT_MEMTABLE_CAPACITY,
             &default_config,
         )
+        .await
     }
 
-    pub fn new_with_custom_config(
+    pub async fn new_with_custom_config(
         dir: PathBuf,
         config: &Config,
     ) -> Result<Self, StorageEngineError> {
@@ -83,17 +85,21 @@ impl StorageEngine<Vec<u8>> {
             DEFAULT_MEMTABLE_CAPACITY,
             config,
         )
+        .await
     }
 
     /// A Result indicating success or an `StorageEngineError` if an error occurred.
-    pub fn put(&mut self, key: &str, value: &str) -> Result<bool, StorageEngineError> {
+    pub async fn put(&mut self, key: &str, value: &str) -> Result<bool, StorageEngineError> {
         // Convert the key and value into Vec<u8> from given &str.
         let key = &key.as_bytes().to_vec();
         let value = &value.as_bytes().to_vec();
         let created_at = Utc::now().timestamp_millis() as u64;
         let is_tombstone = false;
         // Write to value log first which returns the offset
-        let v_offset = self.val_log.append(key, value, created_at, is_tombstone)?;
+        let v_offset = self
+            .val_log
+            .append(key, value, created_at, is_tombstone)
+            .await?;
 
         // then check if the length of the memtable + head offset > than memtable length
         // store the head offset in the sstable for recovery in case of crash
@@ -113,7 +119,7 @@ impl StorageEngine<Vec<u8>> {
                 false,
             );
             let _ = self.memtable.insert(&head_entry);
-            let flush_result = self.flush_memtable();
+            let flush_result = self.flush_memtable().await;
             match flush_result {
                 Ok(_) => {
                     self.memtable = InMemoryTable::with_specified_capacity_and_rate(
@@ -140,7 +146,7 @@ impl StorageEngine<Vec<u8>> {
     }
 
     // A Result indicating success or an `io::Error` if an error occurred.
-    pub fn get(&mut self, key: &str) -> Result<(Vec<u8>, u64), StorageEngineError> {
+    pub async fn get(&mut self, key: &str) -> Result<(Vec<u8>, u64), StorageEngineError> {
         let key = key.as_bytes().to_vec();
         let mut offset = 0;
         let mut most_recent_insert_time = 0;
@@ -162,9 +168,10 @@ impl StorageEngine<Vec<u8>> {
                     let mut is_deleted = false;
                     for sst_path in paths.iter() {
                         let sstable = SSTable::new_with_exisiting_file_path(sst_path.get_path());
-                        match sstable.get(&key) {
+                        match sstable.get(&key).await {
                             Ok(result) => {
                                 if let Some((value_offset, created_at, is_tombstone)) = result {
+                                    // println!("Found in this sstable {:?}, {}", sst_path.get_path(), created_at);
                                     if created_at > most_recent_insert_time {
                                         offset = value_offset;
                                         most_recent_insert_time = created_at;
@@ -189,7 +196,7 @@ impl StorageEngine<Vec<u8>> {
         // most_recent_insert_time cannot be zero unless did not find this key in any sstable
         if most_recent_insert_time > 0 {
             // Step 5: Read value from value log based on offset
-            let value: Option<(Vec<u8>, bool)> = self.val_log.get(offset)?;
+            let value: Option<(Vec<u8>, bool)> = self.val_log.get(offset).await?;
             match value {
                 Some((v, is_tombstone)) => {
                     if is_tombstone {
@@ -204,19 +211,22 @@ impl StorageEngine<Vec<u8>> {
     }
 
     /// A Result indicating success or an `io::Error` if an error occurred.
-    pub fn delete(&mut self, key: &str) -> Result<bool, StorageEngineError> {
+    pub async fn delete(&mut self, key: &str) -> Result<bool, StorageEngineError> {
         // First check if the key exist before triggering a deletion
         // Return error if not
-        self.get(key)?;
+        self.get(key).await?;
 
         // Convert the key and value into Vec<u8> from given &str.
         let key = &key.as_bytes().to_vec();
-        let value = &TOMB_STONE.to_le_bytes().to_vec(); // Value will be a thumbstone
+        let value = &TOMB_STONE_MARKER.to_le_bytes().to_vec(); // Value will be a thumbstone
         let created_at = Utc::now().timestamp_millis() as u64;
         let is_tombstone = true;
 
         // Write to value log first which returns the offset
-        let v_offset = self.val_log.append(key, value, created_at, is_tombstone)?;
+        let v_offset = self
+            .val_log
+            .append(key, value, created_at, is_tombstone)
+            .await?;
 
         // then check if the length of the memtable + head offset > than memtable length
         // head offset is stored in sstable for recovery incase of crash
@@ -232,7 +242,8 @@ impl StorageEngine<Vec<u8>> {
                 is_tombstone,
             );
             let _ = self.memtable.insert(&head_entry);
-            let flush_result = self.flush_memtable();
+            println!("================================== Flushing MemTable to To Disk==================================================== SIZE: {}KBs" , self.memtable.size() );
+            let flush_result = self.flush_memtable().await;
             match flush_result {
                 Ok(_) => {
                     self.memtable = InMemoryTable::with_specified_capacity_and_rate(
@@ -258,12 +269,12 @@ impl StorageEngine<Vec<u8>> {
         Ok(true)
     }
 
-    pub fn update(&mut self, key: &str, value: &str) -> Result<bool, StorageEngineError> {
+    pub async fn update(&mut self, key: &str, value: &str) -> Result<bool, StorageEngineError> {
         // Call set method defined in StorageEngine.
-        self.put(key, value)
+        self.put(key, value).await
     }
 
-    pub fn clear(&mut self) -> Result<Self, StorageEngineError> {
+    pub async fn clear(&mut self) -> Result<Self, StorageEngineError> {
         // Get the current capacity.
         let capacity = self.memtable.capacity();
 
@@ -278,51 +289,47 @@ impl StorageEngine<Vec<u8>> {
         // self.val_log.clear()?;
 
         // Call the build method of StorageEngine and return a new instance.
-        StorageEngine::with_capacity_and_rate(self.dir.clone(), size_unit, capacity, &config)
+        StorageEngine::with_capacity_and_rate(self.dir.clone(), size_unit, capacity, &config).await
     }
 
     // if write + head offset is greater than size then flush to disk
-    fn flush_memtable(&mut self) -> Result<(), StorageEngineError> {
+    async fn flush_memtable(&mut self) -> Result<(), StorageEngineError> {
         let hotness = 1;
-        let insert_result = self
+        let sstable_path = self
             .buckets
-            .insert_to_appropriate_bucket(&self.memtable, hotness);
+            .insert_to_appropriate_bucket(&self.memtable, hotness)
+            .await?;
         //write the memtable to the disk as SS Tables
-        match insert_result {
-            Ok(sstable_path) => {
-                // insert to bloom filter
-                let mut bf = self.memtable.get_bloom_filter();
-                bf.set_sstable_path(sstable_path);
-                self.bloom_filters.push(bf);
+        // insert to bloom filter
+        let mut bf = self.memtable.get_bloom_filter();
+        bf.set_sstable_path(sstable_path);
+        self.bloom_filters.push(bf);
 
-                // sort bloom filter by hotness
-                self.bloom_filters.sort_by(|a, b| {
-                    b.get_sstable_path()
-                        .get_hotness()
-                        .cmp(&a.get_sstable_path().get_hotness())
-                });
-                Ok(())
-            }
-            Err(err) => Err(err),
-        }
+        // sort bloom filter by hotness
+        self.bloom_filters.sort_by(|a, b| {
+            b.get_sstable_path()
+                .get_hotness()
+                .cmp(&a.get_sstable_path().get_hotness())
+        });
+        Ok(())
     }
 
-    fn with_default_capacity_and_config(
+    async fn with_default_capacity_and_config(
         dir: DirPath,
         size_unit: SizeUnit,
         capacity: usize,
         config: &Config,
     ) -> Result<Self, StorageEngineError> {
-        Self::with_capacity_and_rate(dir, size_unit, capacity, &config)
+        Self::with_capacity_and_rate(dir, size_unit, capacity, &config).await
     }
 
-    fn with_capacity_and_rate(
+    async fn with_capacity_and_rate(
         dir: DirPath,
         size_unit: SizeUnit,
         capacity: usize,
         config: &Config,
     ) -> Result<Self, StorageEngineError> {
-        let vlog_path = &dir.val_log;
+        let vlog_path = &dir.clone().val_log;
         let buckets_path = dir.buckets.clone();
         let vlog_exit = vlog_path.exists();
         let vlog = ValueLog::new(vlog_path);
@@ -330,7 +337,7 @@ impl StorageEngine<Vec<u8>> {
             !vlog_exit || fs::metadata(vlog_path).map_err(GetFileMetaDataError)?.len() == 0;
 
         let key_index = LevelsBiggestKeys::new(Vec::new());
-        let mut vlog = ValueLog::new(vlog_path)?;
+        let mut vlog = ValueLog::new(vlog_path).await?;
         let meta = Meta::new(&dir.meta);
         if vlog_empty {
             let mut memtable = InMemoryTable::with_specified_capacity_and_rate(
@@ -342,10 +349,14 @@ impl StorageEngine<Vec<u8>> {
             // if ValueLog is empty then we want to insert both tail and head offset as 0
             let created_at = Utc::now().timestamp_millis() as u64;
 
-            let tail_offset = vlog.append(&TAIL_ENTRY_KEY.to_vec(), &vec![], created_at, false)?;
+            let tail_offset = vlog
+                .append(&TAIL_ENTRY_KEY.to_vec(), &vec![], created_at, false)
+                .await?;
             let tail_entry = Entry::new(TAIL_ENTRY_KEY.to_vec(), tail_offset, created_at, false);
 
-            let head_offset = vlog.append(&HEAD_ENTRY_KEY.to_vec(), &vec![], created_at, false)?;
+            let head_offset = vlog
+                .append(&HEAD_ENTRY_KEY.to_vec(), &vec![], created_at, false)
+                .await?;
             let head_entry = Entry::new(HEAD_ENTRY_KEY.to_vec(), head_offset, created_at, false);
 
             vlog.set_head(head_offset);
@@ -416,7 +427,8 @@ impl StorageEngine<Vec<u8>> {
                                 bucket_uuid,
                                 temp_sstables.to_owned(),
                                 0,
-                            );
+                            )
+                            .await?;
                             recovered_buckets.insert(bucket_uuid, updated_bucket);
                         } else {
                             // Create new bucket
@@ -425,13 +437,15 @@ impl StorageEngine<Vec<u8>> {
                                 bucket_uuid,
                                 vec![sst_path.clone()],
                                 0,
-                            );
+                            )
+                            .await?;
                             recovered_buckets.insert(bucket_uuid, updated_bucket);
                         }
 
                         let sstable_from_file =
-                            SSTable::from_file(PathBuf::new().join(sstable_path_str.clone()));
-                        let sstable = sstable_from_file.as_ref().unwrap().as_ref().unwrap();
+                            SSTable::from_file(PathBuf::new().join(sstable_path_str.clone()))
+                                .await?;
+                        let sstable = sstable_from_file.unwrap();
 
                         // We need to fetch the most recent write offset so it can
                         // use it to recover entries not written into sstables from value log
@@ -478,7 +492,8 @@ impl StorageEngine<Vec<u8>> {
             config.false_positive_rate,
             &dir.val_log,
             most_recent_head_offset,
-        );
+        )
+        .await;
 
         match recover_result {
             Ok(memtable) => Ok(Self {
@@ -495,7 +510,7 @@ impl StorageEngine<Vec<u8>> {
             Err(err) => Err(MemTableRecoveryError(Box::new(err))),
         }
     }
-    fn recover_memtable(
+    async fn recover_memtable(
         size_unit: SizeUnit,
         capacity: usize,
         false_positive_rate: f64,
@@ -508,9 +523,9 @@ impl StorageEngine<Vec<u8>> {
             false_positive_rate,
         );
 
-        let mut vlog = ValueLog::new(&vlog_path.clone())?;
+        let mut vlog = ValueLog::new(&vlog_path.clone()).await?;
         let mut most_recent_offset = head_offset;
-        let entries = vlog.recover(head_offset)?;
+        let entries = vlog.recover(head_offset).await?;
 
         for e in entries {
             let entry = Entry::new(
@@ -536,9 +551,10 @@ impl StorageEngine<Vec<u8>> {
         Ok(memtable)
     }
 
-    fn run_compaction(&mut self) -> Result<bool, StorageEngineError> {
+    async fn run_compaction(&mut self) -> Result<bool, StorageEngineError> {
         self.compactor
             .run_compaction(&mut self.buckets, &mut self.bloom_filters)
+            .await
     }
 
     fn get_bucket_id_from_full_bucket_path(full_path: PathBuf) -> String {
@@ -591,20 +607,20 @@ impl SizeUnit {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::bloom_filter;
-    use log::info;
-    use std::fs::remove_dir;
-    use StorageEngineError::*;
+    use std::sync::Arc;
 
+    use super::*;
+    use log::info;
+    use tokio::fs;
+    use tokio::sync::RwLock;
     // Generate test to find keys after compaction
-    #[test]
-    fn storage_engine_create() {
+    #[tokio::test]
+    async fn storage_engine_create() {
         let path = PathBuf::new().join("bump");
-        let mut s_engine = StorageEngine::new(path.clone()).unwrap();
+        let mut s_engine = StorageEngine::new(path.clone()).await.unwrap();
 
         // Specify the number of random strings to generate
-        let num_strings = 10000;
+        let num_strings = 1000;
 
         // Specify the length of each random string
         let string_length = 10;
@@ -617,11 +633,11 @@ mod tests {
 
         // Insert the generated random strings
         for (_, s) in random_strings.iter().enumerate() {
-            s_engine.put(s, "boyode").unwrap();
+            s_engine.put(s, "boyode").await.unwrap();
         }
         // let compactor = Compactor::new();
 
-        let compaction_opt = s_engine.run_compaction();
+        let compaction_opt = s_engine.run_compaction().await;
         match compaction_opt {
             Ok(_) => {
                 println!("Compaction is successful");
@@ -638,23 +654,28 @@ mod tests {
                 info!("Error during compaction {}", err)
             }
         }
-        // sort to make fetch random
+
         random_strings.sort();
 
-        for key in random_strings.clone() {
-            assert_eq!(s_engine.get(&key).unwrap().0, b"boyode");
+        let sg = Arc::new(s_engine);
+
+        for k in random_strings.clone() {
+            let s_engine = sg.clone();
+            let value = tokio::spawn(s_engine.clone().get(&k.clone()));
+            assert_eq!(value.await.unwrap().unwrap().0, b"boyode");
         }
 
-        let _ = fs::remove_dir_all(path.clone());
+        let _ = fs::remove_dir_all(path.clone()).await;
+        // sort to make fetch random
     }
 
-    #[test]
-    fn storage_engine_compaction() {
+    #[tokio::test]
+    async fn storage_engine_compaction() {
         let path = PathBuf::new().join("bump2");
-        let mut s_engine = StorageEngine::new(path.clone()).unwrap();
+        let mut s_engine = StorageEngine::new(path.clone()).await.unwrap();
 
         // Specify the number of random strings to generate
-        let num_strings = 10000;
+        let num_strings = 50000;
 
         // Specify the length of each random string
         let string_length = 10;
@@ -667,7 +688,7 @@ mod tests {
 
         // Insert the generated random strings
         for (_, s) in random_strings.iter().enumerate() {
-            s_engine.put(s, "boyode").unwrap();
+            s_engine.put(s, "boyode").await.unwrap();
         }
 
         // sort to make fetch random
@@ -675,7 +696,7 @@ mod tests {
         let key = &random_strings[0];
 
         let get_res = s_engine.get(key);
-        match get_res {
+        match get_res.await {
             Ok(v) => {
                 assert_eq!(v.0, b"boyode");
             }
@@ -685,7 +706,7 @@ mod tests {
         }
 
         let del_res = s_engine.delete(key);
-        match del_res {
+        match del_res.await {
             Ok(v) => {
                 assert_eq!(v, true)
             }
@@ -697,7 +718,7 @@ mod tests {
         s_engine.memtable.clear();
 
         let get_res = s_engine.get(key);
-        match get_res {
+        match get_res.await {
             Ok(_) => {
                 assert!(false, "Should not be found after compaction")
             }
@@ -710,7 +731,7 @@ mod tests {
         }
 
         let compaction_opt = s_engine.run_compaction();
-        match compaction_opt {
+        match compaction_opt.await {
             Ok(_) => {
                 println!("Compaction is successful");
                 println!(
@@ -730,15 +751,19 @@ mod tests {
         // Insert the generated random strings
 
         let get_res = s_engine.get(key);
-        match get_res {
-            Ok(_) => {
+        match get_res.await {
+            Ok(v) => {
+                println!("{:?}", key);
+                println!("{:?}", String::from_utf8_lossy(&v.0));
                 assert!(false, "Deleted key should not be found after compaction");
             }
 
             Err(err) => {
+                println!("{}", err);
                 if err.to_string() != KeyFoundAsTombstoneInSSTableError.to_string()
-                    && err.to_string() != KeyFoundAsTombstoneInSSTableError.to_string()
+                    && err.to_string() != KeyNotFoundInAnySSTableError.to_string()
                 {
+                    println!("{}", err);
                     assert!(
                         false,
                         "Key should be mapped to tombstone or deleted from all sstables"
@@ -746,13 +771,103 @@ mod tests {
                 }
             }
         }
-        let _ = fs::remove_dir_all(path.clone());
+        let _ = fs::remove_dir_all(path.clone()).await;
     }
 
-    #[test]
-    fn storage_engine_deletion() {
+    #[tokio::test]
+    async fn storage_engine_update() {
         let path = PathBuf::new().join("bump3");
-        let mut s_engine = StorageEngine::new(path.clone()).unwrap();
+        let mut s_engine = StorageEngine::new(path.clone()).await.unwrap();
+
+        // Specify the number of random strings to generate
+        let num_strings = 50000;
+
+        // Specify the length of each random string
+        let string_length = 10;
+        // Generate random strings and store them in a vector
+        let mut random_strings: Vec<String> = Vec::new();
+        for _ in 0..num_strings {
+            let random_string = generate_random_string(string_length);
+            random_strings.push(random_string);
+        }
+
+        // Insert the generated random strings
+        for (_, s) in random_strings.iter().enumerate() {
+            s_engine.put(s, "boyode").await.unwrap();
+        }
+
+        // sort to make fetch random
+        random_strings.sort();
+        let key = &random_strings[0];
+        let updated_value = "updated_key";
+
+        let get_res = s_engine.get(key).await;
+        match get_res {
+            Ok(v) => {
+                assert_eq!(v.0, b"boyode");
+            }
+            Err(_) => {
+                assert!(false, "No error should be found");
+            }
+        }
+
+        let update_res = s_engine.update(key, updated_value).await;
+        match update_res {
+            Ok(v) => {
+                assert_eq!(v, true)
+            }
+            Err(_) => {
+                assert!(false, "No error should be found");
+            }
+        }
+        let _ = s_engine.flush_memtable();
+        s_engine.memtable.clear();
+
+        let get_res = s_engine.get(key).await;
+        match get_res {
+            Ok((value, _)) => {
+                assert_eq!(value, updated_value.as_bytes().to_vec())
+            }
+            Err(_) => {
+                assert!(false, "Should not run")
+            }
+        }
+
+        // Run compaction
+        let compaction_opt = s_engine.run_compaction().await;
+        match compaction_opt {
+            Ok(_) => {
+                println!("Compaction is successful");
+                println!(
+                    "Length of bucket after compaction {:?}",
+                    s_engine.buckets.buckets.len()
+                );
+                println!(
+                    "Length of bloom filters after compaction {:?}",
+                    s_engine.bloom_filters.len()
+                );
+            }
+            Err(err) => {
+                info!("Error during compaction {}", err)
+            }
+        }
+
+        let get_res = s_engine.get(key).await;
+        match get_res {
+            Ok((value, _)) => {
+                assert_eq!(value, updated_value.as_bytes().to_vec())
+            }
+            Err(_) => {
+                assert!(false, "Should not run")
+            }
+        }
+        let _ = fs::remove_dir_all(path.clone()).await;
+    }
+
+    #[tokio::test]
+    async fn storage_engine_deletion() {
+        let path = PathBuf::new().join("bump4");
+        let mut s_engine = StorageEngine::new(path.clone()).await.unwrap();
 
         // Specify the number of random strings to generate
         let num_strings = 10000;
@@ -770,13 +885,13 @@ mod tests {
 
         // Insert the generated random strings
         for (_, s) in random_strings.iter().enumerate() {
-            s_engine.put(s, "boyode").unwrap();
+            s_engine.put(s, "boyode").await.unwrap();
         }
 
         // sort to make fetch random
         random_strings.sort();
         let key = "aunkanmi";
-        let get_res = s_engine.get(key);
+        let get_res = s_engine.get(key).await;
         match get_res {
             Ok((value, _)) => {
                 assert_eq!(value, "boyode".as_bytes().to_vec());
@@ -786,7 +901,7 @@ mod tests {
             }
         }
 
-        let del_res = s_engine.delete(key);
+        let del_res = s_engine.delete(key).await;
         match del_res {
             Ok(v) => {
                 assert_eq!(v, true);
@@ -798,7 +913,7 @@ mod tests {
         let _ = s_engine.flush_memtable();
         s_engine.memtable.clear();
 
-        let get_res = s_engine.get(key);
+        let get_res = s_engine.get(key).await;
         match get_res {
             Ok((_, _)) => {
                 assert!(false, "Should not be executed")
@@ -811,7 +926,7 @@ mod tests {
             }
         }
 
-        let compaction_opt = s_engine.run_compaction();
+        let compaction_opt = s_engine.run_compaction().await;
         match compaction_opt {
             Ok(_) => {
                 println!("Compaction is successful");
@@ -831,14 +946,14 @@ mod tests {
 
         // Insert the generated random strings
         println!("trying to get this after compaction {}", key);
-        let get_res = s_engine.get(key);
+        let get_res = s_engine.get(key).await;
         match get_res {
             Ok((_, _)) => {
                 assert!(false, "Should not ne executed")
             }
             Err(err) => {
                 if err.to_string() != KeyFoundAsTombstoneInSSTableError.to_string()
-                    && err.to_string() != KeyFoundAsTombstoneInSSTableError.to_string()
+                    && err.to_string() != KeyNotFoundInAnySSTableError.to_string()
                 {
                     assert!(
                         false,
@@ -847,7 +962,7 @@ mod tests {
                 }
             }
         }
-        let _ = fs::remove_dir_all(path.clone());
+        let _ = fs::remove_dir_all(path.clone()).await;
     }
 }
 

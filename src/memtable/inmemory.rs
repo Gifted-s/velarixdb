@@ -11,7 +11,7 @@ use std::cmp;
 
 use std::{hash::Hash, sync::Arc};
 
-#[derive(PartialOrd, PartialEq, Copy, Clone)]
+#[derive(PartialOrd, PartialEq, Copy, Clone, Debug)]
 pub struct Entry<K: Hash + PartialOrd, V> {
     pub key: K,
     pub val_offset: V,

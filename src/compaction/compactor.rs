@@ -1,11 +1,14 @@
 use crossbeam_skiplist::SkipMap;
 use log::{error, info, warn};
-use std::{cmp::Ordering, collections::HashMap, fs, path::PathBuf, sync::Arc};
+use tokio::fs;
+use std::{cmp::Ordering, collections::HashMap, path::PathBuf, sync::Arc};
 use uuid::Uuid;
+//use tokio::stream::StreamExt;
 
 use super::{bucket_coordinator::Bucket, BucketMap};
 use crate::{
     bloom_filter::BloomFilter,
+    consts::TOMB_STONE_TTL,
     err::StorageEngineError,
     memtable::Entry,
     sstable::{SSTable, SSTablePath},
@@ -46,7 +49,7 @@ impl Compactor {
         }
     }
 
-    pub fn run_compaction(
+    pub async fn run_compaction(
         &mut self,
         buckets: &mut BucketMap,
         bloom_filters: &mut Vec<BloomFilter>,
@@ -70,7 +73,7 @@ impl Compactor {
             }
             number_of_compactions += 1;
             // Step 2: Merge SSTables in each buckct
-            match self.merge_sstables_in_buckets(&buckets_to_compact) {
+            match self.merge_sstables_in_buckets(&buckets_to_compact).await {
                 Ok(merged_sstables) => {
                     // Number of sstables actually written to disk
                     let mut actual_number_of_sstables_written_to_disk = 0;
@@ -79,8 +82,15 @@ impl Compactor {
 
                     // Step 3: Write merged sstables to bucket map
                     for (_, mut m) in merged_sstables.into_iter().enumerate() {
-                        match buckets.insert_to_appropriate_bucket(&m.sstable, m.hotness) {
+                        match buckets
+                            .insert_to_appropriate_bucket(&m.sstable, m.hotness)
+                            .await
+                        {
                             Ok(sst_file_path) => {
+                                println!(
+                                    "SSTable written to Disk path: {:?}",
+                                    sst_file_path.get_path()
+                                );
                                 // Step 4: Map this bloom filter to its sstable file path
                                 m.bloom_filter.set_sstable_path(sst_file_path);
 
@@ -94,7 +104,7 @@ impl Compactor {
                                 // Ensure that bloom filter is restored to the previous state by removing entries added so far in
                                 // the compaction process and also remove merged sstables written to disk so far to prevent unstable state
                                 while let Some(bf) = bloom_filters.pop() {
-                                    match fs::remove_file(bf.get_sstable_path().get_path()) {
+                                    match fs::remove_file(bf.get_sstable_path().get_path()).await {
                                         Ok(()) => info!("Stale SSTable File successfully deleted."),
                                         Err(e) => error!("Stale SSTable File not deleted. {}", e),
                                     }
@@ -119,7 +129,7 @@ impl Compactor {
                             &sstables_files_to_remove,
                             bloom_filters,
                         );
-                        match bloom_filter_updated_opt {
+                        match bloom_filter_updated_opt.await {
                             Some(is_bloom_filter_updated) => {
                                 // clear Tumbstone Map so as to not interfere with the next compaction process
                                 info!(
@@ -142,13 +152,13 @@ impl Compactor {
         }
     }
 
-    pub fn clean_up_after_compaction(
+    pub async fn clean_up_after_compaction(
         &self,
         buckets: &mut BucketMap,
         sstables_to_delete: &Vec<(Uuid, Vec<SSTablePath>)>,
         bloom_filters_with_both_old_and_new_sstables: &mut Vec<BloomFilter>,
     ) -> Option<bool> {
-        let all_sstables_deleted = buckets.delete_sstables(sstables_to_delete);
+        let all_sstables_deleted = buckets.delete_sstables(sstables_to_delete).await;
 
         // if all sstables were not deleted then don't remove the associated bloom filters
         // although this can lead to redundancy bloom filters are in-memory and its also less costly
@@ -187,7 +197,7 @@ impl Compactor {
         Some(true)
     }
 
-    fn merge_sstables_in_buckets(
+    async fn merge_sstables_in_buckets(
         &mut self,
         buckets: &Vec<Bucket>,
     ) -> Result<Vec<MergedSSTable>, StorageEngineError> {
@@ -195,15 +205,17 @@ impl Compactor {
         for b in buckets.iter() {
             let mut hotness = 0;
             let sstable_paths = &b.sstables;
-            let mut merged_sstable = SSTable::new(b.dir.clone(), false);
+            let mut merged_sstable = SSTable::new(b.dir.clone(), false).await;
             for path in sstable_paths.iter() {
                 hotness += path.hotness;
                 let sst_opt = SSTable::from_file(PathBuf::new().join(path.get_path()))
+                    .await
                     .map_err(|err| CompactionFailed(err.to_string()))?;
                 match sst_opt {
                     Some(sst) => {
                         merged_sstable = self
                             .merge_sstables(&merged_sstable, &sst)
+                            .await
                             .map_err(|err| CompactionFailed(err.to_string()))?;
                     }
                     None => {}
@@ -223,16 +235,18 @@ impl Compactor {
                 "Merged SSTables cannot be empty".to_owned(),
             ));
         }
-        let filtered_sstables = self.check_tombsone_for_merged_sstables(merged_sstables);
+        let filtered_sstables = self
+            .check_tombsone_for_merged_sstables(merged_sstables)
+            .await?;
         Ok(filtered_sstables)
     }
 
-    fn merge_sstables(
+    async fn merge_sstables(
         &mut self,
         sst1: &SSTable,
         sst2: &SSTable,
     ) -> Result<SSTable, StorageEngineError> {
-        let mut new_sstable = SSTable::new(PathBuf::new(), false);
+        let mut new_sstable = SSTable::new(PathBuf::new(), false).await;
         let new_sstable_index = Arc::new(SkipMap::new());
         let mut merged_indexes = Vec::new();
         let index1 = sst1
@@ -314,6 +328,10 @@ impl Compactor {
                 // If entry key maps to a tombstone then update the tombstone hashmap
                 if entry.is_tombstone {
                     self.tombstones.insert(entry.key.clone(), entry.created_at);
+                    // if tombstone has not expired then re-insert it.
+                    if !entry.has_expired(TOMB_STONE_TTL) {
+                        insert_entry = true;
+                    }
                 }
                 // otherwise attempt to insert entry because obviously
                 // this key was re-inserted after it was deleted
@@ -332,7 +350,10 @@ impl Compactor {
         else {
             if entry.is_tombstone {
                 self.tombstones.insert(entry.key.clone(), entry.created_at);
-                insert_entry = false;
+                // if tombstone has not expired then re-insert it.
+                if !entry.has_expired(TOMB_STONE_TTL) {
+                    insert_entry = true;
+                }
             } else {
                 // if ttl was enabled then ensure entry has not expired before insertion
                 if self.use_ttl {
@@ -349,18 +370,18 @@ impl Compactor {
         Ok(true)
     }
 
-    fn check_tombsone_for_merged_sstables(
+    async fn check_tombsone_for_merged_sstables(
         &mut self,
         merged_sstables: Vec<MergedSSTable>,
-    ) -> Vec<MergedSSTable> {
+    ) -> Result<Vec<MergedSSTable>, StorageEngineError> {
         let mut filterd_merged_sstables: Vec<MergedSSTable> = Vec::new();
-        merged_sstables.iter().for_each(|m| {
+        for m in merged_sstables.iter() {
             let new_index: Arc<SkipMap<Vec<u8>, (usize, u64, bool)>> = Arc::new(SkipMap::new());
-            let mut new_sstable = SSTable::new(PathBuf::new(), false);
+            let mut new_sstable = SSTable::new(PathBuf::new(), false).await;
             for entry in m.sstable.index.iter() {
                 if self.tombstones.contains_key(entry.key()) {
                     let tombstone_timestamp = *self.tombstones.get(entry.key()).unwrap();
-
+                    //println!("found a key in ton=bstine {:?} tombstone t_timestamp: {} normal creation time {:?}", entry.key(),tombstone_timestamp,entry.value().1);
                     if tombstone_timestamp < entry.value().1 {
                         new_index.insert(
                             entry.key().to_vec(),
@@ -380,8 +401,8 @@ impl Compactor {
                 hotness: m.hotness,
                 bloom_filter: m.bloom_filter.clone(),
             })
-        });
+        }
 
-        filterd_merged_sstables
+        Ok(filterd_merged_sstables)
     }
 }

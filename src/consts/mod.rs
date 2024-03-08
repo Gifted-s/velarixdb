@@ -16,13 +16,19 @@ pub const VLOG_FILE_NAME: &str = "val_log.bin";
 
 pub const META_DIRECTORY_NAME: &str = "meta";
 
-pub const TOMB_STONE: usize = 0;
+pub const TOMB_STONE_MARKER: usize = 0;
+
+// tombstone should only be removed after 120 days to guarantee that obsolete data don't 
+// resurrect by prematurelly deleting tombstone
+pub const TOMB_STONE_TTL: u64 = 120 * 86400000;
 
 pub const ENABLE_TTL: bool = false;
 
 // When data is written with a TTL, it is automatically deleted after the specified time.
 // For now this is set to a year in milliseconds
-pub const ENTRY_TTL: u64 = 365 * 86400000;
+//pub const ENTRY_TTL: u64 = 365 * 86400000;
+
+pub const ENTRY_TTL: u64 = 1 * 86400000;
 
 pub const BUCKET_LOW: f64 = 0.5;
 

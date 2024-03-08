@@ -1,23 +1,29 @@
+
 use std::{
-    fs::{self, File, OpenOptions},
-    io::{self, Read, Seek, SeekFrom, Write},
     mem,
     path::PathBuf,
-    sync::Arc,
 };
+use tokio::fs::{OpenOptions, File};
+use tokio::io::{self, AsyncSeekExt, SeekFrom};
+use tokio::{
+    fs,
+    io::{AsyncReadExt, AsyncWriteExt},
+};
+
 
 use crate::{
     consts::{EOF, VLOG_FILE_NAME},
     err::StorageEngineError,
 };
 use StorageEngineError::*;
+#[derive(Debug, Clone)]
 pub struct ValueLog {
-    pub file: Arc<File>,
+    pub file:File,
     pub head_offset: usize,
     pub tail_offset: usize,
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct ValueLogEntry {
     pub ksize: usize,
     pub vsize: usize,
@@ -28,11 +34,11 @@ pub struct ValueLogEntry {
 }
 
 impl ValueLog {
-    pub fn new(dir: &PathBuf) -> Result<Self, StorageEngineError> {
+    pub async fn new(dir: &PathBuf) -> Result<Self, StorageEngineError> {
         let dir_path = PathBuf::from(dir);
 
         if !dir_path.exists() {
-            fs::create_dir_all(&dir_path).map_err(|err| VLogDirectoryCreationError {
+            fs::create_dir_all(&dir_path).await.map_err(|err| VLogDirectoryCreationError {
                 path: dir_path.clone(),
                 error: err,
             })?;
@@ -44,14 +50,14 @@ impl ValueLog {
             .read(true)
             .append(true)
             .create(true)
-            .open(file_path)
+            .open(file_path).await
             .map_err(|err| VLogFileCreationError {
                 path: dir_path,
                 error: err,
             })?;
 
         Ok(Self {
-            file: Arc::new(log_file),
+            file:log_file,
             head_offset: 0,
             tail_offset: 0,
         })
@@ -65,7 +71,7 @@ impl ValueLog {
         self.tail_offset = tail;
     }
 
-    pub fn append(
+    pub async fn append(
         &mut self,
         key: &Vec<u8>,
         value: &Vec<u8>,
@@ -86,25 +92,25 @@ impl ValueLog {
         let value_offset = self
             .file
             .seek(io::SeekFrom::End(0))
-            .map_err(|err| FileSeekError(err))?;
+            .await.map_err(|err| FileSeekError(err))?;
 
         self.file
             .write_all(&serialized_data)
-            .expect("Failed to write to value log entry");
+            .await.expect("Failed to write to value log entry");
         self.file
             .flush()
-            .map_err(|error| VLogFileWriteError(error.to_string()))?;
+            .await.map_err(|error| VLogFileWriteError(error.to_string()))?;
 
         Ok(value_offset.try_into().unwrap())
     }
 
-    pub fn get(
+    pub async fn get(
         &mut self,
         start_offset: usize,
     ) -> Result<Option<(Vec<u8>, bool)>, StorageEngineError> {
         self.file
             .seek(SeekFrom::Start(start_offset as u64))
-            .map_err(|err| ValueLogFileReadError {
+            .await.map_err(|err| ValueLogFileReadError {
                 error: io::Error::new(err.kind(), EOF),
             })?;
 
@@ -113,7 +119,7 @@ impl ValueLog {
         let bytes_read =
             self.file
                 .read(&mut key_len_bytes)
-                .map_err(|err| ValueLogFileReadError {
+                .await.map_err(|err| ValueLogFileReadError {
                     error: io::Error::new(err.kind(), EOF),
                 })?;
         if bytes_read == 0 {
@@ -126,7 +132,7 @@ impl ValueLog {
         let bytes_read =
             self.file
                 .read(&mut val_len_bytes)
-                .map_err(|err| ValueLogFileReadError {
+                .await.map_err(|err| ValueLogFileReadError {
                     error: io::Error::new(err.kind(), EOF),
                 })?;
         if bytes_read == 0 {
@@ -139,7 +145,7 @@ impl ValueLog {
         let bytes_read =
             self.file
                 .read(&mut creation_date_bytes)
-                .map_err(|err| ValueLogFileReadError {
+                .await.map_err(|err| ValueLogFileReadError {
                     error: io::Error::new(err.kind(), EOF),
                 })?;
         if bytes_read == 0 {
@@ -152,7 +158,7 @@ impl ValueLog {
         let mut bytes_read =
             self.file
                 .read(&mut istombstone_bytes)
-                .map_err(|err| ValueLogFileReadError {
+                .await.map_err(|err| ValueLogFileReadError {
                     error: io::Error::new(err.kind(), EOF),
                 })?;
         if bytes_read == 0 {
@@ -165,7 +171,7 @@ impl ValueLog {
         bytes_read = self
             .file
             .read(&mut key)
-            .map_err(|err| ValueLogFileReadError {
+            .await.map_err(|err| ValueLogFileReadError {
                 error: io::Error::new(err.kind(), EOF),
             })?;
         if bytes_read == 0 {
@@ -176,7 +182,7 @@ impl ValueLog {
         bytes_read = self
             .file
             .read(&mut value)
-            .map_err(|err| ValueLogFileReadError {
+            .await.map_err(|err| ValueLogFileReadError {
                 error: io::Error::new(err.kind(), EOF),
             })?;
 
@@ -186,13 +192,13 @@ impl ValueLog {
         Ok(Some((value, is_tombstone)))
     }
 
-    pub fn recover(
+    pub async fn recover(
         &mut self,
         start_offset: usize,
     ) -> Result<Vec<ValueLogEntry>, StorageEngineError> {
         self.file
             .seek(SeekFrom::Start(start_offset as u64))
-            .map_err(|err| FileSeekError(err))?;
+            .await.map_err(|err| FileSeekError(err))?;
         let mut entries = Vec::new();
         loop {
             // get key length
@@ -200,7 +206,7 @@ impl ValueLog {
             let bytes_read =
                 self.file
                     .read(&mut key_len_bytes)
-                    .map_err(|err| ValueLogFileReadError {
+                    .await.map_err(|err| ValueLogFileReadError {
                         error: io::Error::new(err.kind(), EOF),
                     })?;
             if bytes_read == 0 {
@@ -213,7 +219,7 @@ impl ValueLog {
             let bytes_read =
                 self.file
                     .read(&mut val_len_bytes)
-                    .map_err(|err| ValueLogFileReadError {
+                    .await.map_err(|err| ValueLogFileReadError {
                         error: io::Error::new(err.kind(), EOF),
                     })?;
             if bytes_read == 0 {
@@ -229,7 +235,7 @@ impl ValueLog {
             let bytes_read =
                 self.file
                     .read(&mut creation_date_bytes)
-                    .map_err(|err| ValueLogFileReadError {
+                    .await.map_err(|err| ValueLogFileReadError {
                         error: io::Error::new(err.kind(), EOF),
                     })?;
             if bytes_read == 0 {
@@ -244,7 +250,7 @@ impl ValueLog {
             let mut bytes_read =
                 self.file
                     .read(&mut istombstone_bytes)
-                    .map_err(|err| ValueLogFileReadError {
+                    .await.map_err(|err| ValueLogFileReadError {
                         error: io::Error::new(err.kind(), EOF),
                     })?;
             if bytes_read == 0 {
@@ -260,7 +266,7 @@ impl ValueLog {
             bytes_read = self
                 .file
                 .read(&mut key)
-                .map_err(|err| ValueLogFileReadError {
+                .await.map_err(|err| ValueLogFileReadError {
                     error: io::Error::new(err.kind(), EOF),
                 })?;
             if bytes_read == 0 {
@@ -274,7 +280,7 @@ impl ValueLog {
             bytes_read = self
                 .file
                 .read(&mut value)
-                .map_err(|err| ValueLogFileReadError {
+                .await.map_err(|err| ValueLogFileReadError {
                     error: io::Error::new(err.kind(), EOF),
                 })?;
 
@@ -297,13 +303,13 @@ impl ValueLog {
         }
     }
 
-    pub fn read_chunk_to_garbage_collect(
+    pub async fn read_chunk_to_garbage_collect(
         &mut self,
         bytes_to_collect: usize,
     ) -> Result<Vec<ValueLogEntry>, StorageEngineError> {
         self.file
             .seek(SeekFrom::Start(self.tail_offset as u64))
-            .map_err(|err| FileSeekError(err))?;
+            .await.map_err(|err| FileSeekError(err))?;
         let mut entries = Vec::new();
 
         let mut total_bytes_read = 0;
@@ -314,7 +320,7 @@ impl ValueLog {
             let bytes_read =
                 self.file
                     .read(&mut key_len_bytes)
-                    .map_err(|err| ValueLogFileReadError {
+                    .await.map_err(|err| ValueLogFileReadError {
                         error: io::Error::new(err.kind(), EOF),
                     })?;
             if bytes_read == 0 {
@@ -328,7 +334,7 @@ impl ValueLog {
             let bytes_read =
                 self.file
                     .read(&mut val_len_bytes)
-                    .map_err(|err| ValueLogFileReadError {
+                    .await.map_err(|err| ValueLogFileReadError {
                         error: io::Error::new(err.kind(), EOF),
                     })?;
             if bytes_read == 0 {
@@ -345,7 +351,7 @@ impl ValueLog {
             let bytes_read =
                 self.file
                     .read(&mut creation_date_bytes)
-                    .map_err(|err| ValueLogFileReadError {
+                    .await.map_err(|err| ValueLogFileReadError {
                         error: io::Error::new(err.kind(), EOF),
                     })?;
             if bytes_read == 0 {
@@ -361,7 +367,7 @@ impl ValueLog {
             let mut bytes_read =
                 self.file
                     .read(&mut istombstone_bytes)
-                    .map_err(|err| ValueLogFileReadError {
+                    .await.map_err(|err| ValueLogFileReadError {
                         error: io::Error::new(err.kind(), EOF),
                     })?;
             if bytes_read == 0 {
@@ -378,7 +384,7 @@ impl ValueLog {
             bytes_read = self
                 .file
                 .read(&mut key)
-                .map_err(|err| ValueLogFileReadError {
+                .await.map_err(|err| ValueLogFileReadError {
                     error: io::Error::new(err.kind(), EOF),
                 })?;
             if bytes_read == 0 {
@@ -393,7 +399,7 @@ impl ValueLog {
             bytes_read = self
                 .file
                 .read(&mut value)
-                .map_err(|err| ValueLogFileReadError {
+                .await.map_err(|err| ValueLogFileReadError {
                     error: io::Error::new(err.kind(), EOF),
                 })?;
 
