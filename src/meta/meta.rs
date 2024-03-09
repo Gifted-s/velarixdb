@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Meta {
     pub path: PathBuf,
     pub v_log_tail: u32,

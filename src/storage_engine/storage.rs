@@ -21,7 +21,6 @@ use std::{collections::HashMap, fs, mem, path::PathBuf};
 
 use crate::err::StorageEngineError::*;
 
-
 #[derive(Clone, Debug)]
 pub struct StorageEngine<K: Hash + PartialOrd + std::cmp::Ord> {
     pub dir: DirPath,
@@ -35,6 +34,7 @@ pub struct StorageEngine<K: Hash + PartialOrd + std::cmp::Ord> {
     pub config: Config,
 }
 
+#[derive(Clone, Debug)]
 pub struct LevelsBiggestKeys {
     levels: Vec<Vec<u32>>,
 }
@@ -127,6 +127,8 @@ impl StorageEngine<Vec<u8>> {
                         capacity,
                         false_positive_rate,
                     );
+                    // run compaction after flush tto disk
+                    //let _ = self.run_compaction().await;
                 }
                 Err(err) => {
                     return Err(FlushToDiskError {
@@ -146,11 +148,10 @@ impl StorageEngine<Vec<u8>> {
     }
 
     // A Result indicating success or an `io::Error` if an error occurred.
-    pub async fn get(&mut self, key: &str) -> Result<(Vec<u8>, u64), StorageEngineError> {
+    pub async fn get(&self, key: &str) -> Result<(Vec<u8>, u64), StorageEngineError> {
         let key = key.as_bytes().to_vec();
         let mut offset = 0;
         let mut most_recent_insert_time = 0;
-
         // Step 1: Check if key exist in MemTable
         if let Ok(Some((value_offset, creation_date, is_tombstone))) = self.memtable.get(&key) {
             offset = value_offset;
@@ -607,20 +608,134 @@ impl SizeUnit {
 
 #[cfg(test)]
 mod tests {
+    use std::rc::Rc;
     use std::sync::Arc;
+
+    use crate::err;
 
     use super::*;
     use log::info;
+    use rand::random;
     use tokio::fs;
     use tokio::sync::RwLock;
+    use tokio::task::{self};
     // Generate test to find keys after compaction
     #[tokio::test]
-    async fn storage_engine_create() {
-        let path = PathBuf::new().join("bump");
+    async fn storage_engine_create_asynchronous() {
+        let path = PathBuf::new().join("bump_test");
         let mut s_engine = StorageEngine::new(path.clone()).await.unwrap();
 
         // Specify the number of random strings to generate
-        let num_strings = 1000;
+        let num_strings = 6000;
+
+        // Specify the length of each random string
+        let string_length = 10;
+        // Generate random strings and store them in a vector
+        let mut random_strings: Vec<String> = Vec::new();
+        for _ in 0..num_strings {
+            let random_string = generate_random_string(string_length);
+            random_strings.push(random_string);
+        }
+
+        let sg = Arc::new(RwLock::new(s_engine));
+        let binding = random_strings
+            .clone();
+        let tasks = binding
+            .iter()
+            .map(|k| {
+                let s_engine = Arc::clone(&sg);
+                let k = k.clone();
+                tokio::spawn(async move {
+                    let mut value = s_engine.write().await;
+                    value.put(&k, "boyode").await
+                })
+            });
+        // Collect the results from the spawned tasks
+        for task in tasks {
+            tokio::select! {
+                result = task => {
+                    println!("{:?}",result);
+                }
+            }
+        }
+
+        // // Insert the generated random strings
+        // let compactor = Compactor::new();
+        let s_engine = Arc::clone(&sg);
+        let compaction_opt = s_engine.write().await.run_compaction().await;
+        match compaction_opt {
+            Ok(_) => {
+                println!("Compaction is successful");
+                println!(
+                    "Length of bucket after compaction {:?}",
+                    s_engine.read().await.buckets.buckets.len()
+                );
+                println!(
+                    "Length of bloom filters after compaction {:?}",
+                    s_engine.read().await.bloom_filters.len()
+                );
+            }
+            Err(err) => {
+                info!("Error during compaction {}", err)
+            }
+        }
+
+        // random_strings.sort();
+        println!("About to start reading");
+        let tasks = random_strings.iter().map(|k| {
+            let s_engine = Arc::clone(&sg);
+            let k = k.clone();
+            tokio::spawn(async move {
+                let value = s_engine.read().await;
+                let result = value.get(&k).await;
+                match result {
+                    Ok((value, _)) => {
+                        assert_eq!(value, b"boyode");
+                    }
+                    Err(err) => {
+                        println!("{}", err);
+                        assert!(false, "No err should be found");
+                    }
+                }
+            })
+        });
+
+        for task in tasks {
+            tokio::select! {
+                result = task => {
+                    println!("{:?}",result);
+                }
+            }
+        }
+    
+        // .collect::<Vec<tokio::task::JoinHandle<Result<(Vec<u8>, u64), err::StorageEngineError>>>>();
+        // Collect the results from the spawned tasks
+        // let results: Vec<Result<(Vec<u8>, u64), err::StorageEngineError>> =
+        //     futures::future::try_join_all(tasks).await.unwrap();
+        // // Assert that all results are equal to "boyode"
+        // for result in results {
+        //     match result {
+        //         Ok((value, _)) => {
+        //             assert_eq!(value, b"boyode");
+        //         }
+        //         Err(err) => {
+        //             println!("{}", err);
+        //             assert!(false, "No err should be found");
+        //         }
+        //     }
+        // }
+
+        let _ = fs::remove_dir_all(path.clone()).await;
+        // sort to make fetch random
+    }
+
+    #[tokio::test]
+    async fn storage_engine_create_synchronous() {
+        let path = PathBuf::new().join("bump_test_101");
+        let mut s_engine = StorageEngine::new(path.clone()).await.unwrap();
+
+        // Specify the number of random strings to generate
+        let num_strings = 6000;
 
         // Specify the length of each random string
         let string_length = 10;
@@ -655,14 +770,17 @@ mod tests {
             }
         }
 
-        random_strings.sort();
-
-        let sg = Arc::new(s_engine);
-
-        for k in random_strings.clone() {
-            let s_engine = sg.clone();
-            let value = tokio::spawn(s_engine.clone().get(&k.clone()));
-            assert_eq!(value.await.unwrap().unwrap().0, b"boyode");
+        // random_strings.sort();
+        for k in random_strings {
+            let result = s_engine.get(&k).await;
+            match result {
+                Ok((value, _)) => {
+                    assert_eq!(value, b"boyode");
+                }
+                Err(_) => {
+                    assert!(false, "No err should be found");
+                }
+            }
         }
 
         let _ = fs::remove_dir_all(path.clone()).await;

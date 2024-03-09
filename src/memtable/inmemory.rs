@@ -120,7 +120,7 @@ impl InMemoryTable<Vec<u8>> {
         Ok(())
     }
 
-    pub fn get(&mut self, key: &Vec<u8>) -> Result<Option<(usize, u64, bool)>, StorageEngineError> {
+    pub fn get(&self, key: &Vec<u8>) -> Result<Option<(usize, u64, bool)>, StorageEngineError> {
         if self.bloom_filter.contains(key) {
             if let Some(entry) = self.index.get(key) {
                 return Ok(Some(*entry.value())); // returns value offset

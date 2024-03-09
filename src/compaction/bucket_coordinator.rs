@@ -11,12 +11,12 @@ use std::{path::PathBuf, sync::Arc};
 use tokio::fs;
 use uuid::Uuid;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BucketMap {
     pub dir: PathBuf,
     pub buckets: HashMap<Uuid, Bucket>,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Bucket {
     pub(crate) id: Uuid,
     pub(crate) dir: PathBuf,
