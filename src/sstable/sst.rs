@@ -6,19 +6,21 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-use tokio::fs::OpenOptions;
 use tokio::io::{self};
 use tokio::{
     fs,
     io::{AsyncReadExt, AsyncWriteExt},
 };
+use tokio::{fs::OpenOptions, io::AsyncSeekExt};
 
 use crate::{
+    block::Block,
     bloom_filter::BloomFilter,
     compaction::IndexWithSizeInBytes,
     consts::{DEFAULT_FALSE_POSITIVE_RATE, EOF},
     err::StorageEngineError,
     memtable::Entry,
+    sparse_index,
 };
 
 use StorageEngineError::*;
@@ -117,9 +119,10 @@ impl SSTable {
                 error: err,
             })?;
 
-        // This will store the head offset(this stores the most recent value offset)
-        let mut head_offset = 0;
-        for e in self.index.iter(){
+        let mut blocks: Vec<Block> = Vec::new();
+        let mut sparse_index = sparse_index::SparseIndex::new();
+        let mut curent_block = Block::new();
+        for e in self.index.iter() {
             let entry = Entry::new(e.key().clone(), e.value().0, e.value().1, e.value().2);
 
             // mem::size_of function is efficient because the size is known at compile time so
@@ -146,23 +149,33 @@ impl SSTable {
 
             //write is tombstone to file
             entry_vec.push(entry.is_tombstone as u8);
-
-            //write to file
-            file.write_all(&entry_vec).await.map_err(|err| SSTableWriteError{path:file_path.clone(), error: err})?;
-
             assert!(entry_len == entry_vec.len(), "Incorrect entry size");
 
-            file.flush().await.map_err(|err| SSTableFlushError{path:file_path.clone(), error: err})?;
+            if curent_block.is_full(entry_len) {
+                curent_block = Block::new();
 
-            // We check that the head offset is less than the value offset because
-            // there is no gurantee that the value offset of the next key will be greater than
-            // the previous key since index is sorted based on key and not value offset
-            match Self::compare_offsets(head_offset, entry.val_offset) {
-                Ordering::Less => head_offset = entry.val_offset,
-                _ => {}  // We only update header if the value offset is greater than existing header offset
+                // Get the current offset before writing(this will be the offset of the value stored in the memtable)
+                let offset = file
+                    .seek(tokio::io::SeekFrom::End(0))
+                    .await
+                    .map_err(|err| FileSeekError(err))?;
+                sparse_index.insert(entry.key.len() as u32, entry.key, offset as u32)
             }
+
+            curent_block.set_entry(entry_vec);
+
+            file.write_all(&entry_vec)
+                .await
+                .map_err(|err| SSTableWriteError {
+                    path: file_path.clone(),
+                    error: err,
+                })?;
+
+            file.flush().await.map_err(|err| SSTableFlushError {
+                path: file_path.clone(),
+                error: err,
+            })?;
         }
-     
 
         Ok(())
     }
@@ -260,7 +273,7 @@ impl SSTable {
             let created_at = u64::from_le_bytes(created_at_bytes);
             let value_offset = u32::from_le_bytes(val_offset_bytes);
             let is_tombstone = is_tombstone_byte[0] == 1;
-
+            println!("This is the key {:?}", String::from_utf8(key.clone()));
             if key == searched_key {
                 return Ok(Some((value_offset as usize, created_at, is_tombstone)));
             }

@@ -1,5 +1,5 @@
 use std::{mem, path::PathBuf};
-use tokio::fs::{File, OpenOptions};
+use tokio::fs::{OpenOptions};
 use tokio::io::{self, AsyncSeekExt, SeekFrom};
 use tokio::{
     fs,

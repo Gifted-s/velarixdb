@@ -163,14 +163,17 @@ impl StorageEngine<Vec<u8>> {
             // Step 2: If key does not exist in MemTable then we can load sstables that probaby contains this key fr8om bloom filter
             let sstable_paths =
                 BloomFilter::get_sstable_paths_that_contains_key(&self.bloom_filters, &key);
+                println!("Possible SSTABLE WITH KEY {}", sstable_paths.clone().unwrap().len());
             match sstable_paths {
                 Some(paths) => {
                     // Step 3: Get the most recent value offset from sstables
                     let mut is_deleted = false;
                     for sst_path in paths.iter() {
                         let sstable = SSTable::new_with_exisiting_file_path(sst_path.get_path());
+                        println!("Waiting to get from ssstable");
                         match sstable.get(&key).await {
                             Ok(result) => {
+                                println!("Received from sstable");
                                 if let Some((value_offset, created_at, is_tombstone)) = result {
                                     // println!("Found in this sstable {:?}, {}", sst_path.get_path(), created_at);
                                     if created_at > most_recent_insert_time {
@@ -622,6 +625,14 @@ mod tests {
     // Generate test to find keys after compaction
     #[tokio::test]
     async fn storage_engine_create_asynchronous() {
+        println!("
+            BBBBBBBB   UU    UU  MM          MM  PPPPPPP   DDDDDDD   BBBBBBB
+            B      BB  UU    UU  MMM        MMM  P    PPP  D    DDD  B      BB
+            BBBBBBBB   UU    UU  MMMM      MMMM  PPPPPPP   D    DDD  BBBBBBB
+            B      BB  UU    UU  MM MM    MM MM  P         D    DDD  B      BB
+            BBBBBBBB    UUUUU    MM  MM  MM  MM  P         DDDDDDD   BBBBBBB
+        
+        ");
         let path = PathBuf::new().join("bump_test");
         let mut s_engine = StorageEngine::new(path.clone()).await.unwrap();
 
@@ -638,23 +649,21 @@ mod tests {
         }
 
         let sg = Arc::new(RwLock::new(s_engine));
-        let binding = random_strings
-            .clone();
-        let tasks = binding
-            .iter()
-            .map(|k| {
-                let s_engine = Arc::clone(&sg);
-                let k = k.clone();
-                tokio::spawn(async move {
-                    let mut value = s_engine.write().await;
-                    value.put(&k, "boyode").await
-                })
-            });
+        let binding = random_strings.clone();
+        let tasks = binding.iter().map(|k| {
+            let s_engine = Arc::clone(&sg);
+            let k = k.clone();
+            tokio::spawn(async move {
+                let mut value = s_engine.write().await;
+                value.put(&k, "boyode").await
+            })
+        });
+
         // Collect the results from the spawned tasks
         for task in tasks {
             tokio::select! {
                 result = task => {
-                    println!("{:?}",result);
+                    //println!("{:?}",result);
                 }
             }
         }
@@ -662,33 +671,39 @@ mod tests {
         // // Insert the generated random strings
         // let compactor = Compactor::new();
         let s_engine = Arc::clone(&sg);
-        let compaction_opt = s_engine.write().await.run_compaction().await;
-        match compaction_opt {
-            Ok(_) => {
-                println!("Compaction is successful");
-                println!(
-                    "Length of bucket after compaction {:?}",
-                    s_engine.read().await.buckets.buckets.len()
-                );
-                println!(
-                    "Length of bloom filters after compaction {:?}",
-                    s_engine.read().await.bloom_filters.len()
-                );
-            }
-            Err(err) => {
-                info!("Error during compaction {}", err)
-            }
-        }
+        // let compaction_opt = s_engine.write().await.run_compaction().await;
+        // match compaction_opt {
+        //     Ok(_) => {
+        //         println!("Compaction is successful");
+        //         println!(
+        //             "Length of bucket after compaction {:?}",
+        //             s_engine.read().await.buckets.buckets.len()
+        //         );
+        //         println!(
+        //             "Length of bloom filters after compaction {:?}",
+        //             s_engine.read().await.bloom_filters.len()
+        //         );
+        //     }
+        //     Err(err) => {
+        //         info!("Error during compaction {}", err)
+        //     }
+        // }
 
-        // random_strings.sort();
+        //random_strings.sort();
         println!("About to start reading");
         let tasks = random_strings.iter().map(|k| {
             let s_engine = Arc::clone(&sg);
             let k = k.clone();
             tokio::spawn(async move {
                 let value = s_engine.read().await;
-                let result = value.get(&k).await;
-                match result {
+                value.get(&k).await
+            })
+        });
+
+        for task in tasks {
+            tokio::select! {
+                result = task => {
+                    match result.unwrap() {
                     Ok((value, _)) => {
                         assert_eq!(value, b"boyode");
                     }
@@ -697,33 +712,9 @@ mod tests {
                         assert!(false, "No err should be found");
                     }
                 }
-            })
-        });
-
-        for task in tasks {
-            tokio::select! {
-                result = task => {
-                    println!("{:?}",result);
                 }
             }
         }
-    
-        // .collect::<Vec<tokio::task::JoinHandle<Result<(Vec<u8>, u64), err::StorageEngineError>>>>();
-        // Collect the results from the spawned tasks
-        // let results: Vec<Result<(Vec<u8>, u64), err::StorageEngineError>> =
-        //     futures::future::try_join_all(tasks).await.unwrap();
-        // // Assert that all results are equal to "boyode"
-        // for result in results {
-        //     match result {
-        //         Ok((value, _)) => {
-        //             assert_eq!(value, b"boyode");
-        //         }
-        //         Err(err) => {
-        //             println!("{}", err);
-        //             assert!(false, "No err should be found");
-        //         }
-        //     }
-        // }
 
         let _ = fs::remove_dir_all(path.clone()).await;
         // sort to make fetch random

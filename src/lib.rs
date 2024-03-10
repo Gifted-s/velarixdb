@@ -8,4 +8,6 @@ pub mod meta;
 pub mod sstable;
 pub mod storage_engine;
 pub mod value_log;
+pub mod block;
 pub mod garbage_collector;
+pub mod sparse_index;

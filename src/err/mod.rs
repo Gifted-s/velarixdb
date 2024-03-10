@@ -130,4 +130,8 @@ pub enum StorageEngineError {
     /// Tombstone check failed error can happens during compaction
     #[error("Tombstone check failed {0}")]
     TombStoneCheckFailed(String),
+
+    /// Block is full
+    #[error("Block is full")]
+    BlockIsFullError,
 }
