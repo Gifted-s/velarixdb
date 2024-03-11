@@ -59,3 +59,8 @@ pub const HEAD_ENTRY_LENGTH: usize = 21;
 pub const VLOG_TAIL_ENTRY_LENGTH: usize = 21;
 
 
+pub const SIZE_OF_U32: usize = std::mem::size_of::<u32>();
+
+pub const SIZE_OF_U64: usize = std::mem::size_of::<u64>();
+
+pub const SIZE_OF_U8: usize = std::mem::size_of::<u8>();

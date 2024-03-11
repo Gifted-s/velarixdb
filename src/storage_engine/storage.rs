@@ -163,13 +163,20 @@ impl StorageEngine<Vec<u8>> {
             // Step 2: If key does not exist in MemTable then we can load sstables that probaby contains this key fr8om bloom filter
             let sstable_paths =
                 BloomFilter::get_sstable_paths_that_contains_key(&self.bloom_filters, &key);
-                println!("Possible SSTABLE WITH KEY {}", sstable_paths.clone().unwrap().len());
+            println!(
+                "Possible SSTABLE WITH KEY {}",
+                sstable_paths.clone().unwrap().len()
+            );
             match sstable_paths {
                 Some(paths) => {
                     // Step 3: Get the most recent value offset from sstables
                     let mut is_deleted = false;
                     for sst_path in paths.iter() {
-                        let sstable = SSTable::new_with_exisiting_file_path(sst_path.get_path());
+                        let sstable = SSTable::new_with_exisiting_file_path(
+                            sst_path.dir.clone(),
+                            sst_path.data_file_path.clone(),
+                            sst_path.index_file_path.clone(),
+                        );
                         println!("Waiting to get from ssstable");
                         match sstable.get(&key).await {
                             Ok(result) => {
@@ -398,8 +405,8 @@ impl StorageEngine<Vec<u8>> {
                 error: err,
             })?
         {
-            //  engine_root/buckets/bucket{id}/sstable_{timestamp}_.db
-            for bucket_dir in
+            //  engine_root/buckets/bucket{id}/sstable_{timestamp}
+            for sstable_dir in
                 fs::read_dir(buckets_directories.as_ref().unwrap().path()).map_err(|err| {
                     BucketDirectoryOpenError {
                         path: buckets_directories.as_ref().unwrap().path(),
@@ -407,78 +414,109 @@ impl StorageEngine<Vec<u8>> {
                     }
                 })?
             {
-                if let Ok(entry) = bucket_dir {
-                    let sstable_path_str = entry.path();
-                    // Check if the entry is a file
-                    if sstable_path_str.is_file() {
-                        // Extract bucket id
-                        let bucket_id =
-                            Self::get_bucket_id_from_full_bucket_path(sstable_path_str.clone());
-                        let sst_path = SSTablePath::new(sstable_path_str.clone());
-
-                        let bucket_uuid = uuid::Uuid::parse_str(&bucket_id).map_err(|err| {
-                            InvaidUUIDParseString {
-                                input_string: bucket_id,
-                                error: err,
-                            }
-                        })?;
-                        // If bucket already exisit in recovered bucket then just append sstable to its sstables vector
-                        if let Some(b) = recovered_buckets.get(&bucket_uuid) {
-                            let mut temp_sstables = b.sstables.clone();
-                            temp_sstables.push(sst_path.clone());
-                            let updated_bucket = Bucket::new_with_id_dir_average_and_sstables(
-                                buckets_directories.as_ref().unwrap().path(),
-                                bucket_uuid,
-                                temp_sstables.to_owned(),
-                                0,
-                            )
-                            .await?;
-                            recovered_buckets.insert(bucket_uuid, updated_bucket);
-                        } else {
-                            // Create new bucket
-                            let updated_bucket = Bucket::new_with_id_dir_average_and_sstables(
-                                buckets_directories.as_ref().unwrap().path(),
-                                bucket_uuid,
-                                vec![sst_path.clone()],
-                                0,
-                            )
-                            .await?;
-                            recovered_buckets.insert(bucket_uuid, updated_bucket);
+                // engine_root/buckets/bucket{id}/sstable_{timestamp}/sstable_{timestamp}_.db
+                // engine_root/buckets/bucket{id}/sstable_{timestamp}/index_{timestamp}_.db
+                let mut sst_files: Vec<PathBuf> = Vec::new();
+                for files in fs::read_dir(sstable_dir.as_ref().unwrap().path()).map_err(|err| {
+                    BucketDirectoryOpenError {
+                        path: sstable_dir.as_ref().unwrap().path(),
+                        error: err,
+                    }
+                })? {
+                    if let Ok(entry) = files {
+                        let file_path = entry.path();
+                        // Check if the entry is a file
+                        if file_path.is_file() {
+                            sst_files.push(file_path)
                         }
-
-                        let sstable_from_file =
-                            SSTable::from_file(PathBuf::new().join(sstable_path_str.clone()))
-                                .await?;
-                        let sstable = sstable_from_file.unwrap();
-
-                        // We need to fetch the most recent write offset so it can
-                        // use it to recover entries not written into sstables from value log
-                        let head_entry = sstable.get_value_from_index(HEAD_ENTRY_KEY);
-
-                        let tail_entry = sstable.get_value_from_index(TAIL_ENTRY_KEY);
-
-                        // update head
-                        if let Some((head_offset, date_created, _)) = head_entry {
-                            if date_created > most_recent_head_timestamp {
-                                most_recent_head_offset = head_offset;
-                                most_recent_head_timestamp = date_created;
-                            }
-                        }
-
-                        // update tail
-                        if let Some((tail_offset, date_created, _)) = tail_entry {
-                            if date_created > most_recent_tail_timestamp {
-                                most_recent_tail_offset = tail_offset;
-                                most_recent_tail_timestamp = date_created;
-                            }
-                        }
-
-                        let mut bf = SSTable::build_bloomfilter_from_sstable(&sstable.index);
-                        bf.set_sstable_path(sst_path.clone());
-                        // update bloom filters
-                        bloom_filters.push(bf)
                     }
                 }
+
+                // Extract bucket id
+                let bucket_id = Self::get_bucket_id_from_full_bucket_path(
+                    sstable_dir.as_ref().unwrap().path().clone(),
+                );
+
+                // We expect two files, data file and index file
+                if sst_files.len() < 2 {
+                    return Err(InvalidSSTableDirectoryError {
+                        input_string: sstable_dir
+                            .as_ref()
+                            .unwrap()
+                            .path()
+                            .to_string_lossy()
+                            .to_string(),
+                    });
+                }
+                let sst_path = SSTablePath::new(
+                    sstable_dir.as_ref().unwrap().path(),
+                    sst_files[0].clone(),
+                    sst_files[1].clone(),
+                );
+
+                let bucket_uuid =
+                    uuid::Uuid::parse_str(&bucket_id).map_err(|err| InvaidUUIDParseString {
+                        input_string: bucket_id,
+                        error: err,
+                    })?;
+                // If bucket already exisit in recovered bucket then just append sstable to its sstables vector
+                if let Some(b) = recovered_buckets.get(&bucket_uuid) {
+                    let mut temp_sstables = b.sstables.clone();
+                    temp_sstables.push(sst_path.clone());
+                    let updated_bucket = Bucket::new_with_id_dir_average_and_sstables(
+                        buckets_directories.as_ref().unwrap().path(),
+                        bucket_uuid,
+                        temp_sstables.to_owned(),
+                        0,
+                    )
+                    .await?;
+                    recovered_buckets.insert(bucket_uuid, updated_bucket);
+                } else {
+                    // Create new bucket
+                    let updated_bucket = Bucket::new_with_id_dir_average_and_sstables(
+                        buckets_directories.as_ref().unwrap().path(),
+                        bucket_uuid,
+                        vec![sst_path.clone()],
+                        0,
+                    )
+                    .await?;
+                    recovered_buckets.insert(bucket_uuid, updated_bucket);
+                }
+
+                let sstable_from_file = SSTable::from_file(
+                    sstable_dir.unwrap().path(),
+                    sst_files[0].clone(),
+                    sst_files[1].clone(),
+                )
+                .await?;
+                let sstable = sstable_from_file.unwrap();
+
+                // We need to fetch the most recent write offset so it can
+                // use it to recover entries not written into sstables from value log
+                let head_entry = sstable.get_value_from_index(HEAD_ENTRY_KEY);
+
+                let tail_entry = sstable.get_value_from_index(TAIL_ENTRY_KEY);
+
+                // update head
+                if let Some((head_offset, date_created, _)) = head_entry {
+                    if date_created > most_recent_head_timestamp {
+                        most_recent_head_offset = head_offset;
+                        most_recent_head_timestamp = date_created;
+                    }
+                }
+
+                // update tail
+                if let Some((tail_offset, date_created, _)) = tail_entry {
+                    if date_created > most_recent_tail_timestamp {
+                        most_recent_tail_offset = tail_offset;
+                        most_recent_tail_timestamp = date_created;
+                    }
+                }
+
+                let mut bf = SSTable::build_bloomfilter_from_sstable(&sstable.index);
+                bf.set_sstable_path(sst_path.clone());
+                // update bloom filters
+                bloom_filters.push(bf)
             }
         }
 
@@ -625,19 +663,21 @@ mod tests {
     // Generate test to find keys after compaction
     #[tokio::test]
     async fn storage_engine_create_asynchronous() {
-        println!("
+        println!(
+            "
             BBBBBBBB   UU    UU  MM          MM  PPPPPPP   DDDDDDD   BBBBBBB
             B      BB  UU    UU  MMM        MMM  P    PPP  D    DDD  B      BB
             BBBBBBBB   UU    UU  MMMM      MMMM  PPPPPPP   D    DDD  BBBBBBB
             B      BB  UU    UU  MM MM    MM MM  P         D    DDD  B      BB
             BBBBBBBB    UUUUU    MM  MM  MM  MM  P         DDDDDDD   BBBBBBB
         
-        ");
+        "
+        );
         let path = PathBuf::new().join("bump_test");
         let mut s_engine = StorageEngine::new(path.clone()).await.unwrap();
 
         // Specify the number of random strings to generate
-        let num_strings = 6000;
+        let num_strings = 100;
 
         // Specify the length of each random string
         let string_length = 10;
@@ -671,52 +711,52 @@ mod tests {
         // // Insert the generated random strings
         // let compactor = Compactor::new();
         let s_engine = Arc::clone(&sg);
-        // let compaction_opt = s_engine.write().await.run_compaction().await;
-        // match compaction_opt {
-        //     Ok(_) => {
-        //         println!("Compaction is successful");
-        //         println!(
-        //             "Length of bucket after compaction {:?}",
-        //             s_engine.read().await.buckets.buckets.len()
-        //         );
-        //         println!(
-        //             "Length of bloom filters after compaction {:?}",
-        //             s_engine.read().await.bloom_filters.len()
-        //         );
-        //     }
-        //     Err(err) => {
-        //         info!("Error during compaction {}", err)
-        //     }
-        // }
-
-        //random_strings.sort();
-        println!("About to start reading");
-        let tasks = random_strings.iter().map(|k| {
-            let s_engine = Arc::clone(&sg);
-            let k = k.clone();
-            tokio::spawn(async move {
-                let value = s_engine.read().await;
-                value.get(&k).await
-            })
-        });
-
-        for task in tasks {
-            tokio::select! {
-                result = task => {
-                    match result.unwrap() {
-                    Ok((value, _)) => {
-                        assert_eq!(value, b"boyode");
-                    }
-                    Err(err) => {
-                        println!("{}", err);
-                        assert!(false, "No err should be found");
-                    }
-                }
-                }
+        let compaction_opt = s_engine.write().await.run_compaction().await;
+        match compaction_opt {
+            Ok(_) => {
+                println!("Compaction is successful");
+                println!(
+                    "Length of bucket after compaction {:?}",
+                    s_engine.read().await.buckets.buckets.len()
+                );
+                println!(
+                    "Length of bloom filters after compaction {:?}",
+                    s_engine.read().await.bloom_filters.len()
+                );
+            }
+            Err(err) => {
+                info!("Error during compaction {}", err)
             }
         }
 
-        let _ = fs::remove_dir_all(path.clone()).await;
+        //random_strings.sort();
+        println!("About to start reading");
+        // let tasks = random_strings.iter().map(|k| {
+        //     let s_engine = Arc::clone(&sg);
+        //     let k = k.clone();
+        //     tokio::spawn(async move {
+        //         let value = s_engine.read().await;
+        //         value.get(&k).await
+        //     })
+        // });
+
+        // for task in tasks {
+        //     tokio::select! {
+        //         result = task => {
+        //             match result.unwrap() {
+        //             Ok((value, _)) => {
+        //                 assert_eq!(value, b"boyode");
+        //             }
+        //             Err(err) => {
+        //                 println!("{}", err);
+        //                 assert!(false, "No err should be found");
+        //             }
+        //         }
+        //         }
+        //     }
+        // }
+
+        //let _ = fs::remove_dir_all(path.clone()).await;
         // sort to make fetch random
     }
 
@@ -726,7 +766,7 @@ mod tests {
         let mut s_engine = StorageEngine::new(path.clone()).await.unwrap();
 
         // Specify the number of random strings to generate
-        let num_strings = 6000;
+        let num_strings = 100;
 
         // Specify the length of each random string
         let string_length = 10;

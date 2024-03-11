@@ -1,32 +1,37 @@
 use chrono::Utc;
 use crossbeam_skiplist::SkipMap;
+use futures::TryFutureExt;
 use std::{
     cmp::Ordering,
     mem,
     path::{Path, PathBuf},
     sync::Arc,
+    thread::current,
 };
-use tokio::io::{self};
 use tokio::{
     fs,
     io::{AsyncReadExt, AsyncWriteExt},
 };
+use tokio::{fs::File, io};
 use tokio::{fs::OpenOptions, io::AsyncSeekExt};
 
 use crate::{
-    block::Block,
+    block::{self, Block},
     bloom_filter::BloomFilter,
     compaction::IndexWithSizeInBytes,
-    consts::{DEFAULT_FALSE_POSITIVE_RATE, EOF},
+    consts::{DEFAULT_FALSE_POSITIVE_RATE, EOF, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8},
     err::StorageEngineError,
     memtable::Entry,
-    sparse_index,
+    sparse_index::{self, SparseIndex},
 };
 
 use StorageEngineError::*;
 
+#[derive(Debug, Clone)]
 pub struct SSTable {
-    pub file_path: PathBuf,
+    pub data_file_path: PathBuf,
+    pub index_file_path: PathBuf,
+    pub sstable_dir: PathBuf,
     pub index: Arc<SkipMap<Vec<u8>, (usize, u64, bool)>>,
     pub created_at: u64,
     pub size: usize,
@@ -43,21 +48,25 @@ impl IndexWithSizeInBytes for SSTable {
 
 #[derive(Debug, Clone)]
 pub struct SSTablePath {
-    pub(crate) file_path: PathBuf,
+    pub(crate) dir: PathBuf,
+    pub(crate) data_file_path: PathBuf,
+    pub(crate) index_file_path: PathBuf,
     pub(crate) hotness: u64,
 }
 impl SSTablePath {
-    pub fn new(file_path: PathBuf) -> Self {
+    pub fn new(dir: PathBuf, data_file_path: PathBuf, index_file_path: PathBuf) -> Self {
         Self {
-            file_path,
+            data_file_path,
+            index_file_path,
+            dir,
             hotness: 0,
         }
     }
     pub fn increase_hotness(&mut self) {
         self.hotness += 1;
     }
-    pub fn get_path(&self) -> PathBuf {
-        self.file_path.clone()
+    pub fn get_data_file_path(&self) -> PathBuf {
+        self.data_file_path.clone()
     }
 
     pub fn get_hotness(&self) -> u64 {
@@ -69,38 +78,57 @@ impl SSTablePath {
 impl SSTable {
     pub(crate) async fn new(dir: PathBuf, create_file: bool) -> Self {
         let created_at = Utc::now();
-        let file_name = format!("sstable_{}_.db", created_at.timestamp_millis());
+        let data_file_name = format!("sstable_{}_.db", created_at.timestamp_millis());
+        let index_file_name = format!("index_{}_.db", created_at.timestamp_millis());
+
         if !dir.exists() {
             fs::create_dir_all(&dir)
                 .await
                 .expect("ss table directory was not created successfullt")
         }
 
-        let file_path = dir.join(file_name);
+        let data_file_path = dir.join(data_file_name.clone());
+        let index_file_path = dir.join(index_file_name.clone());
         if create_file {
             _ = OpenOptions::new()
                 .read(true)
                 .append(true)
                 .create(true)
-                .open(file_path.clone())
+                .open(data_file_path.clone())
+                .await
+                .expect("error creating file");
+
+            _ = OpenOptions::new()
+                .read(true)
+                .append(true)
+                .create(true)
+                .open(index_file_path.clone())
                 .await
                 .expect("error creating file");
         }
 
         let index = Arc::new(SkipMap::new());
         Self {
-            file_path,
+            data_file_path,
+            index_file_path,
             index,
             size: 0,
             created_at: created_at.timestamp_millis() as u64,
+            sstable_dir: dir,
         }
     }
 
-    pub(crate) fn new_with_exisiting_file_path(file_path: PathBuf) -> Self {
+    pub(crate) fn new_with_exisiting_file_path(
+        dir: PathBuf,
+        data_file_path: PathBuf,
+        index_file_path: PathBuf,
+    ) -> Self {
         let created_at = Utc::now();
         let index = Arc::new(SkipMap::new());
         Self {
-            file_path,
+            data_file_path,
+            index_file_path,
+            sstable_dir: dir,
             index,
             size: 0,
             created_at: created_at.timestamp_millis() as u64,
@@ -109,74 +137,75 @@ impl SSTable {
 
     pub(crate) async fn write_to_file(&self) -> Result<(), StorageEngineError> {
         // Open the file in write mode with the append flag.
-        let file_path = PathBuf::from(&self.file_path);
+        let data_file_path = &self.data_file_path;
+        let index_file_path = &self.index_file_path;
+
         let mut file = OpenOptions::new()
             .append(true)
-            .open(file_path.clone())
+            .open(data_file_path.clone())
             .await
             .map_err(|err| SSTableFileOpenError {
-                path: file_path.clone(),
+                path: data_file_path.clone(),
                 error: err,
             })?;
 
         let mut blocks: Vec<Block> = Vec::new();
-        let mut sparse_index = sparse_index::SparseIndex::new();
-        let mut curent_block = Block::new();
+        let mut sparse_index = sparse_index::SparseIndex::new(index_file_path.clone()).await;
+        let mut current_block = Block::new();
         for e in self.index.iter() {
             let entry = Entry::new(e.key().clone(), e.value().0, e.value().1, e.value().2);
 
             // mem::size_of function is efficient because the size is known at compile time so
-            // during compilation this will be replaced  with the actual size during compilation i.e number of bytes to store the type
+            // during compilation this will be replaced  with the actual size i.e number of bytes to store the type
             // key length(used during fetch) + key len(actual key length) + value length(4 bytes) + date in milliseconds(8 bytes)
-            let entry_len = mem::size_of::<u32>()
-                + entry.key.len()
-                + mem::size_of::<u32>()
-                + mem::size_of::<u64>()
-                + mem::size_of::<u8>();
-            let mut entry_vec = Vec::with_capacity(entry_len);
+            let entry_size = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
 
-            //add key len
-            entry_vec.extend_from_slice(&(entry.key.len() as u32).to_le_bytes());
-
-            //add key
-            entry_vec.extend_from_slice(&entry.key);
-
-            //add value offset
-            entry_vec.extend_from_slice(&(entry.val_offset as u32).to_le_bytes());
-
-            //write date created in milliseconds
-            entry_vec.extend_from_slice(&entry.created_at.to_le_bytes());
-
-            //write is tombstone to file
-            entry_vec.push(entry.is_tombstone as u8);
-            assert!(entry_len == entry_vec.len(), "Incorrect entry size");
-
-            if curent_block.is_full(entry_len) {
-                curent_block = Block::new();
-
-                // Get the current offset before writing(this will be the offset of the value stored in the memtable)
-                let offset = file
-                    .seek(tokio::io::SeekFrom::End(0))
-                    .await
-                    .map_err(|err| FileSeekError(err))?;
-                sparse_index.insert(entry.key.len() as u32, entry.key, offset as u32)
+            if current_block.is_full(entry_size) {
+                blocks.push(current_block);
+                current_block = Block::new();
             }
 
-            curent_block.set_entry(entry_vec);
-
-            file.write_all(&entry_vec)
-                .await
-                .map_err(|err| SSTableWriteError {
-                    path: file_path.clone(),
-                    error: err,
-                })?;
-
-            file.flush().await.map_err(|err| SSTableFlushError {
-                path: file_path.clone(),
-                error: err,
-            })?;
+            current_block.set_entry(
+                entry.key.len() as u32,
+                entry.key,
+                entry.val_offset as u32,
+                entry.created_at,
+                entry.is_tombstone,
+            )?;
         }
 
+        for block in blocks.iter() {
+            self.write_block(&mut file, block, &mut sparse_index)
+                .await?;
+        }
+
+        // Incase we have some entries in current block, write them to disk
+        if current_block.data.len() > 0 {
+            self.write_block(&mut file, &current_block, &mut sparse_index)
+                .await?;
+        }
+
+        sparse_index.write_to_file().await?;
+        Ok(())
+    }
+
+    async fn write_block(
+        &self,
+        file: &mut File,
+        block: &Block,
+        sparse_index: &mut SparseIndex,
+    ) -> Result<(), StorageEngineError> {
+        // Get the current offset before writing (this will be the offset of the value stored in the sparse index)
+        let offset = file
+            .metadata()
+            .await
+            .map_err(|err| GetFileMetaDataError(err))?
+            .len();
+
+        let first_entry = block.get_first_entry();
+        // Store initial entry key and its sstable file offset in sparse index
+        sparse_index.insert(first_entry.key_prefix, first_entry.key, offset as u32);
+        block.write_to_file(file).await?;
         Ok(())
     }
 
@@ -185,7 +214,7 @@ impl SSTable {
         searched_key: &[u8],
     ) -> Result<Option<(usize, u64, bool)>, StorageEngineError> {
         // Open the file in read mode
-        let file_path = PathBuf::from(&self.file_path);
+        let file_path = PathBuf::from(&self.data_file_path);
         let mut file = OpenOptions::new()
             .read(true)
             .open(file_path.clone())
@@ -196,7 +225,6 @@ impl SSTable {
             })?;
 
         // read bloom filter to check if the key possbly exists in the sstable
-
         // search sstable for key
         loop {
             let mut key_len_bytes = [0; mem::size_of::<u32>()];
@@ -330,31 +358,37 @@ impl SSTable {
     }
 
     pub(crate) fn get_path(&self) -> PathBuf {
-        self.file_path.clone()
+        self.data_file_path.clone()
     }
 
-    pub(crate) fn file_exists(path_buf: &PathBuf) -> bool {
+    pub(crate) fn data_file_exists(path_buf: &PathBuf) -> bool {
         // Convert the PathBuf to a Path
         let path: &Path = path_buf.as_path();
         // Check if the file exists
         path.exists() && path.is_file()
     }
 
+    pub(crate) fn dir_exists(path_buf: &PathBuf) -> bool {
+        !path_buf.exists()
+    }
+
     pub(crate) async fn from_file(
-        sstable_file_path: PathBuf,
+        dir: PathBuf,
+        data_file_path: PathBuf,
+        index_file_path: PathBuf,
     ) -> Result<Option<SSTable>, StorageEngineError> {
         let index = Arc::new(SkipMap::new());
         // Open the file in read mode
-        if !Self::file_exists(&sstable_file_path) {
+        if !Self::data_file_exists(&data_file_path) {
             return Ok(None);
         }
 
         let mut file = OpenOptions::new()
             .read(true)
-            .open(sstable_file_path.clone())
+            .open(data_file_path.clone())
             .await
             .map_err(|err| SSTableFileOpenError {
-                path: sstable_file_path.clone(),
+                path: data_file_path.clone(),
                 error: err,
             })?;
 
@@ -366,7 +400,7 @@ impl SSTable {
                 file.read(&mut key_len_bytes)
                     .await
                     .map_err(|err| SSTableFileReadError {
-                        path: sstable_file_path.clone(),
+                        path: data_file_path.clone(),
                         error: err,
                     })?;
             if bytes_read == 0 {
@@ -379,7 +413,7 @@ impl SSTable {
                 .read(&mut key)
                 .await
                 .map_err(|err| SSTableFileReadError {
-                    path: sstable_file_path.clone(),
+                    path: data_file_path.clone(),
                     error: err,
                 })?;
             if bytes_read == 0 {
@@ -393,7 +427,7 @@ impl SSTable {
                 file.read(&mut val_offset_bytes)
                     .await
                     .map_err(|err| SSTableFileReadError {
-                        path: sstable_file_path.clone(),
+                        path: data_file_path.clone(),
                         error: err,
                     })?;
             if bytes_read == 0 {
@@ -407,7 +441,7 @@ impl SSTable {
                 file.read(&mut created_at_bytes)
                     .await
                     .map_err(|err| SSTableFileReadError {
-                        path: sstable_file_path.clone(),
+                        path: data_file_path.clone(),
                         error: err,
                     })?;
             if bytes_read == 0 {
@@ -422,7 +456,7 @@ impl SSTable {
                 file.read(&mut is_tombstone_byte)
                     .await
                     .map_err(|err| SSTableFileReadError {
-                        path: sstable_file_path.clone(),
+                        path: data_file_path.clone(),
                         error: err,
                     })?;
             if bytes_read == 0 {
@@ -439,10 +473,12 @@ impl SSTable {
         }
         let created_at = Utc::now().timestamp_millis() as u64;
         Ok(Some(SSTable {
-            file_path: sstable_file_path.clone(),
+            data_file_path: data_file_path.clone(),
+            index_file_path,
+            sstable_dir: dir,
             index: index.to_owned(),
             created_at,
-            size: fs::metadata(sstable_file_path).await.unwrap().len() as usize,
+            size: fs::metadata(data_file_path).await.unwrap().len() as usize,
         }))
     }
 }

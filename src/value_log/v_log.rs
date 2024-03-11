@@ -1,5 +1,5 @@
 use std::{mem, path::PathBuf};
-use tokio::fs::{OpenOptions};
+use tokio::fs::OpenOptions;
 use tokio::io::{self, AsyncSeekExt, SeekFrom};
 use tokio::{
     fs,
@@ -96,10 +96,10 @@ impl ValueLog {
             })?;
 
         // Get the current offset before writing(this will be the offset of the value stored in the memtable)
-        let value_offset = file
-            .seek(io::SeekFrom::End(0))
+        let meta = file
+            .metadata()
             .await
-            .map_err(|err| FileSeekError(err))?;
+            .map_err(|err| GetFileMetaDataError(err))?;
 
         file.write_all(&serialized_data)
             .await
@@ -108,7 +108,7 @@ impl ValueLog {
             .await
             .map_err(|error| VLogFileWriteError(error.to_string()))?;
 
-        Ok(value_offset.try_into().unwrap())
+        Ok(meta.len().try_into().unwrap())
     }
 
     pub async fn get(

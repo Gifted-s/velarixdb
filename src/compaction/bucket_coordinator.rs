@@ -3,6 +3,7 @@ use crate::consts::{
 };
 use crate::err::StorageEngineError;
 use crate::sstable::{SSTable, SSTablePath};
+use chrono::Utc;
 use crossbeam_skiplist::SkipMap;
 use log::{error, info};
 use std::collections::HashMap;
@@ -69,7 +70,7 @@ impl Bucket {
         let mut all_sstable_size = 0;
         let fetch_files_meta = sstables
             .iter()
-            .map(|s| tokio::spawn(fs::metadata(s.get_path())));
+            .map(|s| tokio::spawn(fs::metadata(s.data_file_path.clone())));
         for meta_task in fetch_files_meta {
             let meta_data = meta_task
                 .await
@@ -98,6 +99,7 @@ impl BucketMap {
         hotness: u64,
     ) -> Result<SSTablePath, StorageEngineError> {
         let added_to_bucket = false;
+        let created_at = Utc::now();
         for (_, bucket) in &mut self.buckets {
             // if (bucket low * bucket avg) is less than sstable size
             if (bucket.avarage_size as f64 * BUCKET_LOW  < table.size() as f64)
@@ -106,12 +108,17 @@ impl BucketMap {
                     // or the (sstable size is less than min sstabke size) and (bucket avg is less than the min sstable size )
                     || (table.size() < MIN_SSTABLE_SIZE && bucket.avarage_size  < MIN_SSTABLE_SIZE)
             {
-                let mut sstable = SSTable::new(bucket.dir.clone(), true).await;
+                let sstable_directory = bucket
+                    .dir
+                    .join(format!("sstable_{}", created_at.timestamp_millis()));
+                let mut sstable = SSTable::new(sstable_directory, true).await;
                 sstable.set_index(table.get_index());
                 sstable.write_to_file().await?;
                 // add sstable to bucket
                 let sstable_path = SSTablePath {
-                    file_path: sstable.get_path(),
+                    data_file_path: sstable.data_file_path,
+                    index_file_path: sstable.index_file_path,
+                    dir: sstable.sstable_dir,
                     hotness,
                 };
                 bucket.sstables.push(sstable_path.clone());
@@ -127,21 +134,25 @@ impl BucketMap {
         // create a new bucket if none of the condition above was satisfied
         if !added_to_bucket {
             let mut bucket = Bucket::new(self.dir.clone()).await;
-            let mut sstable = SSTable::new(bucket.dir.clone(), true).await;
+            let sstable_directory = bucket
+                .dir
+                .join(format!("sstable_{}", created_at.timestamp_millis()));
+            let mut sstable = SSTable::new(sstable_directory, true).await;
             sstable.set_index(table.get_index());
             sstable.write_to_file().await?;
 
             // add sstable to bucket
             let sstable_path = SSTablePath {
-                file_path: sstable.get_path(),
+                data_file_path: sstable.data_file_path.clone(),
+                index_file_path: sstable.index_file_path,
+                dir: sstable.sstable_dir,
                 hotness: 1,
             };
             bucket.sstables.push(sstable_path.clone());
-            bucket.avarage_size = fs::metadata(sstable.get_path())
+            bucket.avarage_size = fs::metadata(sstable.data_file_path)
                 .await
                 .map_err(|err| GetFileMetaDataError(err))?
                 .len() as usize;
-
             self.buckets.insert(bucket.id, bucket);
             return Ok(sstable_path);
         }
@@ -223,15 +234,15 @@ impl BucketMap {
             }
 
             for sst in sst_paths {
-                if SSTable::file_exists(&PathBuf::new().join(sst.get_path())) {
-                    if let Err(err) = fs::remove_file(&sst.file_path).await {
+                if SSTable::dir_exists(&sst.dir) {
+                    if let Err(err) = fs::remove_dir_all(&sst.dir).await {
                         all_sstables_deleted = false;
                         error!(
-                            "SStable file table delete path={:?}, err={:?} ",
-                            sst.file_path, err
+                            "SStable directory not successfully deleted path={:?}, err={:?} ",
+                            sst.data_file_path, err
                         );
                     } else {
-                        info!("SS Table deleted successfully.");
+                        info!("SS Table directory deleted successfully.");
                     }
                 }
             }

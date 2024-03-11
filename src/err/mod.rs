@@ -18,12 +18,12 @@ pub enum StorageEngineError {
     SSTableFileReadError { path: PathBuf, error: io::Error },
 
     /// There was an error while atttempting to wrtie to a sstbale file
-    #[error("Failed to write to sstsable file `{path}`: {error}")]
-    SSTableWriteError { path: PathBuf, error: io::Error },
+    #[error("Failed to write to sstsable file  {error}")]
+    SSTableWriteError { error: io::Error },
 
     /// There was an error while atttempting to flush sstable write to disk
-    #[error("Failed to flush write to disk for sstable `{path}`: {error}")]
-    SSTableFlushError { path: PathBuf, error: io::Error },
+    #[error("Failed to flush write to disk for sstable : {error}")]
+    SSTableFlushError { error: io::Error },
 
     /// There was an error while atttempting to read from sstbale file
     #[error("Failed to open bucket directory `{path}`: {error}")]
@@ -70,6 +70,18 @@ pub enum StorageEngineError {
     /// There was an error while atttempting to parse string to UUID
     #[error("Invalid string provided to be parsed to UUID input `{input_string}`: {error}")]
     InvaidUUIDParseString {
+        input_string: String,
+        error: uuid::Error,
+    },
+
+       /// There was an error while atttempting to parse string to UUID
+       #[error("Invalid sstable directory error `{input_string}`")]
+       InvalidSSTableDirectoryError {
+           input_string: String,
+       },
+
+    #[error("Invalid string provided to be parsed to UUID input `{input_string}`: {error}")]
+    InvaidSSTable {
         input_string: String,
         error: uuid::Error,
     },
@@ -134,4 +146,14 @@ pub enum StorageEngineError {
     /// Block is full
     #[error("Block is full")]
     BlockIsFullError,
+
+
+      /// Error while writing to index file
+      #[error("Index file write error")]
+      IndexFileWriteError(#[source] io::Error),
+
+       /// Error while flushing write to disk for index file
+       #[error("Index file flush error")]
+       IndexFileFlushError(#[source] io::Error),
+  
 }

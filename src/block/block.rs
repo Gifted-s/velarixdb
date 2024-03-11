@@ -48,41 +48,62 @@
 //! The index hashmap (`index`) maintains references to the keys and their corresponding offsets within the data vector.
 //!
 
-use std::{collections::HashMap, sync::Arc};
+use std::io;
 
-use crate::err::StorageEngineError;
+use tokio::{fs::File, io::AsyncWriteExt};
 
+use err::StorageEngineError::*;
+
+use crate::{
+    consts::{SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8},
+    err::{self, StorageEngineError},
+};
 const BLOCK_SIZE: usize = 4 * 1024; // 4KB
-
-const SIZE_OF_U32: usize = std::mem::size_of::<u32>();
 
 #[derive(Debug, Clone)]
 pub struct Block {
-    pub data: Vec<u8>,
+    pub data: Vec<BlockEntry>,
+    pub size: usize,
     pub entry_count: usize,
 }
 
+#[derive(Debug, Clone)]
+pub struct BlockEntry {
+    pub key_prefix: u32,
+    pub key: Vec<u8>,
+    pub value_offset: u32,
+    pub creation_date: u64,
+    pub is_tombstone: bool,
+}
 impl Block {
     /// Creates a new empty Block.
     pub fn new() -> Self {
         Block {
+            size: 0,
             data: Vec::with_capacity(BLOCK_SIZE),
             entry_count: 0,
         }
     }
 
-    /// Checks if the Block is full given the size of an entry.
-    pub fn is_full(&self, entry_size: usize) -> bool {
-        self.data.len() + entry_size > BLOCK_SIZE
+    pub fn get_first_entry(&self) -> BlockEntry {
+        self.data[0].clone()
     }
 
     /// Sets an entry with the provided key and value in the Block.
     ///
     /// Returns an `io::Result` indicating success or failure. An error is returned if the Block
     /// is already full and cannot accommodate the new entry.
-    pub fn set_entry(&mut self, entry_vec: Vec<u8>) -> Result<(), StorageEngineError> {
+    pub fn set_entry(
+        &mut self,
+        key_prefix: u32,
+        key: Vec<u8>,
+        value_offset: u32,
+        creation_date: u64,
+        is_tombstone: bool,
+    ) -> Result<(), StorageEngineError> {
         // Calculate the total size of the entry, including the key, value, and the size of the length prefix.
-        let entry_size = entry_vec.len();
+        // Key + Key Prefix + Value Offset +  Creation Date + Tombstone Marker
+        let entry_size = key.len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
 
         // Check if the Block is already full and cannot accommodate the new entry.
         if self.is_full(entry_size) {
@@ -91,14 +112,60 @@ impl Block {
 
         // Get the current offset in the data vector and extend it with the new entry.
         let offset = self.data.len();
-        self.data.extend_from_slice(&entry_vec);
-
+        let entry = BlockEntry {
+            key,
+            key_prefix,
+            creation_date,
+            is_tombstone,
+            value_offset,
+        };
+        self.data.push(entry);
+        self.size += entry_size;
         // Increment the entry count.
         self.entry_count += 1;
 
         Ok(())
     }
 
+    pub async fn write_to_file(&self, file: &mut File) -> Result<(), StorageEngineError> {
+        for entry in &self.data {
+            let entry_len = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
+            let mut entry_vec = Vec::with_capacity(entry_len);
+
+            //add key len
+            entry_vec.extend_from_slice(&(entry.key_prefix).to_le_bytes());
+
+            //add key
+            entry_vec.extend_from_slice(&entry.key);
+
+            //add value offset
+            entry_vec.extend_from_slice(&(entry.value_offset as u32).to_le_bytes());
+
+            //write date created in milliseconds
+            entry_vec.extend_from_slice(&entry.creation_date.to_le_bytes());
+
+            //write is tombstone to file
+            entry_vec.push(entry.is_tombstone as u8);
+            if entry_len != entry_vec.len() {
+                return Err(SSTableWriteError {
+                    error: io::Error::new(io::ErrorKind::InvalidInput, "Invalid Input"),
+                });
+            }
+            file.write_all(&entry_vec)
+                .await
+                .map_err(|err| SSTableWriteError { error: err })?;
+
+            file.flush()
+                .await
+                .map_err(|err| SSTableFlushError { error: err })?;
+        }
+        Ok(())
+    }
+
+    /// Checks if the Block is full given the size of an entry.
+    pub fn is_full(&self, entry_size: usize) -> bool {
+        self.size + entry_size > BLOCK_SIZE
+    }
 
     /// Retrieves the value associated with the provided key from the Block.
     ///

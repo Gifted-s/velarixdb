@@ -1,7 +1,7 @@
 use crossbeam_skiplist::SkipMap;
 use log::{error, info, warn};
-use tokio::fs;
 use std::{cmp::Ordering, collections::HashMap, path::PathBuf, sync::Arc};
+use tokio::fs;
 use uuid::Uuid;
 //use tokio::stream::StreamExt;
 
@@ -88,8 +88,8 @@ impl Compactor {
                         {
                             Ok(sst_file_path) => {
                                 println!(
-                                    "SSTable written to Disk path: {:?}",
-                                    sst_file_path.get_path()
+                                    "SSTable written to Disk data path: {:?}, index path {:?}",
+                                    sst_file_path.data_file_path, sst_file_path.index_file_path
                                 );
                                 // Step 4: Map this bloom filter to its sstable file path
                                 m.bloom_filter.set_sstable_path(sst_file_path);
@@ -104,7 +104,9 @@ impl Compactor {
                                 // Ensure that bloom filter is restored to the previous state by removing entries added so far in
                                 // the compaction process and also remove merged sstables written to disk so far to prevent unstable state
                                 while let Some(bf) = bloom_filters.pop() {
-                                    match fs::remove_file(bf.get_sstable_path().get_path()).await {
+                                    match fs::remove_dir_all(bf.get_sstable_path().dir.clone())
+                                        .await
+                                    {
                                         Ok(()) => info!("Stale SSTable File successfully deleted."),
                                         Err(e) => error!("Stale SSTable File not deleted. {}", e),
                                     }
@@ -182,14 +184,14 @@ impl Compactor {
         let mut bloom_filters_map: HashMap<PathBuf, BloomFilter> =
             bloom_filters_with_both_old_and_new_sstables
                 .iter()
-                .map(|b| (b.get_sstable_path().get_path().to_owned(), b.to_owned()))
+                .map(|b| (b.get_sstable_path().dir.to_owned(), b.to_owned()))
                 .collect();
 
         sstables_to_delete
             .iter()
             .for_each(|(_, sstable_files_paths)| {
                 sstable_files_paths.iter().for_each(|file_path_to_delete| {
-                    bloom_filters_map.remove(&file_path_to_delete.get_path());
+                    bloom_filters_map.remove(&file_path_to_delete.dir);
                 })
             });
         bloom_filters_with_both_old_and_new_sstables.clear();
@@ -208,9 +210,14 @@ impl Compactor {
             let mut merged_sstable = SSTable::new(b.dir.clone(), false).await;
             for path in sstable_paths.iter() {
                 hotness += path.hotness;
-                let sst_opt = SSTable::from_file(PathBuf::new().join(path.get_path()))
-                    .await
-                    .map_err(|err| CompactionFailed(err.to_string()))?;
+                let sst_opt = SSTable::from_file(
+                    path.dir.clone(),
+                    path.data_file_path.clone(),
+                    path.index_file_path.clone(),
+                )
+                .await
+                .map_err(|err| CompactionFailed(err.to_string()))?;
+            
                 match sst_opt {
                     Some(sst) => {
                         merged_sstable = self
