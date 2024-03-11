@@ -234,7 +234,7 @@ impl BucketMap {
             }
 
             for sst in sst_paths {
-                if SSTable::dir_exists(&sst.dir) {
+                if  fs::metadata(&sst.dir).await.is_ok() {
                     if let Err(err) = fs::remove_dir_all(&sst.dir).await {
                         all_sstables_deleted = false;
                         error!(

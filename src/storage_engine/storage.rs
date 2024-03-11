@@ -414,8 +414,8 @@ impl StorageEngine<Vec<u8>> {
                     }
                 })?
             {
-                // engine_root/buckets/bucket{id}/sstable_{timestamp}/sstable_{timestamp}_.db
                 // engine_root/buckets/bucket{id}/sstable_{timestamp}/index_{timestamp}_.db
+                // engine_root/buckets/bucket{id}/sstable_{timestamp}/sstable_{timestamp}_.db
                 let mut sst_files: Vec<PathBuf> = Vec::new();
                 for files in fs::read_dir(sstable_dir.as_ref().unwrap().path()).map_err(|err| {
                     BucketDirectoryOpenError {
@@ -431,7 +431,8 @@ impl StorageEngine<Vec<u8>> {
                         }
                     }
                 }
-
+                // Can't guarantee order that the files are retrived so sort for order
+                sst_files.sort();
                 // Extract bucket id
                 let bucket_id = Self::get_bucket_id_from_full_bucket_path(
                     sstable_dir.as_ref().unwrap().path().clone(),
@@ -448,10 +449,12 @@ impl StorageEngine<Vec<u8>> {
                             .to_string(),
                     });
                 }
+                let data_file_path = sst_files[1].to_owned();
+                let index_file_path = sst_files[0].to_owned();
                 let sst_path = SSTablePath::new(
                     sstable_dir.as_ref().unwrap().path(),
-                    sst_files[0].clone(),
-                    sst_files[1].clone(),
+                    data_file_path.clone(),
+                    index_file_path.clone(),
                 );
 
                 let bucket_uuid =
@@ -485,13 +488,12 @@ impl StorageEngine<Vec<u8>> {
 
                 let sstable_from_file = SSTable::from_file(
                     sstable_dir.unwrap().path(),
-                    sst_files[0].clone(),
-                    sst_files[1].clone(),
+                    data_file_path,
+                    index_file_path,
                 )
                 .await?;
                 let sstable = sstable_from_file.unwrap();
-
-                // We need to fetch the most recent write offset so it can
+                // Fetch the most recent write offset so it can
                 // use it to recover entries not written into sstables from value log
                 let head_entry = sstable.get_value_from_index(HEAD_ENTRY_KEY);
 
@@ -519,13 +521,14 @@ impl StorageEngine<Vec<u8>> {
                 bloom_filters.push(bf)
             }
         }
-
         let mut buckets_map = BucketMap::new(buckets_path.clone());
         buckets_map.set_buckets(recovered_buckets);
 
         // store vLog head and tail in memory
         vlog.set_head(most_recent_head_offset);
         vlog.set_tail(most_recent_tail_offset);
+        println!("Buckets no {}", buckets_map.buckets.len());
+        println!("Bloom Filter no {}", bloom_filters.len());
 
         // recover memtable
         let recover_result = StorageEngine::recover_memtable(
@@ -677,7 +680,7 @@ mod tests {
         let mut s_engine = StorageEngine::new(path.clone()).await.unwrap();
 
         // Specify the number of random strings to generate
-        let num_strings = 100;
+        let num_strings = 10000;
 
         // Specify the length of each random string
         let string_length = 10;
@@ -688,46 +691,46 @@ mod tests {
             random_strings.push(random_string);
         }
 
-        let sg = Arc::new(RwLock::new(s_engine));
-        let binding = random_strings.clone();
-        let tasks = binding.iter().map(|k| {
-            let s_engine = Arc::clone(&sg);
-            let k = k.clone();
-            tokio::spawn(async move {
-                let mut value = s_engine.write().await;
-                value.put(&k, "boyode").await
-            })
-        });
+        // let sg = Arc::new(RwLock::new(s_engine));
+        // let binding = random_strings.clone();
+        // let tasks = binding.iter().map(|k| {
+        //     let s_engine = Arc::clone(&sg);
+        //     let k = k.clone();
+        //     tokio::spawn(async move {
+        //         let mut value = s_engine.write().await;
+        //         value.put(&k, "boyode").await
+        //     })
+        // });
 
-        // Collect the results from the spawned tasks
-        for task in tasks {
-            tokio::select! {
-                result = task => {
-                    //println!("{:?}",result);
-                }
-            }
-        }
+        // // Collect the results from the spawned tasks
+        // for task in tasks {
+        //     tokio::select! {
+        //         result = task => {
+        //             //println!("{:?}",result);
+        //         }
+        //     }
+        // }
 
         // // Insert the generated random strings
         // let compactor = Compactor::new();
-        let s_engine = Arc::clone(&sg);
-        let compaction_opt = s_engine.write().await.run_compaction().await;
-        match compaction_opt {
-            Ok(_) => {
-                println!("Compaction is successful");
-                println!(
-                    "Length of bucket after compaction {:?}",
-                    s_engine.read().await.buckets.buckets.len()
-                );
-                println!(
-                    "Length of bloom filters after compaction {:?}",
-                    s_engine.read().await.bloom_filters.len()
-                );
-            }
-            Err(err) => {
-                info!("Error during compaction {}", err)
-            }
-        }
+        // let s_engine = Arc::clone(&sg);
+        // let compaction_opt = s_engine.write().await.run_compaction().await;
+        // match compaction_opt {
+        //     Ok(_) => {
+        //         println!("Compaction is successful");
+        //         println!(
+        //             "Length of bucket after compaction {:?}",
+        //             s_engine.read().await.buckets.buckets.len()
+        //         );
+        //         println!(
+        //             "Length of bloom filters after compaction {:?}",
+        //             s_engine.read().await.bloom_filters.len()
+        //         );
+        //     }
+        //     Err(err) => {
+        //         info!("Error during compaction {}", err)
+        //     }
+        // }
 
         //random_strings.sort();
         println!("About to start reading");

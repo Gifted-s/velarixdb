@@ -368,9 +368,6 @@ impl SSTable {
         path.exists() && path.is_file()
     }
 
-    pub(crate) fn dir_exists(path_buf: &PathBuf) -> bool {
-        !path_buf.exists()
-    }
 
     pub(crate) async fn from_file(
         dir: PathBuf,
