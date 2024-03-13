@@ -9,10 +9,10 @@
 //! |             Block                |
 //! +----------------------------------+
 //! |  - data: Vec<u8>                 |   // Data entries within the block
-//! |  - index: HashMap<Arc<Vec<u8>>, usize> |   // Index for key-based lookups
-//! |  - entry_count: usize             |   // Number of entries in the block
+//! |                                  |
+//! |  - entry_count: usize            |   // Number of entries in the block
 //! +----------------------------------+
-//! |           Block Data              |
+//! |           Block Data             |
 //! |   +------------------------+     |
 //! |   |   Entry 1              |     |
 //! |   | +-------------------+  |     |
@@ -129,8 +129,6 @@ impl Block {
     }
 
     pub async fn write_to_file(&self, file: &mut File) -> Result<(), StorageEngineError> {
-        //println!("here is offset we are looking for {} 222", offset.len());
-
         for  entry in &self.data {
             let entry_len = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
             let mut entry_vec = Vec::with_capacity(entry_len);
@@ -157,11 +155,6 @@ impl Block {
             file.write_all(&entry_vec)
                 .await
                 .map_err(|err| SSTableWriteError { error: err })?;
-           
-                
-            
-            //let offset = file.seek(tokio::io::SeekFrom::Current(0)).await.unwrap();
-            //println!("Writing this offset {}", 0);
         }
 
         Ok(())
