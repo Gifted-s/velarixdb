@@ -201,9 +201,11 @@ impl SSTable {
             .await
             .map_err(|err| GetFileMetaDataError(err))?
             .len();
-
+        // println!("here is offset we are looking for {}", offset);
         let first_entry = block.get_first_entry();
+        // println!("here is offset we are looking for {}", offset);
         // Store initial entry key and its sstable file offset in sparse index
+        println!("OFFSET {:?}, {:?}",String::from_utf8_lossy( &first_entry.key), offset);
         sparse_index.insert(first_entry.key_prefix, first_entry.key, offset as u32);
         block.write_to_file(file).await?;
         Ok(())
@@ -211,6 +213,7 @@ impl SSTable {
 
     pub(crate) async fn get(
         &self,
+        start_offset: u32,
         searched_key: &[u8],
     ) -> Result<Option<(usize, u64, bool)>, StorageEngineError> {
         // Open the file in read mode
@@ -224,6 +227,9 @@ impl SSTable {
                 error: err,
             })?;
 
+        file.seek(tokio::io::SeekFrom::Start(start_offset.into()))
+            .await
+            .map_err(|err| FileSeekError(err))?;
         // read bloom filter to check if the key possbly exists in the sstable
         // search sstable for key
         loop {
@@ -239,7 +245,7 @@ impl SSTable {
                 return Ok(None);
             }
             let key_len = u32::from_le_bytes(key_len_bytes);
-
+            println!("KEY LENGTH {}", key_len);
             let mut key = vec![0; key_len as usize];
             bytes_read = file
                 .read(&mut key)
@@ -367,7 +373,6 @@ impl SSTable {
         // Check if the file exists
         path.exists() && path.is_file()
     }
-
 
     pub(crate) async fn from_file(
         dir: PathBuf,

@@ -48,9 +48,10 @@
 //! The index hashmap (`index`) maintains references to the keys and their corresponding offsets within the data vector.
 //!
 
-use std::io;
-
-use tokio::{fs::File, io::AsyncWriteExt};
+use tokio::{
+    fs::File,
+    io::{self, AsyncSeekExt, AsyncWriteExt},
+};
 
 use err::StorageEngineError::*;
 
@@ -58,7 +59,7 @@ use crate::{
     consts::{SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8},
     err::{self, StorageEngineError},
 };
-const BLOCK_SIZE: usize = 4 * 1024; // 4KB
+const BLOCK_SIZE: usize = 8 * 1024; // 4KB
 
 #[derive(Debug, Clone)]
 pub struct Block {
@@ -128,7 +129,9 @@ impl Block {
     }
 
     pub async fn write_to_file(&self, file: &mut File) -> Result<(), StorageEngineError> {
-        for entry in &self.data {
+        //println!("here is offset we are looking for {} 222", offset.len());
+
+        for  entry in &self.data {
             let entry_len = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
             let mut entry_vec = Vec::with_capacity(entry_len);
 
@@ -154,11 +157,13 @@ impl Block {
             file.write_all(&entry_vec)
                 .await
                 .map_err(|err| SSTableWriteError { error: err })?;
-
-            file.flush()
-                .await
-                .map_err(|err| SSTableFlushError { error: err })?;
+           
+                
+            
+            //let offset = file.seek(tokio::io::SeekFrom::Current(0)).await.unwrap();
+            //println!("Writing this offset {}", 0);
         }
+
         Ok(())
     }
 

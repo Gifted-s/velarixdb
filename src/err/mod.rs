@@ -74,11 +74,9 @@ pub enum StorageEngineError {
         error: uuid::Error,
     },
 
-       /// There was an error while atttempting to parse string to UUID
-       #[error("Invalid sstable directory error `{input_string}`")]
-       InvalidSSTableDirectoryError {
-           input_string: String,
-       },
+    /// There was an error while atttempting to parse string to UUID
+    #[error("Invalid sstable directory error `{input_string}`")]
+    InvalidSSTableDirectoryError { input_string: String },
 
     #[error("Invalid string provided to be parsed to UUID input `{input_string}`: {error}")]
     InvaidSSTable {
@@ -147,13 +145,15 @@ pub enum StorageEngineError {
     #[error("Block is full")]
     BlockIsFullError,
 
+    /// Error while writing to index file
+    #[error("Index file write error")]
+    IndexFileWriteError(#[source] io::Error),
 
-      /// Error while writing to index file
-      #[error("Index file write error")]
-      IndexFileWriteError(#[source] io::Error),
+     /// Error while reading from index file
+     #[error("Index file read error")]
+     IndexFileReadError(#[source] io::Error),
 
-       /// Error while flushing write to disk for index file
-       #[error("Index file flush error")]
-       IndexFileFlushError(#[source] io::Error),
-  
+    /// Error while flushing write to disk for index file
+    #[error("Index file flush error")]
+    IndexFileFlushError(#[source] io::Error),
 }

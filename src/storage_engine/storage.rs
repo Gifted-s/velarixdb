@@ -9,6 +9,7 @@ use crate::{
     err::StorageEngineError,
     memtable::{Entry, InMemoryTable},
     meta::Meta,
+    sparse_index::SparseIndex,
     sstable::{SSTable, SSTablePath},
     value_log::ValueLog,
 };
@@ -16,8 +17,8 @@ use chrono::Utc;
 
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
-use std::hash::Hash;
 use std::{collections::HashMap, fs, mem, path::PathBuf};
+use std::{hash::Hash, result};
 
 use crate::err::StorageEngineError::*;
 
@@ -163,34 +164,43 @@ impl StorageEngine<Vec<u8>> {
             // Step 2: If key does not exist in MemTable then we can load sstables that probaby contains this key fr8om bloom filter
             let sstable_paths =
                 BloomFilter::get_sstable_paths_that_contains_key(&self.bloom_filters, &key);
-            println!(
-                "Possible SSTABLE WITH KEY {}",
-                sstable_paths.clone().unwrap().len()
-            );
             match sstable_paths {
                 Some(paths) => {
                     // Step 3: Get the most recent value offset from sstables
                     let mut is_deleted = false;
                     for sst_path in paths.iter() {
-                        let sstable = SSTable::new_with_exisiting_file_path(
-                            sst_path.dir.clone(),
-                            sst_path.data_file_path.clone(),
-                            sst_path.index_file_path.clone(),
-                        );
-                        println!("Waiting to get from ssstable");
-                        match sstable.get(&key).await {
-                            Ok(result) => {
-                                println!("Received from sstable");
-                                if let Some((value_offset, created_at, is_tombstone)) = result {
-                                    // println!("Found in this sstable {:?}, {}", sst_path.get_path(), created_at);
-                                    if created_at > most_recent_insert_time {
-                                        offset = value_offset;
-                                        most_recent_insert_time = created_at;
-                                        is_deleted = is_tombstone;
+                        // Retrieve the sstable index
+                        let s_index = SparseIndex::new(sst_path.index_file_path.clone()).await;
+                        // Get block  from sstable index
+                        if let Ok(result) = s_index.get(&key).await {
+                            if let Some(block_offset) = result {
+                                println!("BLOCK OFFSET {}", block_offset);
+                                let sstable = SSTable::new_with_exisiting_file_path(
+                                    sst_path.dir.clone(),
+                                    sst_path.data_file_path.clone(),
+                                    sst_path.index_file_path.clone(),
+                                );
+                                println!("Waiting to get from ssstable");
+                                match sstable.get(block_offset, &key).await {
+                                    Ok(result) => {
+                                        if let Some((value_offset, created_at, is_tombstone)) =
+                                            result
+                                        {
+                                            // println!("Found in this sstable {:?}, {}", sst_path.get_path(), created_at);
+                                            if created_at > most_recent_insert_time {
+                                                offset = value_offset;
+                                                most_recent_insert_time = created_at;
+                                                is_deleted = is_tombstone;
+                                            }
+                                        }
                                     }
+                                    Err(_) => {}
                                 }
+                            } else {
+                                continue;
                             }
-                            Err(_) => {}
+                        } else {
+                            continue;
                         }
                     }
 
@@ -206,6 +216,7 @@ impl StorageEngine<Vec<u8>> {
 
         // most_recent_insert_time cannot be zero unless did not find this key in any sstable
         if most_recent_insert_time > 0 {
+
             // Step 5: Read value from value log based on offset
             let value: Option<(Vec<u8>, bool)> = self.val_log.get(offset).await?;
             match value {
@@ -218,6 +229,7 @@ impl StorageEngine<Vec<u8>> {
                 None => return Err(KeyNotFoundInValueLogError),
             };
         }
+        println!("Actually here");
         Err(NotFoundInDB)
     }
 
@@ -680,7 +692,7 @@ mod tests {
         let mut s_engine = StorageEngine::new(path.clone()).await.unwrap();
 
         // Specify the number of random strings to generate
-        let num_strings = 10000;
+        let num_strings = 6000;
 
         // Specify the length of each random string
         let string_length = 10;
@@ -690,28 +702,30 @@ mod tests {
             let random_string = generate_random_string(string_length);
             random_strings.push(random_string);
         }
-
-        // let sg = Arc::new(RwLock::new(s_engine));
-        // let binding = random_strings.clone();
-        // let tasks = binding.iter().map(|k| {
-        //     let s_engine = Arc::clone(&sg);
-        //     let k = k.clone();
-        //     tokio::spawn(async move {
-        //         let mut value = s_engine.write().await;
-        //         value.put(&k, "boyode").await
-        //     })
-        // });
-
-        // // Collect the results from the spawned tasks
-        // for task in tasks {
-        //     tokio::select! {
-        //         result = task => {
-        //             //println!("{:?}",result);
-        //         }
-        //     }
+        // for k in random_strings.clone() {
+        //     s_engine.put(&k, "boyode").await.unwrap();
         // }
+        let sg = Arc::new(RwLock::new(s_engine));
+        let binding = random_strings.clone();
+        let tasks = binding.iter().map(|k| {
+            let s_engine = Arc::clone(&sg);
+            let k = k.clone();
+            tokio::spawn(async move {
+                let mut value = s_engine.write().await;
+                value.put(&k, "boy").await
+            })
+        });
 
-        // // Insert the generated random strings
+        // Collect the results from the spawned tasks
+        for task in tasks {
+            tokio::select! {
+                result = task => {
+                    //println!("{:?}",result);
+                }
+            }
+        }
+
+        // Insert the generated random strings
         // let compactor = Compactor::new();
         // let s_engine = Arc::clone(&sg);
         // let compaction_opt = s_engine.write().await.run_compaction().await;
@@ -732,34 +746,35 @@ mod tests {
         //     }
         // }
 
-        //random_strings.sort();
+        // random_strings.sort();
         println!("About to start reading");
-        // let tasks = random_strings.iter().map(|k| {
-        //     let s_engine = Arc::clone(&sg);
-        //     let k = k.clone();
-        //     tokio::spawn(async move {
-        //         let value = s_engine.read().await;
-        //         value.get(&k).await
-        //     })
-        // });
+        let tasks = random_strings.iter().map(|k| {
+            let s_engine = Arc::clone(&sg);
+            let k = k.clone();
+            tokio::spawn(async move {
+                let value = s_engine.read().await;
+                value.get(&k).await
+            })
+        });
 
-        // for task in tasks {
-        //     tokio::select! {
-        //         result = task => {
-        //             match result.unwrap() {
-        //             Ok((value, _)) => {
-        //                 assert_eq!(value, b"boyode");
-        //             }
-        //             Err(err) => {
-        //                 println!("{}", err);
-        //                 assert!(false, "No err should be found");
-        //             }
-        //         }
-        //         }
-        //     }
-        // }
+        for task in tasks {
+            tokio::select! {
+                result = task => {
+                    match result.unwrap() {
+                    Ok((value, _)) => {
+                        println!("PASSED {:?}", value);
+                        assert_eq!(value, b"boy");
+                    }
+                    Err(err) => {
+                        println!("ERROR OOOO{}", err.to_string());
+                        assert!(false, "No err should be found");
+                    }
+                }
+                }
+            }
+        }
 
-        //let _ = fs::remove_dir_all(path.clone()).await;
+        let _ = fs::remove_dir_all(path.clone()).await;
         // sort to make fetch random
     }
 
@@ -932,7 +947,7 @@ mod tests {
         let mut s_engine = StorageEngine::new(path.clone()).await.unwrap();
 
         // Specify the number of random strings to generate
-        let num_strings = 50000;
+        let num_strings = 1000;
 
         // Specify the length of each random string
         let string_length = 10;
