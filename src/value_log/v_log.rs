@@ -96,10 +96,11 @@ impl ValueLog {
             })?;
 
         // Get the current offset before writing(this will be the offset of the value stored in the memtable)
-        let meta = file
+        let last_offset = file
             .metadata()
             .await
-            .map_err(|err| GetFileMetaDataError(err))?;
+            .map_err(|err| GetFileMetaDataError(err))?
+            .len();
 
         file.write_all(&serialized_data)
             .await
@@ -108,7 +109,7 @@ impl ValueLog {
             .await
             .map_err(|error| VLogFileWriteError(error.to_string()))?;
 
-        Ok(meta.len().try_into().unwrap())
+        Ok(last_offset as usize)
     }
 
     pub async fn get(
@@ -194,7 +195,7 @@ impl ValueLog {
         if bytes_read == 0 {
             return Ok(None);
         }
-
+        println!("k  len {:?}", String::from_utf8_lossy(&key));
         let mut value = vec![0; val_len as usize];
         bytes_read = file
             .read(&mut value)

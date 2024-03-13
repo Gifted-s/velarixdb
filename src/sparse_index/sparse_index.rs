@@ -3,11 +3,11 @@ use std::path::PathBuf;
 use chrono::Utc;
 use tokio::{
     fs::{self, File, OpenOptions},
-    io::AsyncWriteExt,
+    io::{self, AsyncReadExt, AsyncWriteExt},
 };
 
 use crate::{
-    consts::{SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8},
+    consts::{EOF, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8},
     err::StorageEngineError,
 };
 use StorageEngineError::*;
@@ -18,7 +18,6 @@ pub struct SparseIndex {
 
 impl SparseIndex {
     pub async fn new(file_path: PathBuf) -> Self {
-      
         Self {
             file_path,
             entries: Vec::new(),
@@ -56,7 +55,6 @@ impl SparseIndex {
 
             //add value offset
             entry_vec.extend_from_slice(&(entry.offset as u32).to_le_bytes());
-
             assert!(entry_len == entry_vec.len(), "Incorrect entry size");
 
             file.write_all(&entry_vec)
@@ -66,6 +64,89 @@ impl SparseIndex {
             file.flush().await.map_err(|err| IndexFileFlushError(err))?;
         }
         Ok(())
+    }
+
+    pub(crate) async fn get(&self, searched_key: &[u8]) -> Result<Option<u32>, StorageEngineError> {
+        let mut sstable_file_offset = -1;
+        // Open the file in read mode
+        let file_path = PathBuf::from(&self.file_path);
+        let mut file = OpenOptions::new()
+            .read(true)
+            .open(file_path.clone())
+            .await
+            .map_err(|err| SSTableFileOpenError {
+                path: file_path.clone(),
+                error: err,
+            })?;
+
+        // read bloom filter to check if the key possbly exists in the sstable
+        // search sstable for key
+        loop {
+            let mut key_len_bytes = [0; SIZE_OF_U32];
+            let mut bytes_read =
+                file.read(&mut key_len_bytes)
+                    .await
+                    .map_err(|err| SSTableFileReadError {
+                        path: file_path.clone(),
+                        error: err,
+                    })?;
+            // If the end of the file is reached and no match is found, return non
+            if bytes_read == 0 {
+                if sstable_file_offset ==-1{
+                    return Ok(None);
+                }
+                println!("RETURNEDE HERE");
+                return Ok(Some(sstable_file_offset as u32));
+            }
+            let key_len = u32::from_le_bytes(key_len_bytes);
+            let mut key = vec![0; key_len as usize];
+            bytes_read = file
+                .read(&mut key)
+                .await
+                .map_err(|err| IndexFileReadError(err))?;
+            if bytes_read == 0 {
+                return Err(UnexpectedEOF(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    EOF,
+                )));
+            }
+            let mut key_offset_bytes = [0; SIZE_OF_U32];
+            bytes_read =
+                file.read(&mut key_offset_bytes)
+                    .await
+                    .map_err(|err| SSTableFileReadError {
+                        path: file_path.clone(),
+                        error: err,
+                    })?;
+            if bytes_read == 0 {
+                return Err(UnexpectedEOF(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    EOF,
+                )));
+            }
+
+            let offset = u32::from_le_bytes(key_offset_bytes);
+            println!("ggg {} ", offset);
+            match key.cmp(&searched_key.to_vec()) {
+                std::cmp::Ordering::Less => sstable_file_offset = offset as i32,
+                std::cmp::Ordering::Equal => {
+                    println!("KEY {}, SEARCHED {}", String::from_utf8_lossy(&key), String::from_utf8_lossy(&searched_key) );
+                    println!("RETURNEDE HERE 2");
+                    return Ok(Some(offset));
+                }
+                std::cmp::Ordering::Greater => {
+                    // if all index keys are greater than the searched key then return none
+                    if sstable_file_offset ==-1{
+                        println!("RETURNEDE HERE 3");
+                        return Ok(None);
+                    }
+                    println!("RETURNEDE HERE");
+                    return Ok(Some(sstable_file_offset as u32));
+                }
+            }
+        }
+
+        
     }
 }
 
