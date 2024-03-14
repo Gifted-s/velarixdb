@@ -7,7 +7,7 @@ use tokio::{
 };
 
 use crate::{
-    consts::{EOF, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8},
+    consts::{EOF, SIZE_OF_U32},
     err::StorageEngineError,
 };
 use StorageEngineError::*;
