@@ -7,7 +7,7 @@ use tokio::{
 };
 
 use crate::{
-    consts::{EOF, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8},
+    consts::{EOF, SIZE_OF_U32},
     err::StorageEngineError,
 };
 use StorageEngineError::*;
@@ -95,7 +95,6 @@ impl SparseIndex {
                 if sstable_file_offset ==-1{
                     return Ok(None);
                 }
-                println!("RETURNEDE HERE");
                 return Ok(Some(sstable_file_offset as u32));
             }
             let key_len = u32::from_le_bytes(key_len_bytes);
@@ -126,21 +125,16 @@ impl SparseIndex {
             }
 
             let offset = u32::from_le_bytes(key_offset_bytes);
-            println!("ggg {} ", offset);
             match key.cmp(&searched_key.to_vec()) {
                 std::cmp::Ordering::Less => sstable_file_offset = offset as i32,
                 std::cmp::Ordering::Equal => {
-                    println!("KEY {}, SEARCHED {}", String::from_utf8_lossy(&key), String::from_utf8_lossy(&searched_key) );
-                    println!("RETURNEDE HERE 2");
                     return Ok(Some(offset));
                 }
                 std::cmp::Ordering::Greater => {
                     // if all index keys are greater than the searched key then return none
                     if sstable_file_offset ==-1{
-                        println!("RETURNEDE HERE 3");
                         return Ok(None);
                     }
-                    println!("RETURNEDE HERE");
                     return Ok(Some(sstable_file_offset as u32));
                 }
             }

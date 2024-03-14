@@ -388,7 +388,6 @@ impl Compactor {
             for entry in m.sstable.index.iter() {
                 if self.tombstones.contains_key(entry.key()) {
                     let tombstone_timestamp = *self.tombstones.get(entry.key()).unwrap();
-                    //println!("found a key in ton=bstine {:?} tombstone t_timestamp: {} normal creation time {:?}", entry.key(),tombstone_timestamp,entry.value().1);
                     if tombstone_timestamp < entry.value().1 {
                         new_index.insert(
                             entry.key().to_vec(),

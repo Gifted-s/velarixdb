@@ -195,7 +195,6 @@ impl ValueLog {
         if bytes_read == 0 {
             return Ok(None);
         }
-        println!("k  len {:?}", String::from_utf8_lossy(&key));
         let mut value = vec![0; val_len as usize];
         bytes_read = file
             .read(&mut value)
