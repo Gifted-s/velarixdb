@@ -11,3 +11,4 @@ pub mod value_log;
 pub mod block;
 pub mod garbage_collector;
 pub mod sparse_index;
+pub mod key_offseter;
