@@ -149,11 +149,17 @@ pub enum StorageEngineError {
     #[error("Index file write error")]
     IndexFileWriteError(#[source] io::Error),
 
-     /// Error while reading from index file
-     #[error("Index file read error")]
-     IndexFileReadError(#[source] io::Error),
+    /// Error while reading from index file
+    #[error("Index file read error")]
+    IndexFileReadError(#[source] io::Error),
 
     /// Error while flushing write to disk for index file
     #[error("Index file flush error")]
     IndexFileFlushError(#[source] io::Error),
+
+    #[error("Error finding biggest key in memtable (None was returned)")]
+    BiggestKeyIndexError,
+
+    #[error("All bloom filters return false for all sstables")]
+    KeyNotFoundByAnyBloomFilterError,
 }

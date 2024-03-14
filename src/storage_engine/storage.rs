@@ -7,6 +7,7 @@ use crate::{
         META_DIRECTORY_NAME, TAIL_ENTRY_KEY, TOMB_STONE_MARKER, VALUE_LOG_DIRECTORY_NAME,
     },
     err::StorageEngineError,
+    key_offseter::TableBiggestKeys,
     memtable::{Entry, InMemoryTable},
     meta::Meta,
     sparse_index::SparseIndex,
@@ -15,12 +16,11 @@ use crate::{
 };
 use chrono::Utc;
 
+use crate::err::StorageEngineError::*;
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 use std::{collections::HashMap, fs, mem, path::PathBuf};
 use std::{hash::Hash, result};
-
-use crate::err::StorageEngineError::*;
 
 #[derive(Clone, Debug)]
 pub struct StorageEngine<K: Hash + PartialOrd + std::cmp::Ord> {
@@ -29,20 +29,10 @@ pub struct StorageEngine<K: Hash + PartialOrd + std::cmp::Ord> {
     pub bloom_filters: Vec<BloomFilter>,
     pub val_log: ValueLog,
     pub buckets: BucketMap,
-    pub key_index: LevelsBiggestKeys,
+    pub biggest_key_index: TableBiggestKeys,
     pub compactor: Compactor,
     pub meta: Meta,
     pub config: Config,
-}
-
-#[derive(Clone, Debug)]
-pub struct LevelsBiggestKeys {
-    levels: Vec<Vec<u32>>,
-}
-impl LevelsBiggestKeys {
-    pub fn new(levels: Vec<Vec<u32>>) -> Self {
-        Self { levels }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -161,9 +151,20 @@ impl StorageEngine<Vec<u8>> {
                 return Err(KeyFoundAsTombstoneInMemtableError);
             }
         } else {
-            // Step 2: If key does not exist in MemTable then we can load sstables that probaby contains this key fr8om bloom filter
+            let filtered_paths = self.biggest_key_index.filter_sstables_by_biggest_key(&key);
+            if filtered_paths.is_empty() {
+                return Err(KeyNotFoundInAnySSTableError);
+            }
+            println!("BF LENGTH BEFIRE {}", self.bloom_filters.len());
+            let filtered_bloom_filters =
+                BloomFilter::filter_by_sstable_paths(&self.bloom_filters, filtered_paths);
+            if filtered_bloom_filters.is_empty() {
+                return Err(KeyNotFoundByAnyBloomFilterError);
+            }
+            println!("BF LENGTH AFTER {}", filtered_bloom_filters.len());
+            // Step 2: If key does not exist in MemTable then we can load sstables that probaby contains this key from bloom filter
             let sstable_paths =
-                BloomFilter::get_sstable_paths_that_contains_key(&self.bloom_filters, &key);
+                BloomFilter::get_sstable_paths_that_contains_key(filtered_bloom_filters, &key);
             match sstable_paths {
                 Some(paths) => {
                     // Step 3: Get the most recent value offset from sstables
@@ -324,6 +325,7 @@ impl StorageEngine<Vec<u8>> {
         //write the memtable to the disk as SS Tables
         // insert to bloom filter
         let mut bf = self.memtable.get_bloom_filter();
+        let data_file_path = sstable_path.get_data_file_path().clone();
         bf.set_sstable_path(sstable_path);
         self.bloom_filters.push(bf);
 
@@ -333,6 +335,8 @@ impl StorageEngine<Vec<u8>> {
                 .get_hotness()
                 .cmp(&a.get_sstable_path().get_hotness())
         });
+        let biggest_key = self.memtable.find_biggest_key()?;
+        self.biggest_key_index.set(data_file_path, biggest_key);
         Ok(())
     }
 
@@ -354,11 +358,10 @@ impl StorageEngine<Vec<u8>> {
         let vlog_path = &dir.clone().val_log;
         let buckets_path = dir.buckets.clone();
         let vlog_exit = vlog_path.exists();
-        let vlog = ValueLog::new(vlog_path);
         let vlog_empty =
             !vlog_exit || fs::metadata(vlog_path).map_err(GetFileMetaDataError)?.len() == 0;
 
-        let key_index = LevelsBiggestKeys::new(Vec::new());
+        let biggest_key_index = TableBiggestKeys::new();
         let mut vlog = ValueLog::new(vlog_path).await?;
         let meta = Meta::new(&dir.meta);
         if vlog_empty {
@@ -394,7 +397,7 @@ impl StorageEngine<Vec<u8>> {
                 bloom_filters: Vec::new(),
                 buckets: BucketMap::new(buckets_path.clone()),
                 dir,
-                key_index,
+                biggest_key_index,
                 compactor: Compactor::new(config.enable_ttl, config.entry_ttl_millis),
                 config: config.clone(),
                 meta,
@@ -556,7 +559,7 @@ impl StorageEngine<Vec<u8>> {
                 dir,
                 buckets: buckets_map,
                 bloom_filters,
-                key_index,
+                biggest_key_index,
                 meta,
                 compactor: Compactor::new(config.enable_ttl, config.entry_ttl_millis),
                 config: config.clone(),
@@ -607,7 +610,11 @@ impl StorageEngine<Vec<u8>> {
 
     async fn run_compaction(&mut self) -> Result<bool, StorageEngineError> {
         self.compactor
-            .run_compaction(&mut self.buckets, &mut self.bloom_filters)
+            .run_compaction(
+                &mut self.buckets,
+                &mut self.bloom_filters,
+                &mut self.biggest_key_index,
+            )
             .await
     }
 
@@ -661,17 +668,15 @@ impl SizeUnit {
 
 #[cfg(test)]
 mod tests {
-    use std::rc::Rc;
-    use std::sync::Arc;
 
-    use crate::err;
+    use std::sync::Arc;
 
     use super::*;
     use log::info;
-    use rand::random;
+
     use tokio::fs;
     use tokio::sync::RwLock;
-    
+
     // Generate test to find keys after compaction
     #[tokio::test]
     async fn storage_engine_create_asynchronous() {
@@ -679,7 +684,7 @@ mod tests {
         let s_engine = StorageEngine::new(path.clone()).await.unwrap();
 
         // Specify the number of random strings to generate
-        let num_strings = 6000;
+        let num_strings = 40000;
 
         // Specify the length of each random string
         let string_length = 10;
@@ -743,7 +748,7 @@ mod tests {
             }
         }
 
-        // random_strings.sort();
+        random_strings.sort();
         println!("About to start reading");
         let tasks = random_strings.iter().map(|k| {
             let s_engine = Arc::clone(&sg);
@@ -761,7 +766,8 @@ mod tests {
                     Ok((value, _)) => {
                         assert_eq!(value, b"boy");
                     }
-                    Err(_) => {
+                    Err(err) => {
+                        println!("ERROR {:?}", err);
                         assert!(false, "No err should be found");
                     }
                 }
@@ -769,7 +775,7 @@ mod tests {
             }
         }
 
-        let _ = fs::remove_dir_all(path.clone()).await;
+       // let _ = fs::remove_dir_all(path.clone()).await;
         // sort to make fetch random
     }
 
@@ -837,7 +843,7 @@ mod tests {
         let s_engine = StorageEngine::new(path.clone()).await.unwrap();
 
         // Specify the number of random strings to generate
-        let num_strings = 6000;
+        let num_strings =100000;
 
         // Specify the length of each random string
         let string_length = 10;
@@ -884,8 +890,11 @@ mod tests {
         random_strings.sort();
         let key = &random_strings[0];
 
-        let get_res = sg.read().await.get(key).await;
-        match get_res {
+        let get_res1 = sg.read().await.get(key).await;
+        let get_res2 = sg.read().await.get(key).await;
+        let get_res3 = sg.read().await.get(key).await;
+        let get_res4 = sg.read().await.get(key).await;
+        match get_res1 {
             Ok(v) => {
                 assert_eq!(v.0, b"boyode");
             }
@@ -893,6 +902,33 @@ mod tests {
                 assert!(false, "No error should be found");
             }
         }
+
+        match get_res2 {
+            Ok(v) => {
+                assert_eq!(v.0, b"boyode");
+            }
+            Err(_) => {
+                assert!(false, "No error should be found");
+            }
+        }
+
+        match get_res3 {
+            Ok(v) => {
+                assert_eq!(v.0, b"boyode");
+            }
+            Err(_) => {
+                assert!(false, "No error should be found");
+            }
+        }
+        match get_res4 {
+            Ok(v) => {
+                assert_eq!(v.0, b"boyode");
+            }
+            Err(_) => {
+                assert!(false, "No error should be found");
+            }
+        }
+
 
         let del_res = sg.write().await.delete(key).await;
         match del_res {
@@ -923,7 +959,7 @@ mod tests {
         // We expect tombstone to be flushed to an sstable at this point
         let get_res2 = sg.read().await.get(key).await;
         match get_res2 {
-            Ok(v) => {
+            Ok(_) => {
                 assert!(false, "Should not be found after compaction")
             }
             Err(err) => {

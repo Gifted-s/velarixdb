@@ -1,13 +1,15 @@
 use crate::bloom_filter::BloomFilter;
 use crate::compaction::IndexWithSizeInBytes;
-use crate::consts::{DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MEMTABLE_CAPACITY};
+use crate::consts::{
+    DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MEMTABLE_CAPACITY, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8,
+};
 use crate::err::StorageEngineError;
 //use crate::memtable::val_option::ValueOption;
 use crate::storage_engine::SizeUnit;
 use chrono::{DateTime, Utc};
 use crossbeam_skiplist::SkipMap;
-
 use std::cmp;
+use StorageEngineError::*;
 
 use std::{hash::Hash, sync::Arc};
 
@@ -36,6 +38,9 @@ impl IndexWithSizeInBytes for InMemoryTable<Vec<u8>> {
     fn size(&self) -> usize {
         self.size
     }
+    fn find_biggest_key_from_table(&self) -> Result<Vec<u8>, StorageEngineError> {
+        self.find_biggest_key()
+    }
 }
 
 impl Entry<Vec<u8>, usize> {
@@ -47,7 +52,6 @@ impl Entry<Vec<u8>, usize> {
             is_tombstone,
         }
     }
-
 
     pub fn has_expired(&self, ttl: u64) -> bool {
         // Current time
@@ -104,7 +108,7 @@ impl InMemoryTable<Vec<u8>> {
 
             // key length + value offset length + date created length
             // it takes 4 bytes to store a 32 bit integer ande 1 byte for tombstone checker
-            let entry_length_byte = entry.key.len() + 4 + 8 + 1;
+            let entry_length_byte = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
             self.size += entry_length_byte;
             return Ok(());
         }
@@ -115,7 +119,7 @@ impl InMemoryTable<Vec<u8>> {
         );
         // key length + value offset length + date created length
         // it takes 4 bytes to store a 32 bit integer since 8 bits makes 1 byte
-        let entry_length_byte = entry.key.len() + 4 + 8 + 1;
+        let entry_length_byte = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
         self.size += entry_length_byte;
         Ok(())
     }
@@ -131,7 +135,7 @@ impl InMemoryTable<Vec<u8>> {
 
     pub fn update(&mut self, entry: &Entry<Vec<u8>, usize>) -> Result<(), StorageEngineError> {
         if !self.bloom_filter.contains(&entry.key) {
-            return Err(StorageEngineError::KeyNotFoundInMemTable);
+            return Err(KeyNotFoundInMemTable);
         }
         // If the key already exist in the bloom filter then just insert into the entry alone
         self.index.insert(
@@ -147,15 +151,28 @@ impl InMemoryTable<Vec<u8>> {
 
     pub fn delete(&mut self, entry: &Entry<Vec<u8>, usize>) -> Result<(), StorageEngineError> {
         if !self.bloom_filter.contains(&entry.key) {
-            return Err(StorageEngineError::KeyNotFoundInMemTable);
+            return Err(KeyNotFoundInMemTable);
         }
         let created_at = Utc::now();
         // Insert thumb stone to indicate deletion
         self.index.insert(
             entry.key.to_vec(),
-            (entry.val_offset, created_at.timestamp_millis() as u64, entry.is_tombstone),
+            (
+                entry.val_offset,
+                created_at.timestamp_millis() as u64,
+                entry.is_tombstone,
+            ),
         );
         Ok(())
+    }
+
+    // Find the biggest element in the skip list
+    pub fn find_biggest_key(&self) -> Result<Vec<u8>, StorageEngineError> {
+        let largest_entry = self.index.iter().next_back();
+        match largest_entry {
+            Some(e) => return Ok(e.key().to_vec()),
+            None => Err(BiggestKeyIndexError),
+        }
     }
     pub fn false_positive_rate(&mut self) -> f64 {
         self.false_positive_rate

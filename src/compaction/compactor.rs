@@ -10,6 +10,7 @@ use crate::{
     bloom_filter::BloomFilter,
     consts::TOMB_STONE_TTL,
     err::StorageEngineError,
+    key_offseter::TableBiggestKeys,
     memtable::Entry,
     sstable::{SSTable, SSTablePath},
 };
@@ -53,6 +54,7 @@ impl Compactor {
         &mut self,
         buckets: &mut BucketMap,
         bloom_filters: &mut Vec<BloomFilter>,
+        biggest_key_index: &mut TableBiggestKeys,
     ) -> Result<bool, StorageEngineError> {
         let mut number_of_compactions = 0;
         // The compaction loop will keep running until there
@@ -92,10 +94,16 @@ impl Compactor {
                                     sst_file_path.data_file_path, sst_file_path.index_file_path
                                 );
                                 // Step 4: Map this bloom filter to its sstable file path
+                                let sstable_data_file_path = sst_file_path.get_data_file_path();
                                 m.bloom_filter.set_sstable_path(sst_file_path);
 
                                 // Step 5: Store the bloom filter in the bloom filters vector
                                 bloom_filters.push(m.bloom_filter);
+                                let biggest_key = m.sstable.find_biggest_key()?;
+                                if biggest_key.is_empty() {
+                                    return Err(BiggestKeyIndexError);
+                                }
+                                biggest_key_index.set(sstable_data_file_path, biggest_key);
                                 actual_number_of_sstables_written_to_disk += 1;
                             }
                             Err(err) => {
@@ -103,15 +111,26 @@ impl Compactor {
 
                                 // Ensure that bloom filter is restored to the previous state by removing entries added so far in
                                 // the compaction process and also remove merged sstables written to disk so far to prevent unstable state
-                                while let Some(bf) = bloom_filters.pop() {
-                                    match fs::remove_dir_all(bf.get_sstable_path().dir.clone())
-                                        .await
-                                    {
-                                        Ok(()) => info!("Stale SSTable File successfully deleted."),
-                                        Err(e) => error!("Stale SSTable File not deleted. {}", e),
+                                while actual_number_of_sstables_written_to_disk > 0 {
+                                    if let Some(bf) = bloom_filters.pop() {
+                                        match fs::remove_dir_all(bf.get_sstable_path().dir.clone())
+                                            .await
+                                        {
+                                            Ok(()) => {
+                                                biggest_key_index.remove(
+                                                    bf.get_sstable_path().data_file_path.clone(),
+                                                );
+                                                info!("Stale SSTable File successfully deleted.")
+                                            }
+                                            Err(e) => {
+                                                error!("Stale SSTable File not deleted. {}", e)
+                                            }
+                                        }
                                     }
+
                                     actual_number_of_sstables_written_to_disk -= 1;
                                 }
+
                                 error!("merged SSTable was not written to disk  {}", err);
                                 return Err(CompactionFailed(err.to_string()));
                             }
@@ -130,6 +149,7 @@ impl Compactor {
                             buckets,
                             &sstables_files_to_remove,
                             bloom_filters,
+                            biggest_key_index,
                         );
                         match bloom_filter_updated_opt.await {
                             Some(is_bloom_filter_updated) => {
@@ -159,9 +179,15 @@ impl Compactor {
         buckets: &mut BucketMap,
         sstables_to_delete: &Vec<(Uuid, Vec<SSTablePath>)>,
         bloom_filters_with_both_old_and_new_sstables: &mut Vec<BloomFilter>,
+        biggest_key_index: &mut TableBiggestKeys,
     ) -> Option<bool> {
+        // Remove obsolete keys from biggest keys index
+        sstables_to_delete.iter().for_each(|(_, sstables)| {
+            sstables.iter().for_each(|s| {
+                biggest_key_index.remove(s.get_data_file_path());
+            })
+        });
         let all_sstables_deleted = buckets.delete_sstables(sstables_to_delete).await;
-
         // if all sstables were not deleted then don't remove the associated bloom filters
         // although this can lead to redundancy bloom filters are in-memory and its also less costly
         // since keys are represented in bits
@@ -217,7 +243,7 @@ impl Compactor {
                 )
                 .await
                 .map_err(|err| CompactionFailed(err.to_string()))?;
-            
+
                 match sst_opt {
                     Some(sst) => {
                         merged_sstable = self

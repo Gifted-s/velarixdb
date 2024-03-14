@@ -2,6 +2,7 @@ use bit_vec::BitVec;
 use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
+    path::{self, PathBuf},
     sync::{
         atomic::{AtomicU32, Ordering},
         Arc, Mutex,
@@ -67,8 +68,23 @@ impl BloomFilter {
         self.sstable_path = Some(sstable_path);
     }
 
+    pub fn filter_by_sstable_paths<'a>(
+        bloom_filters: &'a Vec<BloomFilter>,
+        paths: Vec<&'a PathBuf>,
+    ) -> Vec<&'a BloomFilter> {
+        let mut filtered_bfs = Vec::new();
+        paths.into_iter().for_each(|p| {
+            bloom_filters.iter().for_each(|b| {
+                if b.get_sstable_path().data_file_path.as_path() == p.as_path() {
+                    filtered_bfs.push(b)
+                }
+            })
+        });
+        filtered_bfs
+    }
+
     pub fn get_sstable_paths_that_contains_key<T: Hash>(
-        bloom_filters: &Vec<BloomFilter>,
+        bloom_filters: Vec<&BloomFilter>,
         key: &T,
     ) -> Option<Vec<SSTablePath>> {
         let mut sstables: Vec<SSTablePath> = Vec::new();
