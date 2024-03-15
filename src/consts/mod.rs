@@ -2,7 +2,7 @@ use crate::storage_engine::SizeUnit;
 
 pub const GC_THREAD_COUNT: u32 = 5;
 
-pub const DEFAULT_MEMTABLE_CAPACITY: usize = SizeUnit::Megabytes.to_bytes(1);
+pub const DEFAULT_MEMTABLE_CAPACITY: usize = SizeUnit::Kilobytes.to_bytes(64);
 
 pub const DEFAULT_FALSE_POSITIVE_RATE: f64 = 1e-200;
 

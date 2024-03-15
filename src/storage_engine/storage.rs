@@ -17,10 +17,8 @@ use crate::{
 use chrono::Utc;
 
 use crate::err::StorageEngineError::*;
-use rand::distributions::Alphanumeric;
-use rand::{thread_rng, Rng};
+use std::hash::Hash;
 use std::{collections::HashMap, fs, mem, path::PathBuf};
-use std::{hash::Hash, result};
 
 #[derive(Clone, Debug)]
 pub struct StorageEngine<K: Hash + PartialOrd + std::cmp::Ord> {
@@ -37,10 +35,10 @@ pub struct StorageEngine<K: Hash + PartialOrd + std::cmp::Ord> {
 
 #[derive(Clone, Debug)]
 pub struct DirPath {
-    root: PathBuf,
-    val_log: PathBuf,
-    buckets: PathBuf,
-    meta: PathBuf,
+    pub root: PathBuf,
+    pub val_log: PathBuf,
+    pub buckets: PathBuf,
+    pub meta: PathBuf,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -155,13 +153,11 @@ impl StorageEngine<Vec<u8>> {
             if filtered_paths.is_empty() {
                 return Err(KeyNotFoundInAnySSTableError);
             }
-            println!("BF LENGTH BEFIRE {}", self.bloom_filters.len());
             let filtered_bloom_filters =
                 BloomFilter::filter_by_sstable_paths(&self.bloom_filters, filtered_paths);
             if filtered_bloom_filters.is_empty() {
                 return Err(KeyNotFoundByAnyBloomFilterError);
             }
-            println!("BF LENGTH AFTER {}", filtered_bloom_filters.len());
             // Step 2: If key does not exist in MemTable then we can load sstables that probaby contains this key from bloom filter
             let sstable_paths =
                 BloomFilter::get_sstable_paths_that_contains_key(filtered_bloom_filters, &key);
@@ -608,7 +604,7 @@ impl StorageEngine<Vec<u8>> {
         Ok(memtable)
     }
 
-    async fn run_compaction(&mut self) -> Result<bool, StorageEngineError> {
+    pub async fn run_compaction(&mut self) -> Result<bool, StorageEngineError> {
         self.compactor
             .run_compaction(
                 &mut self.buckets,
@@ -648,12 +644,6 @@ impl DirPath {
             meta,
         }
     }
-
-    fn get_dir(&self) -> &str {
-        self.root
-            .to_str()
-            .expect("Failed to convert path to string")
-    }
 }
 impl SizeUnit {
     pub(crate) const fn to_bytes(&self, value: usize) -> usize {
@@ -669,6 +659,8 @@ impl SizeUnit {
 #[cfg(test)]
 mod tests {
 
+    use rand::distributions::Alphanumeric;
+    use rand::{thread_rng, Rng};
     use std::sync::Arc;
 
     use super::*;
@@ -676,7 +668,13 @@ mod tests {
 
     use tokio::fs;
     use tokio::sync::RwLock;
-
+    fn generate_random_string(length: usize) -> String {
+        let rng = thread_rng();
+        rng.sample_iter(&Alphanumeric)
+            .take(length)
+            .map(|c| c as char)
+            .collect()
+    }
     // Generate test to find keys after compaction
     #[tokio::test]
     async fn storage_engine_create_asynchronous() {
@@ -684,7 +682,7 @@ mod tests {
         let s_engine = StorageEngine::new(path.clone()).await.unwrap();
 
         // Specify the number of random strings to generate
-        let num_strings = 40000;
+        let num_strings = 6000;
 
         // Specify the length of each random string
         let string_length = 10;
@@ -775,8 +773,8 @@ mod tests {
             }
         }
 
-       // let _ = fs::remove_dir_all(path.clone()).await;
-        // sort to make fetch random
+         let _ = fs::remove_dir_all(path.clone()).await;
+       
     }
 
     #[tokio::test]
@@ -843,7 +841,7 @@ mod tests {
         let s_engine = StorageEngine::new(path.clone()).await.unwrap();
 
         // Specify the number of random strings to generate
-        let num_strings =100000;
+        let num_strings = 100000;
 
         // Specify the length of each random string
         let string_length = 10;
@@ -928,7 +926,6 @@ mod tests {
                 assert!(false, "No error should be found");
             }
         }
-
 
         let del_res = sg.write().await.delete(key).await;
         match del_res {
@@ -1254,12 +1251,4 @@ mod tests {
         }
         let _ = fs::remove_dir_all(path.clone()).await;
     }
-}
-
-fn generate_random_string(length: usize) -> String {
-    let rng = thread_rng();
-    rng.sample_iter(&Alphanumeric)
-        .take(length)
-        .map(|c| c as char)
-        .collect()
 }

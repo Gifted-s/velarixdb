@@ -2,7 +2,7 @@ use bit_vec::BitVec;
 use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
-    path::{self, PathBuf},
+    path::PathBuf,
     sync::{
         atomic::{AtomicU32, Ordering},
         Arc, Mutex,
