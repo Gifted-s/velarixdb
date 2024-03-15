@@ -153,13 +153,11 @@ impl StorageEngine<Vec<u8>> {
             if filtered_paths.is_empty() {
                 return Err(KeyNotFoundInAnySSTableError);
             }
-            println!("BF LENGTH BEFIRE {}", self.bloom_filters.len());
             let filtered_bloom_filters =
                 BloomFilter::filter_by_sstable_paths(&self.bloom_filters, filtered_paths);
             if filtered_bloom_filters.is_empty() {
                 return Err(KeyNotFoundByAnyBloomFilterError);
             }
-            println!("BF LENGTH AFTER {}", filtered_bloom_filters.len());
             // Step 2: If key does not exist in MemTable then we can load sstables that probaby contains this key from bloom filter
             let sstable_paths =
                 BloomFilter::get_sstable_paths_that_contains_key(filtered_bloom_filters, &key);
