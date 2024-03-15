@@ -59,7 +59,7 @@ use crate::{
     consts::{SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8},
     err::{self, StorageEngineError},
 };
-const BLOCK_SIZE: usize = 64 * 1024; // 4KB
+const BLOCK_SIZE: usize = 4 * 1024; // 4KB
 
 #[derive(Debug, Clone)]
 pub struct Block {
@@ -112,7 +112,6 @@ impl Block {
         }
 
         // Get the current offset in the data vector and extend it with the new entry.
-        let offset = self.data.len();
         let entry = BlockEntry {
             key,
             key_prefix,
@@ -192,7 +191,7 @@ impl Block {
     // }
 
     /// Returns the number of entries in the Block.
-    pub(crate) fn entry_count(&self) -> usize {
+    pub fn entry_count(&self) -> usize {
         self.entry_count
     }
 }

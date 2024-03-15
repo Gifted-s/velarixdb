@@ -1,22 +1,20 @@
 use chrono::Utc;
 use crossbeam_skiplist::SkipMap;
-use futures::TryFutureExt;
 use std::{
     cmp::Ordering,
     mem,
     path::{Path, PathBuf},
     sync::Arc,
-    thread::current,
 };
 use tokio::{
     fs,
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::AsyncReadExt,
 };
 use tokio::{fs::File, io};
 use tokio::{fs::OpenOptions, io::AsyncSeekExt};
 
 use crate::{
-    block::{self, Block},
+    block::Block,
     bloom_filter::BloomFilter,
     compaction::IndexWithSizeInBytes,
     consts::{DEFAULT_FALSE_POSITIVE_RATE, EOF, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8},

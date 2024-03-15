@@ -2,7 +2,7 @@ use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone)]
 pub struct Meta {
@@ -78,12 +78,9 @@ impl Meta {
         let micros_remainder = date_created_in_microseconds % 1_000_000;
 
         // Create a NaiveDateTime from seconds and microseconds
-        let naive_datetime =
-            NaiveDateTime::from_timestamp_opt(seconds.into(), micros_remainder * 1000);
+        let created_utc =
+        DateTime::from_timestamp(seconds.into(), micros_remainder * 1000).unwrap();
 
-        // Convert NaiveDateTime to DateTime<Utc>
-        let created_utc: DateTime<Utc> =
-            DateTime::from_naive_utc_and_offset(naive_datetime.unwrap(), Utc);
 
         let mut date_modified_bytes: [u8; 4] = [0; 4];
         file.read_exact(&mut date_modified_bytes)?;
@@ -95,18 +92,14 @@ impl Meta {
         let micros_remainder = date_modified_in_microseconds % 1_000_000;
 
         // Create a NaiveDateTime from seconds and microseconds
-        let modified_date_naive_datetime = NaiveDateTime::from_timestamp_opt(
+        let modified_date_naive_datetime =  DateTime::from_timestamp(
             date_modified_seconds.into(),
             micros_remainder * 1000,
-        );
-
-        // Convert NaiveDateTime to DateTime<Utc>
-        let modified_utc: DateTime<Utc> =
-            DateTime::from_naive_utc_and_offset(modified_date_naive_datetime.unwrap(), Utc);
+        ).unwrap();
 
         Ok(Self {
             created_at: created_utc,
-            last_modified: modified_utc,
+            last_modified: modified_date_naive_datetime,
             path: self.path.clone(),
             v_log_tail: tail,
             v_log_head: head,
