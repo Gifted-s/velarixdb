@@ -1,7 +1,7 @@
 use crate::bloom_filter::BloomFilter;
 use crate::compaction::IndexWithSizeInBytes;
 use crate::consts::{
-    DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MEMTABLE_CAPACITY, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8,
+    DEFAULT_FALSE_POSITIVE_RATE, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, WRITE_BUFFER_SIZE,
 };
 use crate::err::StorageEngineError;
 //use crate::memtable::val_option::ValueOption;
@@ -22,13 +22,14 @@ pub struct Entry<K: Hash + PartialOrd, V> {
 }
 #[derive(Clone, Debug)]
 pub struct InMemoryTable<K: Hash + PartialOrd + cmp::Ord> {
-    pub index: Arc<SkipMap<K, (usize, u64, bool)>>, // TODO: write a method to return this, never return property directly
-    pub bloom_filter: BloomFilter, // TODO: write a method to return this, never return property directly
+    pub index: Arc<SkipMap<K, (usize, u64, bool)>>,
+    pub bloom_filter: BloomFilter,
     pub false_positive_rate: f64,
     pub size: usize,
     pub size_unit: SizeUnit,
     pub capacity: usize,
     pub created_at: DateTime<Utc>,
+    pub read_only: bool
 }
 
 impl IndexWithSizeInBytes for InMemoryTable<Vec<u8>> {
@@ -65,7 +66,7 @@ impl InMemoryTable<Vec<u8>> {
     pub fn new() -> Self {
         Self::with_specified_capacity_and_rate(
             SizeUnit::Bytes,
-            DEFAULT_MEMTABLE_CAPACITY,
+            WRITE_BUFFER_SIZE,
             DEFAULT_FALSE_POSITIVE_RATE,
         )
     }
@@ -95,6 +96,7 @@ impl InMemoryTable<Vec<u8>> {
             capacity: capacity_to_bytes,
             created_at: now,
             false_positive_rate,
+            read_only: false
         }
     }
 
@@ -164,6 +166,11 @@ impl InMemoryTable<Vec<u8>> {
             ),
         );
         Ok(())
+    }
+
+
+    pub fn is_full(&mut self, key_len: usize) -> bool {
+      self.size +  key_len + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8 >= self.capacity()
     }
 
     // Find the biggest element in the skip list

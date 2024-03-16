@@ -1,7 +1,6 @@
-
 use crate::consts::{
-    DEFAULT_ALLOW_PREFETCH, DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_PREFETCH_SIZE, ENABLE_TTL,
-    ENTRY_TTL, GC_THREAD_COUNT,
+    DEFAULT_ALLOW_PREFETCH, DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MAX_WRITE_BUFFER_NUMBER,
+    DEFAULT_PREFETCH_SIZE, ENABLE_TTL, ENTRY_TTL, GC_THREAD_COUNT, WRITE_BUFFER_SIZE,
 };
 
 #[derive(Clone, Debug)]
@@ -27,6 +26,12 @@ pub struct Config {
 
     /// How many keys should we prefetch in case of range queries?
     pub prefetch_size: usize,
+
+    /// The size of each memtable
+    pub write_buffer_size: usize,
+
+    /// How many memtables should we have
+    pub max_buffer_write_number: usize,
 }
 impl Config {
     pub fn new(
@@ -36,6 +41,8 @@ impl Config {
         entry_ttl_millis: u64,
         allow_prefetch: bool,
         prefetch_size: usize,
+        write_buffer_size: usize,
+        max_buffer_write_number: usize,
     ) -> Self {
         Self {
             gc_thread_count,
@@ -44,6 +51,8 @@ impl Config {
             entry_ttl_millis,
             allow_prefetch,
             prefetch_size,
+            max_buffer_write_number,
+            write_buffer_size,
         }
     }
 }
@@ -57,6 +66,8 @@ impl Default for Config {
             entry_ttl_millis: ENTRY_TTL, // 1 year
             allow_prefetch: DEFAULT_ALLOW_PREFETCH,
             prefetch_size: DEFAULT_PREFETCH_SIZE,
+            max_buffer_write_number: DEFAULT_MAX_WRITE_BUFFER_NUMBER,
+            write_buffer_size: WRITE_BUFFER_SIZE,
         }
     }
 }
