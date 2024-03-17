@@ -130,16 +130,24 @@ impl StorageEngine<Vec<u8>> {
                     Arc::clone(&self.bloom_filters),
                     Arc::clone(&self.biggest_key_index),
                 );
-                let mut counter = 0;
-                println!("FLUSH START");
-                let _ = tokio::spawn(async move {
-                    counter+=1;
-                    let res = flush_job.run().await;
-                    println!("{} counter", counter)
-                    // println!("Result ",);
-                });
+
+                // Run flush as an asynchronous task
+                let job_res = flush_job.run().await;
+                if let Ok((
+                    updated_read_only_memtables,
+                    updated_bucket_map,
+                    updated_bloom_filters,
+                    updated_biggest_key_index,
+                )) = job_res.map_err(|err| {
+                    return StorageEngineError::FailedToInsertToBucket(err.to_string());
+                }) {
+                    self.read_only_memtables = Arc::new(RwLock::new(updated_read_only_memtables));
+                    self.bloom_filters = Arc::new(RwLock::new(updated_bloom_filters));
+                    self.buckets = Arc::new(RwLock::new(updated_bucket_map));
+                    self.biggest_key_index = Arc::new(RwLock::new(updated_biggest_key_index));
+                }
             }
-            println!("EMTYPING MEMTABLE FOR WRITE");
+
             self.active_memtable = InMemoryTable::with_specified_capacity_and_rate(
                 size_unit,
                 capacity,
