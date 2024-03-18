@@ -1,5 +1,5 @@
 use crate::{
-    background::{BackgroundJobType, FlushData},
+    background::{BackgroundJob, FlushData},
     bloom_filter::BloomFilter,
     cfg::Config,
     compaction::{Bucket, BucketMap, Compactor},
@@ -125,7 +125,7 @@ impl StorageEngine<Vec<u8>> {
 
             if self.read_only_memtables.len() >= self.config.max_buffer_write_number {
                 let (table_id, table_to_flush) = self.read_only_memtables.iter().next().unwrap();
-                let mut flush_job = BackgroundJobType::FlushJob(FlushData::new(
+                let mut flush_job = BackgroundJob::Flush(FlushData::new(
                     Rc::clone(table_to_flush),
                     table_id.to_owned(),
                     self.buckets.clone(),

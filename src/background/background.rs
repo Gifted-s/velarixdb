@@ -21,9 +21,9 @@ pub enum BackgroundResponse {
     },
 }
 
-pub enum BackgroundJobType {
+pub enum BackgroundJob {
     // Flush oldest memtable to disk
-    FlushJob(FlushData), // Remove obsolete keys from the value log
+    Flush(FlushData), // Remove obsolete keys from the value log
                          // GarbageCollection,
                          // // Merge sstables to form bigger ones and also remove deleted and obsolete keys
                          // Compaction,
@@ -55,10 +55,10 @@ impl FlushData {
     }
 }
 
-impl BackgroundJobType {
+impl BackgroundJob {
     pub async fn run(&mut self) -> Result<BackgroundResponse, StorageEngineError> {
         match self {
-            BackgroundJobType::FlushJob(flush_data) => {
+            BackgroundJob::Flush(flush_data) => {
                 if flush_data.table_to_flush.read().await.index.is_empty() {
                     println!("Cannot flush an empty table");
                     return Err(StorageEngineError::FailedToInsertToBucket(
