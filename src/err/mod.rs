@@ -162,4 +162,9 @@ pub enum StorageEngineError {
 
     #[error("All bloom filters return false for all sstables")]
     KeyNotFoundByAnyBloomFilterError,
+
+
+    /// There was an error while atttempting to insert sstable to appropriate bucket
+    #[error("Failed to insert to a bucket, reason `{0}`")]
+    FailedToInsertToBucket(String) ,
 }
