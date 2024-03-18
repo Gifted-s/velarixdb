@@ -13,3 +13,4 @@ pub mod garbage_collector;
 pub mod sparse_index;
 pub mod key_offseter;
 pub mod background;
+pub mod utils;

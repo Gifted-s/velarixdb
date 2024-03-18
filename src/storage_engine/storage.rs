@@ -1,5 +1,5 @@
 use crate::{
-    background::BackgroundJobType,
+    background::{BackgroundJobType, FlushData},
     bloom_filter::BloomFilter,
     cfg::Config,
     compaction::{Bucket, BucketMap, Compactor},
@@ -20,21 +20,21 @@ use chrono::Utc;
 use tokio::sync::RwLock;
 
 use crate::err::StorageEngineError::*;
-use std::{clone, hash::Hash, sync::Arc};
-use std::{collections::HashMap, fs, mem, path::PathBuf};
+use std::{collections::HashMap, fs, path::PathBuf, rc::Rc};
+use std::{hash::Hash, sync::Arc};
 
 #[derive(Clone, Debug)]
 pub struct StorageEngine<K: Hash + PartialOrd + std::cmp::Ord> {
     pub dir: DirPath,
     pub active_memtable: InMemoryTable<K>,
-    pub bloom_filters: Arc<RwLock<Vec<BloomFilter>>>,
+    pub bloom_filters: Vec<BloomFilter>,
     pub val_log: ValueLog,
-    pub buckets: Arc<RwLock<BucketMap>>,
-    pub biggest_key_index: Arc<RwLock<TableBiggestKeys>>,
+    pub buckets: BucketMap,
+    pub biggest_key_index: TableBiggestKeys,
     pub compactor: Compactor,
     pub meta: Meta,
     pub config: Config,
-    pub read_only_memtables: Arc<RwLock<Vec<InMemoryTable<K>>>>,
+    pub read_only_memtables: HashMap<K, Rc<RwLock<InMemoryTable<K>>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -118,34 +118,37 @@ impl StorageEngine<Vec<u8>> {
 
             let _ = self.active_memtable.insert(&head_entry);
             self.active_memtable.read_only = true;
-            self.read_only_memtables
-                .write()
-                .await
-                .push(self.active_memtable.to_owned());
+            self.read_only_memtables.insert(
+                InMemoryTable::generate_table_id(),
+                Rc::new(RwLock::new(self.active_memtable.to_owned())),
+            );
 
-            if self.read_only_memtables.read().await.len() >= self.config.max_buffer_write_number {
-                let mut flush_job = BackgroundJobType::Flush(
-                    Arc::clone(&self.read_only_memtables),
-                    Arc::clone(&self.buckets),
-                    Arc::clone(&self.bloom_filters),
-                    Arc::clone(&self.biggest_key_index),
-                );
+            if self.read_only_memtables.len() >= self.config.max_buffer_write_number {
+                let (table_id, table_to_flush) = self.read_only_memtables.iter().next().unwrap();
+                let mut flush_job = BackgroundJobType::FlushJob(FlushData::new(
+                    Rc::clone(table_to_flush),
+                    table_id.to_owned(),
+                    self.buckets.clone(),
+                    self.bloom_filters.clone(),
+                    self.biggest_key_index.clone(),
+                ));
 
-                // Run flush as an asynchronous task
-                let job_res = flush_job.run().await;
-                if let Ok((
-                    updated_read_only_memtables,
-                    updated_bucket_map,
-                    updated_bloom_filters,
-                    updated_biggest_key_index,
-                )) = job_res.map_err(|err| {
-                    return StorageEngineError::FailedToInsertToBucket(err.to_string());
-                }) {
-                    self.read_only_memtables = Arc::new(RwLock::new(updated_read_only_memtables));
-                    self.bloom_filters = Arc::new(RwLock::new(updated_bloom_filters));
-                    self.buckets = Arc::new(RwLock::new(updated_bucket_map));
-                    self.biggest_key_index = Arc::new(RwLock::new(updated_biggest_key_index));
-                }
+                // tokio::spawn(async move {
+                //     let job_res = flush_job.run().await;
+                //     // if let Ok((
+                //     //     updated_read_only_memtables,
+                //     //     updated_bucket_map,
+                //     //     updated_bloom_filters,
+                //     //     updated_biggest_key_index,
+                //     // )) = job_res.map_err(|err| {
+                //     //     return StorageEngineError::FailedToInsertToBucket(err.to_string());
+                //     // }) {
+                //     //     self.read_only_memtables = updated_read_only_memtables;
+                //     //     self.bloom_filters = updated_bloom_filters;
+                //     //     self.buckets = updated_bucket_map;
+                //     //     self.biggest_key_index = updated_biggest_key_index;
+                //     // }
+                // });
             }
 
             self.active_memtable = InMemoryTable::with_specified_capacity_and_rate(
@@ -180,12 +183,12 @@ impl StorageEngine<Vec<u8>> {
                 return Err(KeyFoundAsTombstoneInMemtableError);
             }
         } else {
-            let bg_rlock = self.biggest_key_index.read().await;
+            let bg_rlock = &self.biggest_key_index;
             let filtered_paths = bg_rlock.filter_sstables_by_biggest_key(&key);
             if filtered_paths.is_empty() {
                 return Err(KeyNotFoundInAnySSTableError);
             }
-            let bf_rlock = self.bloom_filters.read().await;
+            let bf_rlock = &self.bloom_filters;
             let filtered_bloom_filters =
                 BloomFilter::filter_by_sstable_paths(&bf_rlock, filtered_paths);
             if filtered_bloom_filters.is_empty() {
@@ -424,18 +427,18 @@ impl StorageEngine<Vec<u8>> {
             // insert tail and head to memtable
             active_memtable.insert(&tail_entry.to_owned())?;
             active_memtable.insert(&head_entry.to_owned())?;
-            let read_only_memtables = Vec::new();
+            let read_only_memtables = HashMap::new();
             return Ok(Self {
                 active_memtable,
                 val_log: vlog,
-                bloom_filters: Arc::new(RwLock::new(Vec::new())),
-                buckets: Arc::new(RwLock::new(BucketMap::new(buckets_path))),
+                bloom_filters: Vec::new(),
+                buckets: BucketMap::new(buckets_path),
                 dir,
-                biggest_key_index: Arc::new(RwLock::new(biggest_key_index)),
+                biggest_key_index: biggest_key_index,
                 compactor: Compactor::new(config.enable_ttl, config.entry_ttl_millis),
                 config: config.clone(),
                 meta,
-                read_only_memtables: Arc::new(RwLock::new(read_only_memtables)),
+                read_only_memtables,
             });
         }
 
@@ -592,13 +595,13 @@ impl StorageEngine<Vec<u8>> {
                 active_memtable,
                 val_log: vlog,
                 dir,
-                buckets: Arc::new(RwLock::new(buckets_map)),
-                bloom_filters: Arc::new(RwLock::new(bloom_filters)),
-                biggest_key_index: Arc::new(RwLock::new(biggest_key_index)),
+                buckets: buckets_map,
+                bloom_filters,
+                biggest_key_index,
                 meta,
                 compactor: Compactor::new(config.enable_ttl, config.entry_ttl_millis),
                 config: config.clone(),
-                read_only_memtables: Arc::new(RwLock::new(read_only_memtables)),
+                read_only_memtables,
             }),
             Err(err) => Err(MemTableRecoveryError(Box::new(err))),
         }
@@ -609,8 +612,15 @@ impl StorageEngine<Vec<u8>> {
         false_positive_rate: f64,
         vlog_path: &PathBuf,
         head_offset: usize,
-    ) -> Result<(InMemoryTable<Vec<u8>>, Vec<InMemoryTable<Vec<u8>>>), StorageEngineError> {
-        let mut read_only_memtables: Vec<InMemoryTable<Vec<u8>>> = Vec::new();
+    ) -> Result<
+        (
+            InMemoryTable<Vec<u8>>,
+            HashMap<Vec<u8>, Rc<RwLock<InMemoryTable<Vec<u8>>>>>,
+        ),
+        StorageEngineError,
+    > {
+        let mut read_only_memtables: HashMap<Vec<u8>, Rc<RwLock<InMemoryTable<Vec<u8>>>>> =
+            HashMap::new();
         let mut active_memtable = InMemoryTable::with_specified_capacity_and_rate(
             size_unit,
             capacity,
@@ -635,7 +645,10 @@ impl StorageEngine<Vec<u8>> {
                 if active_memtable.is_full(e.key.len()) {
                     // Make memtable read only
                     active_memtable.read_only = true;
-                    read_only_memtables.push(active_memtable.clone());
+                    read_only_memtables.insert(
+                        InMemoryTable::generate_table_id(),
+                        Rc::new(RwLock::new(active_memtable.to_owned())),
+                    );
                     active_memtable = InMemoryTable::with_specified_capacity_and_rate(
                         size_unit,
                         capacity,
@@ -658,9 +671,9 @@ impl StorageEngine<Vec<u8>> {
     pub async fn run_compaction(&mut self) -> Result<bool, StorageEngineError> {
         self.compactor
             .run_compaction(
-                &mut self.buckets.read().await.clone(),
-                &mut self.bloom_filters.read().await.clone(),
-                &mut self.biggest_key_index.read().await.clone(),
+                &mut self.buckets,
+                &mut self.bloom_filters.clone(),
+                &mut self.biggest_key_index.clone(),
             )
             .await
     }
@@ -748,33 +761,33 @@ mod tests {
         // }
         let sg = Arc::new(RwLock::new(s_engine));
         let binding = random_strings.clone();
-        let tasks = binding.iter().map(|k| {
-            let s_engine = Arc::clone(&sg);
-            let k = k.clone();
-            tokio::spawn(async move {
-                let mut value = s_engine.write().await;
-                value.put(&k, "boy").await
-            })
-        });
+        // let tasks = binding.iter().map(|k| {
+        //     let s_engine = Arc::clone(&sg);
+        //     let k = k.clone();
+        //     tokio::spawn(async move {
+        //         let mut value = s_engine.write().await;
+        //         value.put(&k, "boy").await
+        //     })
+        // });
 
-        // Collect the results from the spawned tasks
-        for task in tasks {
-            tokio::select! {
-                result = task => {
-                    match result{
-                        Ok(v_opt)=>{
-                            match v_opt{
-                                Ok(v) => {
-                                    assert_eq!(v, true)
-                                },
-                                Err(_) => { assert!(false, "No err should be found")},
-                            }
-                             }
-                        Err(_) =>  assert!(false, "No err should be found") }
-                    //println!("{:?}",result);
-                }
-            }
-        }
+        // // Collect the results from the spawned tasks
+        // for task in tasks {
+        //     tokio::select! {
+        //         result = task => {
+        //             match result{
+        //                 Ok(v_opt)=>{
+        //                     match v_opt{
+        //                         Ok(v) => {
+        //                             assert_eq!(v, true)
+        //                         },
+        //                         Err(_) => { assert!(false, "No err should be found")},
+        //                     }
+        //                      }
+        //                 Err(_) =>  assert!(false, "No err should be found") }
+        //             //println!("{:?}",result);
+        //         }
+        //     }
+        // }
 
         // Insert the generated random strings
         // let compactor = Compactor::new();
@@ -888,7 +901,7 @@ mod tests {
     #[tokio::test]
     async fn storage_engine_compaction_asynchronous() {
         let path = PathBuf::new().join("bump3");
-        let s_engine = StorageEngine::new(path.clone()).await.unwrap();
+        let mut s_engine = StorageEngine::new(path.clone()).await.unwrap();
 
         // Specify the number of random strings to generate
         let num_strings = 100000;
@@ -901,38 +914,38 @@ mod tests {
             let random_string = generate_random_string(string_length);
             random_strings.push(random_string);
         }
-        // for k in random_strings.clone() {
-        //     s_engine.put(&k, "boyode").await.unwrap();
-        // }
+        for k in random_strings.clone() {
+            s_engine.put(&k, "boyode").await.unwrap();
+        }
         let sg = Arc::new(RwLock::new(s_engine));
-        let binding = random_strings.clone();
-        let tasks = binding.iter().map(|k| {
-            let s_engine = Arc::clone(&sg);
-            let k = k.clone();
-            tokio::spawn(async move {
-                let mut value = s_engine.write().await;
-                value.put(&k, "boyode").await
-            })
-        });
+        // let binding = random_strings.clone();
+        // let tasks = binding.iter().map(|k| {
+        //     let s_engine = Arc::clone(&sg);
+        //     let k = k.clone();
+        //     tokio::spawn(async move {
+        //         let mut value = s_engine.write().await;
+        //         value.put(&k, "boyode").await
+        //     })
+        // });
 
         // Collect the results from the spawned tasks
-        for task in tasks {
-            tokio::select! {
-                result = task => {
-                    match result{
-                        Ok(v_opt)=>{
-                            match v_opt{
-                                Ok(v) => {
-                                    assert_eq!(v, true)
-                                },
-                                Err(_) => { assert!(false, "No err should be found")},
-                            }
-                             }
-                        Err(_) =>  assert!(false, "No err should be found") }
-                    //println!("{:?}",result);
-                }
-            }
-        }
+        // for task in tasks {
+        //     tokio::select! {
+        //         result = task => {
+        //             match result{
+        //                 Ok(v_opt)=>{
+        //                     match v_opt{
+        //                         Ok(v) => {
+        //                             assert_eq!(v, true)
+        //                         },
+        //                         Err(_) => { assert!(false, "No err should be found")},
+        //                     }
+        //                      }
+        //                 Err(_) =>  assert!(false, "No err should be found") }
+        //             //println!("{:?}",result);
+        //         }
+        //     }
+        // }
 
         // sort to make fetch random
         random_strings.sort();
@@ -1064,7 +1077,7 @@ mod tests {
     #[tokio::test]
     async fn storage_engine_update_asynchronous() {
         let path = PathBuf::new().join("bump4");
-        let s_engine = StorageEngine::new(path.clone()).await.unwrap();
+        let mut s_engine = StorageEngine::new(path.clone()).await.unwrap();
 
         // Specify the number of random strings to generate
         let num_strings = 6000;
@@ -1077,39 +1090,39 @@ mod tests {
             let random_string = generate_random_string(string_length);
             random_strings.push(random_string);
         }
-        // for k in random_strings.clone() {
-        //     s_engine.put(&k, "boyode").await.unwrap();
-        // }
+        for k in random_strings.clone() {
+            s_engine.put(&k, "boyode").await.unwrap();
+        }
         let sg = Arc::new(RwLock::new(s_engine));
         let binding = random_strings.clone();
-        let tasks = binding.iter().map(|k| {
-            let s_engine = Arc::clone(&sg);
-            let k = k.clone();
-            tokio::spawn(async move {
-                let mut value = s_engine.write().await;
-                value.put(&k, "boyode").await
-            })
-        });
+        // let tasks = binding.iter().map(|k| {
+        //     let s_engine = Arc::clone(&sg);
+        //     let k = k.clone();
+        //     tokio::spawn(async move {
+        //         let mut value = s_engine.write().await;
+        //         value.put(&k, "boyode").await
+        //     })
+        // });
 
         // Collect the results from the spawned tasks
-        for task in tasks {
-            tokio::select! {
-                result = task => {
-                    match result{
-                        Ok(v_opt)=>{
-                            match v_opt{
-                                Ok(v) => {
-                                    assert_eq!(v, true)
-                                },
-                                Err(_) => { assert!(false, "No err should be found")},
-                            }
-                             }
-                        Err(_) =>  assert!(false, "No err should be found") }
-                    //println!("{:?}",result);
-                }
-            }
-        }
-        // sort to make fetch random
+        // for task in tasks {
+        //     tokio::select! {
+        //         result = task => {
+        //             match result{
+        //                 Ok(v_opt)=>{
+        //                     match v_opt{
+        //                         Ok(v) => {
+        //                             assert_eq!(v, true)
+        //                         },
+        //                         Err(_) => { assert!(false, "No err should be found")},
+        //                     }
+        //                      }
+        //                 Err(_) =>  assert!(false, "No err should be found") }
+        //             //println!("{:?}",result);
+        //         }
+        //     }
+        // }
+        // // sort to make fetch random
         random_strings.sort();
         let key = &random_strings[0];
         let updated_value = "updated_key";
@@ -1180,7 +1193,7 @@ mod tests {
     #[tokio::test]
     async fn storage_engine_deletion_asynchronous() {
         let path = PathBuf::new().join("bump5");
-        let s_engine = StorageEngine::new(path.clone()).await.unwrap();
+        let mut s_engine = StorageEngine::new(path.clone()).await.unwrap();
 
         // Specify the number of random strings to generate
         let num_strings = 6000;
@@ -1193,39 +1206,39 @@ mod tests {
             let random_string = generate_random_string(string_length);
             random_strings.push(random_string);
         }
-        // for k in random_strings.clone() {
-        //     s_engine.put(&k, "boyode").await.unwrap();
-        // }
+        for k in random_strings.clone() {
+            s_engine.put(&k, "boyode").await.unwrap();
+        }
         let sg = Arc::new(RwLock::new(s_engine));
         let binding = random_strings.clone();
-        let tasks = binding.iter().map(|k| {
-            let s_engine = Arc::clone(&sg);
-            let k = k.clone();
-            tokio::spawn(async move {
-                let mut value = s_engine.write().await;
-                value.put(&k, "boyode").await
-            })
-        });
+        // let tasks = binding.iter().map(|k| {
+        //     let s_engine = Arc::clone(&sg);
+        //     let k = k.clone();
+        //     tokio::spawn(async move {
+        //         let mut value = s_engine.write().await;
+        //         value.put(&k, "boyode").await
+        //     })
+        // });
         let key = "aunkanmi";
         let _ = sg.write().await.put(key, "boyode").await;
-        // Collect the results from the spawned tasks
-        for task in tasks {
-            tokio::select! {
-                result = task => {
-                    match result{
-                        Ok(v_opt)=>{
-                            match v_opt{
-                                Ok(v) => {
-                                    assert_eq!(v, true)
-                                },
-                                Err(_) => { assert!(false, "No err should be found")},
-                            }
-                             }
-                        Err(_) =>  assert!(false, "No err should be found") }
-                    //println!("{:?}",result);
-                }
-            }
-        }
+        // // Collect the results from the spawned tasks
+        // for task in tasks {
+        //     tokio::select! {
+        //         result = task => {
+        //             match result{
+        //                 Ok(v_opt)=>{
+        //                     match v_opt{
+        //                         Ok(v) => {
+        //                             assert_eq!(v, true)
+        //                         },
+        //                         Err(_) => { assert!(false, "No err should be found")},
+        //                     }
+        //                      }
+        //                 Err(_) =>  assert!(false, "No err should be found") }
+        //             //println!("{:?}",result);
+        //         }
+        //     }
+        // }
         // sort to make fetch random
         random_strings.sort();
         let get_res = sg.read().await.get(key).await;

@@ -8,6 +8,8 @@ use crate::err::StorageEngineError;
 use crate::storage_engine::SizeUnit;
 use chrono::{DateTime, Utc};
 use crossbeam_skiplist::SkipMap;
+use rand::distributions::Alphanumeric;
+use rand::Rng;
 use std::cmp;
 use StorageEngineError::*;
 
@@ -150,6 +152,17 @@ impl InMemoryTable<Vec<u8>> {
     pub fn upsert(&mut self, entry: &Entry<Vec<u8>, usize>) -> Result<(), StorageEngineError> {
         self.insert(&entry)
     }
+
+    pub fn generate_table_id() -> Vec<u8> {
+        let mut rng = rand::thread_rng();
+        let id: String = rng
+            .sample_iter(&Alphanumeric)
+            .take(10)
+            .map(char::from)
+            .collect();
+        id.as_bytes().to_vec()
+    }
+    
 
     pub fn delete(&mut self, entry: &Entry<Vec<u8>, usize>) -> Result<(), StorageEngineError> {
         if !self.bloom_filter.contains(&entry.key) {
