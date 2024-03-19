@@ -2,7 +2,7 @@ use crate::storage_engine::SizeUnit;
 
 pub const GC_THREAD_COUNT: u32 = 5;
 
-pub const WRITE_BUFFER_SIZE: usize = SizeUnit::Kilobytes.to_bytes(64);
+pub const WRITE_BUFFER_SIZE: usize = SizeUnit::Megabytes.to_bytes(1);
 
 pub const DEFAULT_MAX_WRITE_BUFFER_NUMBER: usize = 2;
 
@@ -19,6 +19,8 @@ pub const VLOG_FILE_NAME: &str = "val_log.bin";
 pub const META_DIRECTORY_NAME: &str = "meta";
 
 pub const TOMB_STONE_MARKER: usize = 0;
+
+pub const CHANNEL_BUFFER_SIZE: usize = 20;
 
 // tombstone should only be removed after 120 days to guarantee that obsolete data don't
 // resurrect by prematurelly deleting tombstone

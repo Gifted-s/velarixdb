@@ -12,11 +12,12 @@ use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+#[derive(Clone, Debug)]
 pub enum BackgroundResponse {
     FlushSuccessResponse {
         table_id: Vec<u8>,
         updated_bucket_map: BucketMap,
-        updated_bloom_filter: Vec<BloomFilter>,
+        updated_bloom_filters: Vec<BloomFilter>,
         updated_biggest_key_index: TableBiggestKeys,
     },
 }
@@ -24,13 +25,13 @@ pub enum BackgroundResponse {
 pub enum BackgroundJob {
     // Flush oldest memtable to disk
     Flush(FlushData), // Remove obsolete keys from the value log
-                         // GarbageCollection,
-                         // // Merge sstables to form bigger ones and also remove deleted and obsolete keys
-                         // Compaction,
+                      // GarbageCollection,
+                      // // Merge sstables to form bigger ones and also remove deleted and obsolete keys
+                      // Compaction,
 }
 
 pub struct FlushData {
-    pub(crate) table_to_flush: Rc<RwLock<InMemoryTable<Vec<u8>>>>,
+    pub(crate) table_to_flush: Arc<RwLock<InMemoryTable<Vec<u8>>>>,
     pub(crate) table_id: Vec<u8>,
     pub(crate) buket_map: BucketMap,
     pub(crate) bloom_filters: Vec<BloomFilter>,
@@ -39,7 +40,7 @@ pub struct FlushData {
 
 impl FlushData {
     pub(crate) fn new(
-        table_to_flush: Rc<RwLock<InMemoryTable<Vec<u8>>>>,
+        table_to_flush: Arc<RwLock<InMemoryTable<Vec<u8>>>>,
         table_id: Vec<u8>,
         buket_map: BucketMap,
         bloom_filters: Vec<BloomFilter>,
@@ -103,7 +104,7 @@ impl BackgroundJob {
                         return Ok(BackgroundResponse::FlushSuccessResponse {
                             table_id: flush_data.table_id.to_owned(),
                             updated_bucket_map: flush_data.buket_map.to_owned(),
-                            updated_bloom_filter: flush_data.bloom_filters.to_owned(),
+                            updated_bloom_filters: flush_data.bloom_filters.to_owned(),
                             updated_biggest_key_index: flush_data.biggest_key_index.to_owned(),
                         });
                     }
@@ -115,7 +116,7 @@ impl BackgroundJob {
                         return Ok(BackgroundResponse::FlushSuccessResponse {
                             table_id: flush_data.table_id.to_owned(),
                             updated_bucket_map: flush_data.buket_map.to_owned(),
-                            updated_bloom_filter: flush_data.bloom_filters.to_owned(),
+                            updated_bloom_filters: flush_data.bloom_filters.to_owned(),
                             updated_biggest_key_index: flush_data.biggest_key_index.to_owned(),
                         });
                     }
