@@ -1,12 +1,12 @@
 use crate::{
-    background::{BackgroundJob, FlushData},
+    background::{BackgroundJob, BackgroundResponse, FlushData},
     bloom_filter::BloomFilter,
     cfg::Config,
     compaction::{Bucket, BucketMap, Compactor},
     consts::{
-        BUCKETS_DIRECTORY_NAME, HEAD_ENTRY_KEY, HEAD_ENTRY_LENGTH, META_DIRECTORY_NAME,
-        SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, TAIL_ENTRY_KEY, TOMB_STONE_MARKER,
-        VALUE_LOG_DIRECTORY_NAME, WRITE_BUFFER_SIZE,
+        BUCKETS_DIRECTORY_NAME, CHANNEL_BUFFER_SIZE, HEAD_ENTRY_KEY, HEAD_ENTRY_LENGTH,
+        META_DIRECTORY_NAME, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, TAIL_ENTRY_KEY,
+        TOMB_STONE_MARKER, VALUE_LOG_DIRECTORY_NAME, WRITE_BUFFER_SIZE,
     },
     err::StorageEngineError,
     key_offseter::TableBiggestKeys,
@@ -17,13 +17,17 @@ use crate::{
     value_log::ValueLog,
 };
 use chrono::Utc;
-use tokio::sync::RwLock;
+use futures::io::Empty;
+use tokio::sync::{
+    mpsc::{self, error::TryRecvError, Receiver, Sender},
+    RwLock,
+};
 
 use crate::err::StorageEngineError::*;
-use std::{collections::HashMap, fs, ops::Deref, path::PathBuf, rc::Rc};
+use std::{collections::HashMap, fs, path::PathBuf};
 use std::{hash::Hash, sync::Arc};
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct StorageEngine<K: Hash + PartialOrd + std::cmp::Ord> {
     pub dir: DirPath,
     pub active_memtable: InMemoryTable<K>,
@@ -35,6 +39,8 @@ pub struct StorageEngine<K: Hash + PartialOrd + std::cmp::Ord> {
     pub meta: Meta,
     pub config: Config,
     pub read_only_memtables: HashMap<K, Arc<RwLock<InMemoryTable<K>>>>,
+    pub background_channel_rcv: Receiver<Result<BackgroundResponse, StorageEngineError>>,
+    pub background_channel_snd: Arc<RwLock<Sender<Result<BackgroundResponse, StorageEngineError>>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -88,6 +94,8 @@ impl StorageEngine<Vec<u8>> {
         let value = &value.as_bytes().to_vec();
         let created_at = Utc::now().timestamp_millis() as u64;
         let is_tombstone = false;
+        // check channel for queued updates
+        self.check_queued_updates().await;
         // Write to value log first which returns the offset
         let v_offset = self
             .val_log
@@ -128,26 +136,17 @@ impl StorageEngine<Vec<u8>> {
                 let mut flush_job = BackgroundJob::Flush(FlushData::new(
                     Arc::clone(table_to_flush),
                     table_id.to_owned(),
-                    self.buckets.clone(),
-                    self.bloom_filters.clone(),
-                    self.biggest_key_index.clone(),
+                    self.buckets.to_owned(),
+                    self.bloom_filters.to_owned(),
+                    self.biggest_key_index.to_owned(),
                 ));
-
+                let sender_clone = Arc::clone(&self.background_channel_snd);
+                // Trigger flush in background
                 tokio::spawn(async move {
                     let job_res = flush_job.run().await;
-                    // if let Ok((
-                    //     updated_read_only_memtables,
-                    //     updated_bucket_map,
-                    //     updated_bloom_filters,
-                    //     updated_biggest_key_index,
-                    // )) = job_res.map_err(|err| {
-                    //     return StorageEngineError::FailedToInsertToBucket(err.to_string());
-                    // }) {
-                    //     self.read_only_memtables = updated_read_only_memtables;
-                    //     self.bloom_filters = updated_bloom_filters;
-                    //     self.buckets = updated_bucket_map;
-                    //     self.biggest_key_index = updated_biggest_key_index;
-                    // }
+                    if let Err(err) = sender_clone.write().await.send(job_res).await {
+                        println!("Send to channel error {:?}", err);
+                    }
                 });
             }
 
@@ -156,7 +155,6 @@ impl StorageEngine<Vec<u8>> {
                 capacity,
                 false_positive_rate,
             );
-            // Trigger background flush
         }
         let entry = Entry::new(
             key.to_vec(),
@@ -164,6 +162,7 @@ impl StorageEngine<Vec<u8>> {
             created_at,
             is_tombstone,
         );
+
         self.active_memtable.insert(&entry)?;
         Ok(true)
     }
@@ -173,7 +172,10 @@ impl StorageEngine<Vec<u8>> {
         let key = key.as_bytes().to_vec();
         let mut offset = 0;
         let mut most_recent_insert_time = 0;
-        // Step 1: Check if key exist in MemTable
+
+        // self.check_queued_updates().await;
+
+        //Step 1 > Check the active memtable
         if let Ok(Some((value_offset, creation_date, is_tombstone))) =
             self.active_memtable.get(&key)
         {
@@ -183,63 +185,81 @@ impl StorageEngine<Vec<u8>> {
                 return Err(KeyFoundAsTombstoneInMemtableError);
             }
         } else {
-            let bg_rlock = &self.biggest_key_index;
-            let filtered_paths = bg_rlock.filter_sstables_by_biggest_key(&key);
-            if filtered_paths.is_empty() {
-                return Err(KeyNotFoundInAnySSTableError);
+            //Step 2 > Check the read only memtable
+            let mut is_deleted = false;
+            for (_, m_table) in self.read_only_memtables.iter() {
+                if let Ok(Some((value_offset, creation_date, is_tombstone))) =
+                    m_table.read().await.get(&key)
+                {
+                    if creation_date > most_recent_insert_time {
+                        offset = value_offset;
+                        most_recent_insert_time = creation_date;
+                        is_deleted = is_tombstone;
+                    }
+                }
             }
-            let bf_rlock = &self.bloom_filters;
-            let filtered_bloom_filters =
-                BloomFilter::filter_by_sstable_paths(&bf_rlock, filtered_paths);
-            if filtered_bloom_filters.is_empty() {
-                return Err(KeyNotFoundByAnyBloomFilterError);
-            }
-            // Step 2: If key does not exist in MemTable then we can load sstables that probaby contains this key from bloom filter
-            let sstable_paths =
-                BloomFilter::get_sstable_paths_that_contains_key(filtered_bloom_filters, &key);
-            match sstable_paths {
-                Some(paths) => {
-                    // Step 3: Get the most recent value offset from sstables
-                    let mut is_deleted = false;
-                    for sst_path in paths.iter() {
-                        // Retrieve the sstable index
-                        let s_index = SparseIndex::new(sst_path.index_file_path.clone()).await;
-                        // Get block  from sstable index
-                        if let Ok(result) = s_index.get(&key).await {
-                            if let Some(block_offset) = result {
-                                let sstable = SSTable::new_with_exisiting_file_path(
-                                    sst_path.dir.clone(),
-                                    sst_path.data_file_path.clone(),
-                                    sst_path.index_file_path.clone(),
-                                );
-                                match sstable.get(block_offset, &key).await {
-                                    Ok(result) => {
-                                        if let Some((value_offset, created_at, is_tombstone)) =
-                                            result
-                                        {
-                                            if created_at > most_recent_insert_time {
-                                                offset = value_offset;
-                                                most_recent_insert_time = created_at;
-                                                is_deleted = is_tombstone;
+            if most_recent_insert_time > 0 && is_deleted {
+                return Err(KeyFoundAsTombstoneInSSTableError);
+            } else if most_recent_insert_time == 0 {
+                //Step 3 > Check the sstables
+                let filtered_paths = &self.biggest_key_index.filter_sstables_by_biggest_key(&key);
+                if filtered_paths.is_empty() {
+                    return Err(KeyNotFoundInAnySSTableError);
+                }
+
+                let filtered_bloom_filters = BloomFilter::filter_by_sstable_paths(
+                    &self.bloom_filters,
+                    filtered_paths.to_vec(),
+                );
+                if filtered_bloom_filters.is_empty() {
+                    return Err(KeyNotFoundByAnyBloomFilterError);
+                }
+
+                let sstable_paths =
+                    BloomFilter::get_sstable_paths_that_contains_key(filtered_bloom_filters, &key);
+                match sstable_paths {
+                    Some(paths) => {
+                        // Step 3: Get the most recent value offset from sstables
+                        for sst_path in paths.iter() {
+                            // Retrieve the sstable index
+                            let s_index = SparseIndex::new(sst_path.index_file_path.clone()).await;
+                            // Get block  from sstable index
+                            if let Ok(result) = s_index.get(&key).await {
+                                if let Some(block_offset) = result {
+                                    let sstable = SSTable::new_with_exisiting_file_path(
+                                        sst_path.dir.clone(),
+                                        sst_path.data_file_path.clone(),
+                                        sst_path.index_file_path.clone(),
+                                    );
+                                    match sstable.get(block_offset, &key).await {
+                                        Ok(result) => {
+                                            if let Some((value_offset, created_at, is_tombstone)) =
+                                                result
+                                            {
+                                                if created_at > most_recent_insert_time {
+                                                    offset = value_offset;
+                                                    most_recent_insert_time = created_at;
+                                                    is_deleted = is_tombstone;
+                                                }
                                             }
                                         }
+                                        Err(_) => {}
                                     }
-                                    Err(_) => {}
+                                } else {
+                                    continue;
                                 }
                             } else {
                                 continue;
                             }
-                        } else {
-                            continue;
+                        }
+
+                        if most_recent_insert_time > 0 && is_deleted {
+                            return Err(KeyFoundAsTombstoneInSSTableError);
                         }
                     }
-
-                    if most_recent_insert_time > 0 && is_deleted {
-                        return Err(KeyFoundAsTombstoneInSSTableError);
+                    None => {
+                        return Err(KeyNotFoundInAnySSTableError);
                     }
-                }
-                None => {
-                    return Err(KeyNotFoundInAnySSTableError);
                 }
             }
         }
@@ -261,9 +281,55 @@ impl StorageEngine<Vec<u8>> {
         Err(NotFoundInDB)
     }
 
+    pub async fn check_queued_updates(&mut self) {
+        // Try getting response from previous flush operations
+        for _ in 0..CHANNEL_BUFFER_SIZE {
+            let response = self.background_channel_rcv.try_recv();
+            match response {
+                Ok(channel_response) => {
+                    match channel_response {
+                        Ok(background_response_variants) => {
+                            match background_response_variants {
+                                BackgroundResponse::FlushSuccessResponse {
+                                    table_id,
+                                    updated_bucket_map,
+                                    updated_bloom_filters,
+                                    updated_biggest_key_index,
+                                } => {
+                                    println!(
+                                        "LENGTH OF MEMTABLES {}",
+                                        self.read_only_memtables.len()
+                                    );
+                                    // updated respective fields
+                                    self.bloom_filters = updated_bloom_filters;
+                                    self.buckets = updated_bucket_map;
+                                    self.biggest_key_index = updated_biggest_key_index;
+
+                                    // remove the flushed memtable from read only memtable hashtable
+                                    self.read_only_memtables.remove(&table_id);
+                                }
+                            }
+                        }
+                        Err(err) => println!("Receiever error {:?}", err),
+                    }
+                }
+                Err(err) => match err {
+                    TryRecvError::Empty => {
+                        // println!("Channel is empty {:?}", err);
+                        break;
+                    }
+                    TryRecvError::Disconnected => {
+                        println!("Sender disconnected {:?}", err);
+                        break;
+                    }
+                },
+            }
+        }
+    }
     /// A Result indicating success or an `io::Error` if an error occurred.
     pub async fn delete(&mut self, key: &str) -> Result<bool, StorageEngineError> {
-        // First check if the key exist before triggering a deletion
+        // check for any update in the channel
+        self.check_queued_updates().await;
         // Return error if not
         self.get(key).await?;
 
@@ -279,9 +345,8 @@ impl StorageEngine<Vec<u8>> {
             .append(key, value, created_at, is_tombstone)
             .await?;
 
-        // then check if the length of the memtable + head offset > than memtable length
-        // head offset is stored in sstable for recovery incase of crash
-        if self.active_memtable.size() + HEAD_ENTRY_LENGTH >= self.active_memtable.capacity() {
+        // then check if memtable is full
+        if self.active_memtable.is_full(HEAD_ENTRY_KEY.len()) {
             let capacity = self.active_memtable.capacity();
             let size_unit = self.active_memtable.size_unit();
             let false_positive_rate = self.active_memtable.false_positive_rate();
@@ -297,26 +362,38 @@ impl StorageEngine<Vec<u8>> {
                 is_tombstone,
             );
             let _ = self.active_memtable.insert(&head_entry);
-            println!(
-                "====== Flushing MemTable to To Disk ====== SIZE: {} KBs",
-                self.active_memtable.size()
+            self.active_memtable.read_only = true;
+            self.read_only_memtables.insert(
+                InMemoryTable::generate_table_id(),
+                Arc::new(RwLock::new(self.active_memtable.to_owned())),
             );
-            // let flush_result = self.flush_memtable().await;
-            // match flush_result {
-            //     Ok(_) => {
-            //         self.active_memtable = InMemoryTable::with_specified_capacity_and_rate(
-            //             size_unit,
-            //             capacity,
-            //             false_positive_rate,
-            //         );
-            //     }
-            //     Err(err) => {
-            //         return Err(FlushToDiskError {
-            //             error: Box::new(err),
-            //         });
-            //     }
-            // }
+
+            if self.read_only_memtables.len() >= self.config.max_buffer_write_number {
+                let (table_id, table_to_flush) = self.read_only_memtables.iter().next().unwrap();
+                let mut flush_job = BackgroundJob::Flush(FlushData::new(
+                    Arc::clone(table_to_flush),
+                    table_id.to_owned(),
+                    self.buckets.to_owned(),
+                    self.bloom_filters.to_owned(),
+                    self.biggest_key_index.to_owned(),
+                ));
+                let sender_clone = Arc::clone(&self.background_channel_snd);
+                // Trigger flush in background
+                tokio::spawn(async move {
+                    let job_res = flush_job.run().await;
+                    if let Err(err) = sender_clone.write().await.send(job_res).await {
+                        println!("Send to channel error {:?}", err);
+                    }
+                });
+
+                self.active_memtable = InMemoryTable::with_specified_capacity_and_rate(
+                    size_unit,
+                    capacity,
+                    false_positive_rate,
+                );
+            }
         }
+
         let entry = Entry::new(
             key.to_vec(),
             v_offset.try_into().unwrap(),
@@ -350,32 +427,6 @@ impl StorageEngine<Vec<u8>> {
         // Call the build method of StorageEngine and return a new instance.
         StorageEngine::with_capacity_and_rate(self.dir.clone(), size_unit, capacity, &config).await
     }
-
-    // if write + head offset is greater than size then flush to disk
-    // async fn flush_memtable(&mut self) -> Result<(), StorageEngineError> {
-    //     let hotness = 1;
-    //     let sstable_path = self
-    //         .buckets
-    //         .insert_to_appropriate_bucket(&self.active_memtable, hotness)
-    //         .await?;
-    //     //write the memtable to the disk as SS Tables
-    //     // insert to bloom filter
-    //     let mut bf = self.active_memtable.get_bloom_filter();
-    //     let data_file_path = sstable_path.get_data_file_path().clone();
-    //     bf.set_sstable_path(sstable_path);
-    //     self.bloom_filters.push(bf);
-
-    //     // sort bloom filter by hotness
-    //     self.bloom_filters.sort_by(|a, b| {
-    //         b.get_sstable_path()
-    //             .get_hotness()
-    //             .cmp(&a.get_sstable_path().get_hotness())
-    //     });
-    //     let biggest_key = self.active_memtable.find_biggest_key()?;
-    //     self.biggest_key_index.set(data_file_path, biggest_key);
-    //     // TODO: It makes more sense to clear the memtable here
-    //     Ok(())
-    // }
 
     async fn with_default_capacity_and_config(
         dir: DirPath,
@@ -427,6 +478,7 @@ impl StorageEngine<Vec<u8>> {
             // insert tail and head to memtable
             active_memtable.insert(&tail_entry.to_owned())?;
             active_memtable.insert(&head_entry.to_owned())?;
+            let (sender, receiver) = mpsc::channel(CHANNEL_BUFFER_SIZE);
             let read_only_memtables = HashMap::new();
             return Ok(Self {
                 active_memtable,
@@ -439,6 +491,8 @@ impl StorageEngine<Vec<u8>> {
                 config: config.clone(),
                 meta,
                 read_only_memtables,
+                background_channel_rcv: receiver,
+                background_channel_snd: Arc::new(RwLock::new(sender)),
             });
         }
 
@@ -589,7 +643,7 @@ impl StorageEngine<Vec<u8>> {
             most_recent_head_offset,
         )
         .await;
-
+        let (sender, receiver) = mpsc::channel(CHANNEL_BUFFER_SIZE);
         match recover_result {
             Ok((active_memtable, read_only_memtables)) => Ok(Self {
                 active_memtable,
@@ -602,6 +656,8 @@ impl StorageEngine<Vec<u8>> {
                 compactor: Compactor::new(config.enable_ttl, config.entry_ttl_millis),
                 config: config.clone(),
                 read_only_memtables,
+                background_channel_rcv: receiver,
+                background_channel_snd: Arc::new(RwLock::new(sender)),
             }),
             Err(err) => Err(MemTableRecoveryError(Box::new(err))),
         }
@@ -669,6 +725,7 @@ impl StorageEngine<Vec<u8>> {
     }
 
     pub async fn run_compaction(&mut self) -> Result<bool, StorageEngineError> {
+        self.check_queued_updates().await;
         self.compactor
             .run_compaction(
                 &mut self.buckets,
@@ -728,7 +785,6 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use log::info;
 
     use tokio::fs;
     use tokio::sync::RwLock;
@@ -744,9 +800,8 @@ mod tests {
     async fn storage_engine_create_asynchronous() {
         let path = PathBuf::new().join("bump1");
         let s_engine = StorageEngine::new(path.clone()).await.unwrap();
-
         // Specify the number of random strings to generate
-        let num_strings = 100000;
+        let num_strings = 50000;
 
         // Specify the length of each random string
         let string_length = 10;
@@ -760,84 +815,78 @@ mod tests {
         //     s_engine.put(&k, "boyode").await.unwrap();
         // }
         let sg = Arc::new(RwLock::new(s_engine));
-        let binding = random_strings.clone();
-        // let tasks = binding.iter().map(|k| {
-        //     let s_engine = Arc::clone(&sg);
-        //     let k = k.clone();
-        //     tokio::spawn(async move {
-        //         let mut value = s_engine.write().await;
-        //         value.put(&k, "boy").await
-        //     })
-        // });
+        let tasks = random_strings.iter().map(|k| {
+            let s_engine = Arc::clone(&sg);
+            let k = k.clone();
+            tokio::spawn(async move {
+                let mut value = s_engine.write().await;
+                let resp = value.put(&k, "boy").await;
+                match resp {
+                    Ok(v) => {
+                        assert_eq!(v, true)
+                    }
+                    Err(_) => {
+                        assert!(false, "No err should be found")
+                    }
+                }
+            })
+        });
 
-        // // Collect the results from the spawned tasks
-        // for task in tasks {
-        //     tokio::select! {
-        //         result = task => {
-        //             match result{
-        //                 Ok(v_opt)=>{
-        //                     match v_opt{
-        //                         Ok(v) => {
-        //                             assert_eq!(v, true)
-        //                         },
-        //                         Err(_) => { assert!(false, "No err should be found")},
-        //                     }
-        //                      }
-        //                 Err(_) =>  assert!(false, "No err should be found") }
-        //             //println!("{:?}",result);
-        //         }
-        //     }
-        // }
+        for task in tasks {
+            tokio::select! {
+                    result = task => {
+                        match result{Ok(v_opt)=>{}
+                            Err(_) => todo!(), }
+                }
+            }
+        }
 
-        // Insert the generated random strings
-        // let compactor = Compactor::new();
-        // let s_engine = Arc::clone(&sg);
-        // let compaction_opt = s_engine.write().await.run_compaction().await;
-        // match compaction_opt {
-        //     Ok(_) => {
-        //         println!("Compaction is successful");
-        //         println!(
-        //             "Length of bucket after compaction {:?}",
-        //             s_engine.read().await.buckets.buckets.len()
-        //         );
-        //         println!(
-        //             "Length of bloom filters after compaction {:?}",
-        //             s_engine.read().await.bloom_filters.len()
-        //         );
-        //     }
-        //     Err(err) => {
-        //         info!("Error during compaction {}", err)
-        //     }
-        // }
+        let s_engine = Arc::clone(&sg);
+        let compaction_opt = s_engine.write().await.run_compaction().await;
+        match compaction_opt {
+            Ok(_) => {
+                println!("Compaction is successful");
+                println!(
+                    "Length of bucket after compaction {:?}",
+                    s_engine.read().await.buckets.buckets.len()
+                );
+                println!(
+                    "Length of bloom filters after compaction {:?}",
+                    s_engine.read().await.bloom_filters.len()
+                );
+            }
+            Err(err) => {
+                println!("Error during compaction {}", err)
+            }
+        }
 
-        // random_strings.sort();
-        // println!("About to start reading");
-        // let tasks = random_strings.iter().map(|k| {
-        //     let s_engine = Arc::clone(&sg);
-        //     let k = k.clone();
-        //     tokio::spawn(async move {
-        //         let value = s_engine.read().await;
-        //         value.get(&k).await
-        //     })
-        // });
+        random_strings.sort();
+        println!("About to start reading");
+        let tasks = random_strings.iter().map(|k| {
+            let s_engine = Arc::clone(&sg);
+            let k = k.clone();
+            tokio::spawn(async move {
+                let value = s_engine.read().await;
+                value.get(&k).await
+            })
+        });
 
-        // for task in tasks {
-        //     tokio::select! {
-        //         result = task => {
-        //             match result.unwrap() {
-        //             Ok((value, _)) => {
-        //                 assert_eq!(value, b"boy");
-        //             }
-        //             Err(err) => {
-        //                 println!("ERROR {:?}", err);
-        //                 assert!(false, "No err should be found");
-        //             }
-        //         }
-        //         }
-        //     }
-        // }
+        for task in tasks {
+            tokio::select! {
+                result = task => {
+                    match result {
+                        Ok(v) => {
+                            assert_eq!(v.unwrap().0, b"boy");
+                        }
+                        Err(_) => {
+                            assert!(false, "No error should be found");
+                        }
+                    }
+                }
+            }
+        }
 
-        // let _ = fs::remove_dir_all(path.clone()).await;
+        let _ = fs::remove_dir_all(path.clone()).await;
     }
 
     #[tokio::test]
@@ -901,7 +950,7 @@ mod tests {
     #[tokio::test]
     async fn storage_engine_compaction_asynchronous() {
         let path = PathBuf::new().join("bump3");
-        let mut s_engine = StorageEngine::new(path.clone()).await.unwrap();
+        let s_engine = StorageEngine::new(path.clone()).await.unwrap();
 
         // Specify the number of random strings to generate
         let num_strings = 100000;
@@ -914,47 +963,47 @@ mod tests {
             let random_string = generate_random_string(string_length);
             random_strings.push(random_string);
         }
-        for k in random_strings.clone() {
-            s_engine.put(&k, "boyode").await.unwrap();
-        }
-        let sg = Arc::new(RwLock::new(s_engine));
-        // let binding = random_strings.clone();
-        // let tasks = binding.iter().map(|k| {
-        //     let s_engine = Arc::clone(&sg);
-        //     let k = k.clone();
-        //     tokio::spawn(async move {
-        //         let mut value = s_engine.write().await;
-        //         value.put(&k, "boyode").await
-        //     })
-        // });
-
-        // Collect the results from the spawned tasks
-        // for task in tasks {
-        //     tokio::select! {
-        //         result = task => {
-        //             match result{
-        //                 Ok(v_opt)=>{
-        //                     match v_opt{
-        //                         Ok(v) => {
-        //                             assert_eq!(v, true)
-        //                         },
-        //                         Err(_) => { assert!(false, "No err should be found")},
-        //                     }
-        //                      }
-        //                 Err(_) =>  assert!(false, "No err should be found") }
-        //             //println!("{:?}",result);
-        //         }
-        //     }
+        // for k in random_strings.clone() {
+        //     s_engine.put(&k, "boyode").await.unwrap();
         // }
+        let sg = Arc::new(RwLock::new(s_engine));
+        let binding = random_strings.clone();
+        let tasks = binding.iter().map(|k| {
+            let s_engine = Arc::clone(&sg);
+            let k = k.clone();
+            tokio::spawn(async move {
+                let mut value = s_engine.write().await;
+                value.put(&k, "boyode").await
+            })
+        });
+
+        //Collect the results from the spawned tasks
+        for task in tasks {
+            tokio::select! {
+                result = task => {
+                    match result{
+                        Ok(v_opt)=>{
+                            match v_opt{
+                                Ok(v) => {
+                                    assert_eq!(v, true)
+                                },
+                                Err(_) => { assert!(false, "No err should be found")},
+                            }
+                             }
+                        Err(_) =>  assert!(false, "No err should be found") }
+                    //println!("{:?}",result);
+                }
+            }
+        }
 
         // sort to make fetch random
         random_strings.sort();
         let key = &random_strings[0];
 
-        let get_res1 = sg.read().await.get(key).await;
-        let get_res2 = sg.read().await.get(key).await;
-        let get_res3 = sg.read().await.get(key).await;
-        let get_res4 = sg.read().await.get(key).await;
+        let get_res1 = sg.write().await.get(key).await;
+        let get_res2 = sg.write().await.get(key).await;
+        let get_res3 = sg.write().await.get(key).await;
+        let get_res4 = sg.write().await.get(key).await;
         match get_res1 {
             Ok(v) => {
                 assert_eq!(v.0, b"boyode");
@@ -1000,7 +1049,7 @@ mod tests {
             }
         }
 
-        let get_res2 = sg.read().await.get(key).await;
+        let get_res2 = sg.write().await.get(key).await;
         match get_res2 {
             Ok(_) => {
                 assert!(false, "Should not be found after compaction")
@@ -1017,7 +1066,7 @@ mod tests {
         sg.write().await.active_memtable.clear();
 
         // We expect tombstone to be flushed to an sstable at this point
-        let get_res2 = sg.read().await.get(key).await;
+        let get_res2 = sg.write().await.get(key).await;
         match get_res2 {
             Ok(_) => {
                 assert!(false, "Should not be found after compaction")
@@ -1052,7 +1101,7 @@ mod tests {
         // }
 
         // Insert the generated random strings
-        let get_res3 = sg.read().await.get(key).await;
+        let get_res3 = sg.write().await.get(key).await;
         match get_res3 {
             Ok(_) => {
                 assert!(false, "Deleted key should be found as tumbstone");
@@ -1127,7 +1176,7 @@ mod tests {
         let key = &random_strings[0];
         let updated_value = "updated_key";
 
-        let get_res = sg.read().await.get(key).await;
+        let get_res = sg.write().await.get(key).await;
         match get_res {
             Ok(v) => {
                 assert_eq!(v.0, b"boyode");
@@ -1149,7 +1198,7 @@ mod tests {
         //let _ = sg.write().await.flush_memtable().await;
         sg.write().await.active_memtable.clear();
 
-        let get_res = sg.read().await.get(key).await;
+        let get_res = sg.write().await.get(key).await;
         match get_res {
             Ok((value, _)) => {
                 assert_eq!(value, updated_value.as_bytes().to_vec())
@@ -1178,7 +1227,7 @@ mod tests {
         //     }
         // }
 
-        let get_res = sg.read().await.get(key).await;
+        let get_res = sg.write().await.get(key).await;
         match get_res {
             Ok((value, _)) => {
                 assert_eq!(value, updated_value.as_bytes().to_vec())
@@ -1241,7 +1290,7 @@ mod tests {
         // }
         // sort to make fetch random
         random_strings.sort();
-        let get_res = sg.read().await.get(key).await;
+        let get_res = sg.write().await.get(key).await;
         match get_res {
             Ok((value, _)) => {
                 assert_eq!(value, "boyode".as_bytes().to_vec());
@@ -1263,7 +1312,7 @@ mod tests {
         //let _ = sg.write().await.flush_memtable().await;
         sg.write().await.active_memtable.clear();
 
-        let get_res = sg.read().await.get(key).await;
+        let get_res = sg.write().await.get(key).await;
         match get_res {
             Ok((_, _)) => {
                 assert!(false, "Should not be executed")
@@ -1296,7 +1345,7 @@ mod tests {
 
         // Insert the generated random strings
         println!("trying to get this after compaction {}", key);
-        let get_res = sg.read().await.get(key).await;
+        let get_res = sg.write().await.get(key).await;
         match get_res {
             Ok((_, _)) => {
                 assert!(false, "Should not ne executed")
