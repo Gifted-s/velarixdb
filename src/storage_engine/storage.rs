@@ -20,7 +20,7 @@ use chrono::Utc;
 use tokio::sync::RwLock;
 
 use crate::err::StorageEngineError::*;
-use std::{collections::HashMap, fs, path::PathBuf, rc::Rc};
+use std::{collections::HashMap, fs, ops::Deref, path::PathBuf, rc::Rc};
 use std::{hash::Hash, sync::Arc};
 
 #[derive(Clone, Debug)]
@@ -34,7 +34,7 @@ pub struct StorageEngine<K: Hash + PartialOrd + std::cmp::Ord> {
     pub compactor: Compactor,
     pub meta: Meta,
     pub config: Config,
-    pub read_only_memtables: HashMap<K, Rc<RwLock<InMemoryTable<K>>>>,
+    pub read_only_memtables: HashMap<K, Arc<RwLock<InMemoryTable<K>>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -120,35 +120,35 @@ impl StorageEngine<Vec<u8>> {
             self.active_memtable.read_only = true;
             self.read_only_memtables.insert(
                 InMemoryTable::generate_table_id(),
-                Rc::new(RwLock::new(self.active_memtable.to_owned())),
+                Arc::new(RwLock::new(self.active_memtable.to_owned())),
             );
 
             if self.read_only_memtables.len() >= self.config.max_buffer_write_number {
                 let (table_id, table_to_flush) = self.read_only_memtables.iter().next().unwrap();
                 let mut flush_job = BackgroundJob::Flush(FlushData::new(
-                    Rc::clone(table_to_flush),
+                    Arc::clone(table_to_flush),
                     table_id.to_owned(),
                     self.buckets.clone(),
                     self.bloom_filters.clone(),
                     self.biggest_key_index.clone(),
                 ));
 
-                // tokio::spawn(async move {
-                //     let job_res = flush_job.run().await;
-                //     // if let Ok((
-                //     //     updated_read_only_memtables,
-                //     //     updated_bucket_map,
-                //     //     updated_bloom_filters,
-                //     //     updated_biggest_key_index,
-                //     // )) = job_res.map_err(|err| {
-                //     //     return StorageEngineError::FailedToInsertToBucket(err.to_string());
-                //     // }) {
-                //     //     self.read_only_memtables = updated_read_only_memtables;
-                //     //     self.bloom_filters = updated_bloom_filters;
-                //     //     self.buckets = updated_bucket_map;
-                //     //     self.biggest_key_index = updated_biggest_key_index;
-                //     // }
-                // });
+                tokio::spawn(async move {
+                    let job_res = flush_job.run().await;
+                    // if let Ok((
+                    //     updated_read_only_memtables,
+                    //     updated_bucket_map,
+                    //     updated_bloom_filters,
+                    //     updated_biggest_key_index,
+                    // )) = job_res.map_err(|err| {
+                    //     return StorageEngineError::FailedToInsertToBucket(err.to_string());
+                    // }) {
+                    //     self.read_only_memtables = updated_read_only_memtables;
+                    //     self.bloom_filters = updated_bloom_filters;
+                    //     self.buckets = updated_bucket_map;
+                    //     self.biggest_key_index = updated_biggest_key_index;
+                    // }
+                });
             }
 
             self.active_memtable = InMemoryTable::with_specified_capacity_and_rate(
@@ -615,11 +615,11 @@ impl StorageEngine<Vec<u8>> {
     ) -> Result<
         (
             InMemoryTable<Vec<u8>>,
-            HashMap<Vec<u8>, Rc<RwLock<InMemoryTable<Vec<u8>>>>>,
+            HashMap<Vec<u8>, Arc<RwLock<InMemoryTable<Vec<u8>>>>>,
         ),
         StorageEngineError,
     > {
-        let mut read_only_memtables: HashMap<Vec<u8>, Rc<RwLock<InMemoryTable<Vec<u8>>>>> =
+        let mut read_only_memtables: HashMap<Vec<u8>, Arc<RwLock<InMemoryTable<Vec<u8>>>>> =
             HashMap::new();
         let mut active_memtable = InMemoryTable::with_specified_capacity_and_rate(
             size_unit,
@@ -647,7 +647,7 @@ impl StorageEngine<Vec<u8>> {
                     active_memtable.read_only = true;
                     read_only_memtables.insert(
                         InMemoryTable::generate_table_id(),
-                        Rc::new(RwLock::new(active_memtable.to_owned())),
+                        Arc::new(RwLock::new(active_memtable.to_owned())),
                     );
                     active_memtable = InMemoryTable::with_specified_capacity_and_rate(
                         size_unit,

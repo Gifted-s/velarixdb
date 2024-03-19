@@ -30,7 +30,7 @@ pub enum BackgroundJob {
 }
 
 pub struct FlushData {
-    pub(crate) table_to_flush: Rc<RwLock<InMemoryTable<Vec<u8>>>>,
+    pub(crate) table_to_flush: Arc<RwLock<InMemoryTable<Vec<u8>>>>,
     pub(crate) table_id: Vec<u8>,
     pub(crate) buket_map: BucketMap,
     pub(crate) bloom_filters: Vec<BloomFilter>,
@@ -39,7 +39,7 @@ pub struct FlushData {
 
 impl FlushData {
     pub(crate) fn new(
-        table_to_flush: Rc<RwLock<InMemoryTable<Vec<u8>>>>,
+        table_to_flush: Arc<RwLock<InMemoryTable<Vec<u8>>>>,
         table_id: Vec<u8>,
         buket_map: BucketMap,
         bloom_filters: Vec<BloomFilter>,
