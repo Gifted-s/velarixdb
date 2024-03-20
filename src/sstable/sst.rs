@@ -6,10 +6,7 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-use tokio::{
-    fs,
-    io::AsyncReadExt,
-};
+use tokio::{fs, io::AsyncReadExt};
 use tokio::{fs::File, io};
 use tokio::{fs::OpenOptions, io::AsyncSeekExt};
 
@@ -42,7 +39,7 @@ impl IndexWithSizeInBytes for SSTable {
     fn size(&self) -> usize {
         self.size
     }
-    fn find_biggest_key_from_table(&self) -> Result<Vec<u8>, StorageEngineError>{
+    fn find_biggest_key_from_table(&self) -> Result<Vec<u8>, StorageEngineError> {
         self.find_biggest_key()
     }
 }

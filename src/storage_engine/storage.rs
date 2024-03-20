@@ -18,6 +18,7 @@ use crate::{
 };
 use chrono::Utc;
 use futures::io::Empty;
+use log::{error, info};
 use tokio::sync::{
     mpsc::{self, error::TryRecvError, Receiver, Sender},
     RwLock,
@@ -94,16 +95,16 @@ impl StorageEngine<Vec<u8>> {
         let value = &value.as_bytes().to_vec();
         let created_at = Utc::now().timestamp_millis() as u64;
         let is_tombstone = false;
+
         // check channel for queued updates
         self.check_queued_updates().await;
+
         // Write to value log first which returns the offset
         let v_offset = self
             .val_log
             .append(key, value, created_at, is_tombstone)
             .await?;
 
-        // then check if the length of the memtable + head offset > than memtable length
-        // store the head offset in the sstable for recovery in case of crash
         if self.active_memtable.is_full(HEAD_ENTRY_KEY.len()) {
             let capacity = self.active_memtable.capacity();
             let size_unit = self.active_memtable.size_unit();
@@ -173,8 +174,6 @@ impl StorageEngine<Vec<u8>> {
         let mut offset = 0;
         let mut most_recent_insert_time = 0;
 
-        // self.check_queued_updates().await;
-
         //Step 1 > Check the active memtable
         if let Ok(Some((value_offset, creation_date, is_tombstone))) =
             self.active_memtable.get(&key)
@@ -199,57 +198,61 @@ impl StorageEngine<Vec<u8>> {
                 }
             }
             if most_recent_insert_time > 0 && is_deleted {
-                return Err(KeyFoundAsTombstoneInSSTableError);
+                return Err(KeyFoundAsTombstoneInMemtableError);
             } else if most_recent_insert_time == 0 {
                 //Step 3 > Check the sstables
-                let filtered_paths = &self.biggest_key_index.filter_sstables_by_biggest_key(&key);
-                if filtered_paths.is_empty() {
+                let sstables_within_key_range =
+                    &self.biggest_key_index.filter_sstables_by_biggest_key(&key);
+                if sstables_within_key_range.is_empty() {
                     return Err(KeyNotFoundInAnySSTableError);
                 }
 
-                let filtered_bloom_filters = BloomFilter::filter_by_sstable_paths(
+                let bloom_filters_within_key_range = BloomFilter::bloom_filters_within_key_range(
                     &self.bloom_filters,
-                    filtered_paths.to_vec(),
+                    sstables_within_key_range.to_vec(),
                 );
-                if filtered_bloom_filters.is_empty() {
+                if bloom_filters_within_key_range.is_empty() {
                     return Err(KeyNotFoundByAnyBloomFilterError);
                 }
 
                 let sstable_paths =
-                    BloomFilter::get_sstable_paths_that_contains_key(filtered_bloom_filters, &key);
+                    BloomFilter::sstables_within_key_range(bloom_filters_within_key_range, &key);
                 match sstable_paths {
-                    Some(paths) => {
-                        // Step 3: Get the most recent value offset from sstables
-                        for sst_path in paths.iter() {
-                            // Retrieve the sstable index
-                            let s_index = SparseIndex::new(sst_path.index_file_path.clone()).await;
-                            // Get block  from sstable index
-                            if let Ok(result) = s_index.get(&key).await {
-                                if let Some(block_offset) = result {
-                                    let sstable = SSTable::new_with_exisiting_file_path(
-                                        sst_path.dir.clone(),
-                                        sst_path.data_file_path.clone(),
-                                        sst_path.index_file_path.clone(),
-                                    );
-                                    match sstable.get(block_offset, &key).await {
-                                        Ok(result) => {
-                                            if let Some((value_offset, created_at, is_tombstone)) =
-                                                result
-                                            {
-                                                if created_at > most_recent_insert_time {
-                                                    offset = value_offset;
-                                                    most_recent_insert_time = created_at;
-                                                    is_deleted = is_tombstone;
+                    Some(sstables_within_key_range) => {
+                        for sstable in sstables_within_key_range.iter() {
+                            let sparse_index =
+                                SparseIndex::new(sstable.index_file_path.clone()).await;
+
+                            match sparse_index.get(&key).await {
+                                Ok(None) => continue,
+                                Ok(result) => {
+                                    if let Some(block_offset) = result {
+                                        let sst = SSTable::new_with_exisiting_file_path(
+                                            sstable.dir.clone(),
+                                            sstable.data_file_path.clone(),
+                                            sstable.index_file_path.clone(),
+                                        );
+                                        match sst.get(block_offset, &key).await {
+                                            Ok(None) => continue,
+                                            Ok(result) => {
+                                                if let Some((
+                                                    value_offset,
+                                                    created_at,
+                                                    is_tombstone,
+                                                )) = result
+                                                {
+                                                    if created_at > most_recent_insert_time {
+                                                        offset = value_offset;
+                                                        most_recent_insert_time = created_at;
+                                                        is_deleted = is_tombstone;
+                                                    }
                                                 }
                                             }
+                                            Err(err) => error!("{}", err),
                                         }
-                                        Err(_) => {}
                                     }
-                                } else {
-                                    continue;
                                 }
-                            } else {
-                                continue;
+                                Err(err) => error!("{}", err),
                             }
                         }
 
@@ -286,36 +289,24 @@ impl StorageEngine<Vec<u8>> {
         for _ in 0..CHANNEL_BUFFER_SIZE {
             let response = self.background_channel_rcv.try_recv();
             match response {
-                Ok(channel_response) => {
-                    match channel_response {
-                        Ok(background_response_variants) => {
-                            match background_response_variants {
-                                BackgroundResponse::FlushSuccessResponse {
-                                    table_id,
-                                    updated_bucket_map,
-                                    updated_bloom_filters,
-                                    updated_biggest_key_index,
-                                } => {
-                                    println!(
-                                        "LENGTH OF MEMTABLES {}",
-                                        self.read_only_memtables.len()
-                                    );
-                                    // updated respective fields
-                                    self.bloom_filters = updated_bloom_filters;
-                                    self.buckets = updated_bucket_map;
-                                    self.biggest_key_index = updated_biggest_key_index;
-
-                                    // remove the flushed memtable from read only memtable hashtable
-                                    self.read_only_memtables.remove(&table_id);
-                                }
-                            }
+                Ok(channel_response) => match channel_response {
+                    Ok(response_variants) => match response_variants {
+                        BackgroundResponse::FlushSuccessResponse {
+                            table_id,
+                            updated_bucket_map,
+                            updated_bloom_filters,
+                            updated_biggest_key_index,
+                        } => {
+                            self.bloom_filters = updated_bloom_filters;
+                            self.buckets = updated_bucket_map;
+                            self.biggest_key_index = updated_biggest_key_index;
+                            self.read_only_memtables.remove(&table_id);
                         }
-                        Err(err) => println!("Receiever error {:?}", err),
-                    }
-                }
+                    },
+                    Err(err) => println!("Receiever error {:?}", err),
+                },
                 Err(err) => match err {
                     TryRecvError::Empty => {
-                        // println!("Channel is empty {:?}", err);
                         break;
                     }
                     TryRecvError::Disconnected => {
@@ -335,11 +326,10 @@ impl StorageEngine<Vec<u8>> {
 
         // Convert the key and value into Vec<u8> from given &str.
         let key = &key.as_bytes().to_vec();
-        let value = &TOMB_STONE_MARKER.to_le_bytes().to_vec(); // Value will be a thumbstone
+        let value = &TOMB_STONE_MARKER.to_le_bytes().to_vec();
         let created_at = Utc::now().timestamp_millis() as u64;
         let is_tombstone = true;
 
-        // Write to value log first which returns the offset
         let v_offset = self
             .val_log
             .append(key, value, created_at, is_tombstone)
@@ -400,7 +390,6 @@ impl StorageEngine<Vec<u8>> {
             created_at,
             is_tombstone,
         );
-
         self.active_memtable.insert(&entry)?;
         Ok(true)
     }
@@ -411,20 +400,18 @@ impl StorageEngine<Vec<u8>> {
     }
 
     pub async fn clear(&mut self) -> Result<Self, StorageEngineError> {
-        // Get the current capacity.
         let capacity = self.active_memtable.capacity();
 
-        // Get the current size_unit.
         let size_unit = self.active_memtable.size_unit();
 
-        // Delete the memtable by calling the `clear` method defined in MemTable.
         self.active_memtable.clear();
 
         let config = self.config.clone();
-        // Delete the velue_log by calling the `clear` method defined in ValueLog.
-        // self.val_log.clear()?;
 
-        // Call the build method of StorageEngine and return a new instance.
+        self.buckets.clear_all().await;
+
+        self.val_log.clear_all().await;
+
         StorageEngine::with_capacity_and_rate(self.dir.clone(), size_unit, capacity, &config).await
     }
 
@@ -723,6 +710,62 @@ impl StorageEngine<Vec<u8>> {
 
         Ok((active_memtable, read_only_memtables))
     }
+    // Flush all memtables
+    async fn flush_all_memtables(&mut self) -> Result<(), StorageEngineError> {
+        // Flush active memtable
+        let hotness = 1;
+        self.flush_memtable(
+            &Arc::new(RwLock::new(self.active_memtable.to_owned())),
+            hotness,
+        )
+        .await?;
+
+        // Flush all read-only memtables
+        let memtable_iterator = self.read_only_memtables.iter();
+        let mut read_only_memtables = Vec::new();
+        for (_, mem) in memtable_iterator {
+            read_only_memtables.push(Arc::clone(&mem))
+        }
+
+        for memtable in read_only_memtables {
+            self.flush_memtable(&memtable, hotness).await?;
+        }
+
+        // Sort bloom filter by hotness after flushing read-only memtables
+        self.bloom_filters.sort_by(|a, b| {
+            b.get_sstable_path()
+                .get_hotness()
+                .cmp(&a.get_sstable_path().get_hotness())
+        });
+
+        // clear the memtables
+        self.active_memtable.clear();
+        self.read_only_memtables = HashMap::new();
+        Ok(())
+    }
+
+    async fn flush_memtable(
+        &mut self,
+        memtable: &Arc<RwLock<InMemoryTable<Vec<u8>>>>,
+        hotness: u64,
+    ) -> Result<(), StorageEngineError> {
+        let sstable_path = self
+            .buckets
+            .insert_to_appropriate_bucket(&memtable.read().await.to_owned(), hotness)
+            .await?;
+
+        // Write the memtable to disk as SSTables
+        // Insert to bloom filter
+        let mut bf = memtable.read().await.get_bloom_filter();
+        bf.set_sstable_path(sstable_path.clone());
+        self.bloom_filters.push(bf);
+
+        let biggest_key = memtable.read().await.find_biggest_key()?;
+        self.biggest_key_index
+            .set(sstable_path.get_data_file_path(), biggest_key);
+
+        Ok(())
+    }
 
     pub async fn run_compaction(&mut self) -> Result<bool, StorageEngineError> {
         self.check_queued_updates().await;
@@ -780,6 +823,7 @@ impl SizeUnit {
 #[cfg(test)]
 mod tests {
 
+    use log::info;
     use rand::distributions::Alphanumeric;
     use rand::{thread_rng, Rng};
     use std::sync::Arc;
@@ -895,7 +939,7 @@ mod tests {
         let mut s_engine = StorageEngine::new(path.clone()).await.unwrap();
 
         // Specify the number of random strings to generate
-        let num_strings = 100;
+        let num_strings = 50000;
 
         // Specify the length of each random string
         let string_length = 10;
@@ -912,23 +956,23 @@ mod tests {
         }
         // let compactor = Compactor::new();
 
-        // let compaction_opt = s_engine.run_compaction().await;
-        // match compaction_opt {
-        //     Ok(_) => {
-        //         println!("Compaction is successful");
-        //         println!(
-        //             "Length of bucket after compaction {:?}",
-        //             s_engine.buckets.buckets.len()
-        //         );
-        //         println!(
-        //             "Length of bloom filters after compaction {:?}",
-        //             s_engine.bloom_filters.len()
-        //         );
-        //     }
-        //     Err(err) => {
-        //         info!("Error during compaction {}", err)
-        //     }
-        // }
+        let compaction_opt = s_engine.run_compaction().await;
+        match compaction_opt {
+            Ok(_) => {
+                println!("Compaction is successful");
+                println!(
+                    "Length of bucket after compaction {:?}",
+                    s_engine.buckets.buckets.len()
+                );
+                println!(
+                    "Length of bloom filters after compaction {:?}",
+                    s_engine.bloom_filters.len()
+                );
+            }
+            Err(err) => {
+                println!("Error during compaction {}", err)
+            }
+        }
 
         // random_strings.sort();
         for k in random_strings {
@@ -953,7 +997,7 @@ mod tests {
         let s_engine = StorageEngine::new(path.clone()).await.unwrap();
 
         // Specify the number of random strings to generate
-        let num_strings = 100000;
+        let num_strings = 50000;
 
         // Specify the length of each random string
         let string_length = 10;
@@ -1000,10 +1044,10 @@ mod tests {
         random_strings.sort();
         let key = &random_strings[0];
 
-        let get_res1 = sg.write().await.get(key).await;
-        let get_res2 = sg.write().await.get(key).await;
-        let get_res3 = sg.write().await.get(key).await;
-        let get_res4 = sg.write().await.get(key).await;
+        let get_res1 = sg.read().await.get(key).await;
+        let get_res2 = sg.read().await.get(key).await;
+        let get_res3 = sg.read().await.get(key).await;
+        let get_res4 = sg.read().await.get(key).await;
         match get_res1 {
             Ok(v) => {
                 assert_eq!(v.0, b"boyode");
@@ -1049,7 +1093,7 @@ mod tests {
             }
         }
 
-        let get_res2 = sg.write().await.get(key).await;
+        let get_res2 = sg.read().await.get(key).await;
         match get_res2 {
             Ok(_) => {
                 assert!(false, "Should not be found after compaction")
@@ -1062,11 +1106,11 @@ mod tests {
             }
         }
 
-        // let _ = sg.write().await.flush_memtable().await;
+        let _ = sg.write().await.flush_all_memtables().await;
         sg.write().await.active_memtable.clear();
 
         // We expect tombstone to be flushed to an sstable at this point
-        let get_res2 = sg.write().await.get(key).await;
+        let get_res2 = sg.read().await.get(key).await;
         match get_res2 {
             Ok(_) => {
                 assert!(false, "Should not be found after compaction")
@@ -1079,29 +1123,29 @@ mod tests {
             }
         }
 
-        let _ = sg.write().await.run_compaction().await;
+        let compaction_opt = sg.write().await.run_compaction().await;
         // Insert the generated random strings
         // let compactor = Compactor::new();
         // let compaction_opt = sg.write().await.run_compaction().await;
-        // match compaction_opt {
-        //     Ok(_) => {
-        //         println!("Compaction is successful");
-        //         println!(
-        //             "Length of bucket after compaction {:?}",
-        //             sg.read().await.buckets.buckets.len()
-        //         );
-        //         println!(
-        //             "Length of bloom filters after compaction {:?}",
-        //             sg.read().await.bloom_filters.len()
-        //         );
-        //     }
-        //     Err(err) => {
-        //         info!("Error during compaction {}", err)
-        //     }
-        // }
+        match compaction_opt {
+            Ok(_) => {
+                println!("Compaction is successful");
+                println!(
+                    "Length of bucket after compaction {:?}",
+                    sg.read().await.buckets.buckets.len()
+                );
+                println!(
+                    "Length of bloom filters after compaction {:?}",
+                    sg.read().await.bloom_filters.len()
+                );
+            }
+            Err(err) => {
+                info!("Error during compaction {}", err)
+            }
+        }
 
         // Insert the generated random strings
-        let get_res3 = sg.write().await.get(key).await;
+        let get_res3 = sg.read().await.get(key).await;
         match get_res3 {
             Ok(_) => {
                 assert!(false, "Deleted key should be found as tumbstone");
@@ -1144,39 +1188,38 @@ mod tests {
         }
         let sg = Arc::new(RwLock::new(s_engine));
         let binding = random_strings.clone();
-        // let tasks = binding.iter().map(|k| {
-        //     let s_engine = Arc::clone(&sg);
-        //     let k = k.clone();
-        //     tokio::spawn(async move {
-        //         let mut value = s_engine.write().await;
-        //         value.put(&k, "boyode").await
-        //     })
-        // });
+        let tasks = binding.iter().map(|k| {
+            let s_engine = Arc::clone(&sg);
+            let k = k.clone();
+            tokio::spawn(async move {
+                let mut value = s_engine.write().await;
+                value.put(&k, "boyode").await
+            })
+        });
 
         // Collect the results from the spawned tasks
-        // for task in tasks {
-        //     tokio::select! {
-        //         result = task => {
-        //             match result{
-        //                 Ok(v_opt)=>{
-        //                     match v_opt{
-        //                         Ok(v) => {
-        //                             assert_eq!(v, true)
-        //                         },
-        //                         Err(_) => { assert!(false, "No err should be found")},
-        //                     }
-        //                      }
-        //                 Err(_) =>  assert!(false, "No err should be found") }
-        //             //println!("{:?}",result);
-        //         }
-        //     }
-        // }
+        for task in tasks {
+            tokio::select! {
+                result = task => {
+                    match result{
+                        Ok(v_opt)=>{
+                            match v_opt{
+                                Ok(v) => {
+                                    assert_eq!(v, true)
+                                },
+                                Err(_) => { assert!(false, "No err should be found")},
+                            }
+                             }
+                        Err(_) =>  assert!(false, "No err should be found") }
+                }
+            }
+        }
         // // sort to make fetch random
         random_strings.sort();
         let key = &random_strings[0];
         let updated_value = "updated_key";
 
-        let get_res = sg.write().await.get(key).await;
+        let get_res = sg.read().await.get(key).await;
         match get_res {
             Ok(v) => {
                 assert_eq!(v.0, b"boyode");
@@ -1195,10 +1238,10 @@ mod tests {
                 assert!(false, "No error should be found");
             }
         }
-        //let _ = sg.write().await.flush_memtable().await;
+        let _ = sg.write().await.flush_all_memtables().await;
         sg.write().await.active_memtable.clear();
 
-        let get_res = sg.write().await.get(key).await;
+        let get_res = sg.read().await.get(key).await;
         match get_res {
             Ok((value, _)) => {
                 assert_eq!(value, updated_value.as_bytes().to_vec())
@@ -1209,25 +1252,25 @@ mod tests {
         }
 
         // // Run compaction
-        // let compaction_opt = sg.write().await.run_compaction().await;
-        // match compaction_opt {
-        //     Ok(_) => {
-        //         println!("Compaction is successful");
-        //         println!(
-        //             "Length of bucket after compaction {:?}",
-        //             sg.read().await.buckets.buckets.len()
-        //         );
-        //         println!(
-        //             "Length of bloom filters after compaction {:?}",
-        //             sg.read().await.bloom_filters.len()
-        //         );
-        //     }
-        //     Err(err) => {
-        //         info!("Error during compaction {}", err)
-        //     }
-        // }
+        let compaction_opt = sg.write().await.run_compaction().await;
+        match compaction_opt {
+            Ok(_) => {
+                println!("Compaction is successful");
+                println!(
+                    "Length of bucket after compaction {:?}",
+                    sg.read().await.buckets.buckets.len()
+                );
+                println!(
+                    "Length of bloom filters after compaction {:?}",
+                    sg.read().await.bloom_filters.len()
+                );
+            }
+            Err(err) => {
+                info!("Error during compaction {}", err)
+            }
+        }
 
-        let get_res = sg.write().await.get(key).await;
+        let get_res = sg.read().await.get(key).await;
         match get_res {
             Ok((value, _)) => {
                 assert_eq!(value, updated_value.as_bytes().to_vec())
@@ -1242,10 +1285,10 @@ mod tests {
     #[tokio::test]
     async fn storage_engine_deletion_asynchronous() {
         let path = PathBuf::new().join("bump5");
-        let mut s_engine = StorageEngine::new(path.clone()).await.unwrap();
+        let s_engine = StorageEngine::new(path.clone()).await.unwrap();
 
         // Specify the number of random strings to generate
-        let num_strings = 6000;
+        let num_strings = 60000;
 
         // Specify the length of each random string
         let string_length = 10;
@@ -1255,42 +1298,41 @@ mod tests {
             let random_string = generate_random_string(string_length);
             random_strings.push(random_string);
         }
-        for k in random_strings.clone() {
-            s_engine.put(&k, "boyode").await.unwrap();
-        }
+        // for k in random_strings.clone() {
+        //     s_engine.put(&k, "boyode").await.unwrap();
+        // }
         let sg = Arc::new(RwLock::new(s_engine));
         let binding = random_strings.clone();
-        // let tasks = binding.iter().map(|k| {
-        //     let s_engine = Arc::clone(&sg);
-        //     let k = k.clone();
-        //     tokio::spawn(async move {
-        //         let mut value = s_engine.write().await;
-        //         value.put(&k, "boyode").await
-        //     })
-        // });
+        let tasks = binding.iter().map(|k| {
+            let s_engine = Arc::clone(&sg);
+            let k = k.clone();
+            tokio::spawn(async move {
+                let mut value = s_engine.write().await;
+                value.put(&k, "boyode").await
+            })
+        });
         let key = "aunkanmi";
         let _ = sg.write().await.put(key, "boyode").await;
         // // Collect the results from the spawned tasks
-        // for task in tasks {
-        //     tokio::select! {
-        //         result = task => {
-        //             match result{
-        //                 Ok(v_opt)=>{
-        //                     match v_opt{
-        //                         Ok(v) => {
-        //                             assert_eq!(v, true)
-        //                         },
-        //                         Err(_) => { assert!(false, "No err should be found")},
-        //                     }
-        //                      }
-        //                 Err(_) =>  assert!(false, "No err should be found") }
-        //             //println!("{:?}",result);
-        //         }
-        //     }
-        // }
+        for task in tasks {
+            tokio::select! {
+                result = task => {
+                    match result{
+                        Ok(v_opt)=>{
+                            match v_opt{
+                                Ok(v) => {
+                                    assert_eq!(v, true)
+                                },
+                                Err(_) => { assert!(false, "No err should be found")},
+                            }
+                             }
+                        Err(_) =>  assert!(false, "No err should be found") }
+                }
+            }
+        }
         // sort to make fetch random
         random_strings.sort();
-        let get_res = sg.write().await.get(key).await;
+        let get_res = sg.read().await.get(key).await;
         match get_res {
             Ok((value, _)) => {
                 assert_eq!(value, "boyode".as_bytes().to_vec());
@@ -1309,10 +1351,10 @@ mod tests {
                 assert!(err.to_string().is_empty())
             }
         }
-        //let _ = sg.write().await.flush_memtable().await;
-        sg.write().await.active_memtable.clear();
 
-        let get_res = sg.write().await.get(key).await;
+        let _ = sg.write().await.flush_all_memtables().await;
+
+        let get_res = sg.read().await.get(key).await;
         match get_res {
             Ok((_, _)) => {
                 assert!(false, "Should not be executed")
@@ -1325,27 +1367,27 @@ mod tests {
             }
         }
 
-        // let compaction_opt = sg.write().await.run_compaction().await;
-        // match compaction_opt {
-        //     Ok(_) => {
-        //         println!("Compaction is successful");
-        //         println!(
-        //             "Length of bucket after compaction {:?}",
-        //             sg.read().await.buckets.buckets.len()
-        //         );
-        //         println!(
-        //             "Length of bloom filters after compaction {:?}",
-        //             sg.read().await.bloom_filters.len()
-        //         );
-        //     }
-        //     Err(err) => {
-        //         info!("Error during compaction {}", err)
-        //     }
-        // }
+        let compaction_opt = sg.write().await.run_compaction().await;
+        match compaction_opt {
+            Ok(_) => {
+                println!("Compaction is successful");
+                println!(
+                    "Length of bucket after compaction {:?}",
+                    sg.read().await.buckets.buckets.len()
+                );
+                println!(
+                    "Length of bloom filters after compaction {:?}",
+                    sg.read().await.bloom_filters.len()
+                );
+            }
+            Err(err) => {
+                info!("Error during compaction {}", err)
+            }
+        }
 
         // Insert the generated random strings
         println!("trying to get this after compaction {}", key);
-        let get_res = sg.write().await.get(key).await;
+        let get_res = sg.read().await.get(key).await;
         match get_res {
             Ok((_, _)) => {
                 assert!(false, "Should not ne executed")

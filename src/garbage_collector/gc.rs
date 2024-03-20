@@ -72,32 +72,25 @@ impl GarbageCollector {
     pub fn new() -> Self {
         Self {}
     }
-   
-     pub async  fn run(&self, engine: &mut StorageEngine<Vec<u8>> )-> Result<(), StorageEngineError>{
-       // let valid_entries = Vec::new();
+
+    pub async fn run(&self, engine: &mut StorageEngine<Vec<u8>>) -> Result<(), StorageEngineError> {
+        // let valid_entries = Vec::new();
         // Step 1: Read chunks to garbage collect
         // TODO handle errors
-        let _ = engine.val_log.read_chunk_to_garbage_collect(SizeUnit::Kilobytes.to_bytes(1)).await?;
+        let _ = engine
+            .val_log
+            .read_chunk_to_garbage_collect(SizeUnit::Kilobytes.to_bytes(1))
+            .await?;
         //tokio::join!();
-        // Step 2: 
-
-        
+        // Step 2:
 
         Ok(())
-   
     }
 
     //pub async  fn check_key_validity(&self, engine: &mut StorageEngine<Vec<u8>>, valid_entries: Vec<ValueLogEntry>  )-> Result<(), StorageEngineError>{
-       // let valid_entries = Vec::new();
-        
-        // Step 2: 
+    // let valid_entries = Vec::new();
 
-        
+    // Step 2:
 
-       // Ok(())
-   
-    }
-
-
-
-
+    // Ok(())
+}
