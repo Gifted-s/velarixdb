@@ -31,7 +31,7 @@ pub struct InMemoryTable<K: Hash + PartialOrd + cmp::Ord> {
     pub size_unit: SizeUnit,
     pub capacity: usize,
     pub created_at: DateTime<Utc>,
-    pub read_only: bool
+    pub read_only: bool,
 }
 
 impl IndexWithSizeInBytes for InMemoryTable<Vec<u8>> {
@@ -98,7 +98,7 @@ impl InMemoryTable<Vec<u8>> {
             capacity: capacity_to_bytes,
             created_at: now,
             false_positive_rate,
-            read_only: false
+            read_only: false,
         }
     }
 
@@ -162,7 +162,6 @@ impl InMemoryTable<Vec<u8>> {
             .collect();
         id.as_bytes().to_vec()
     }
-    
 
     pub fn delete(&mut self, entry: &Entry<Vec<u8>, usize>) -> Result<(), StorageEngineError> {
         if !self.bloom_filter.contains(&entry.key) {
@@ -181,9 +180,8 @@ impl InMemoryTable<Vec<u8>> {
         Ok(())
     }
 
-
     pub fn is_full(&mut self, key_len: usize) -> bool {
-      self.size +  key_len + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8 >= self.capacity()
+        self.size + key_len + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8 >= self.capacity()
     }
 
     // Find the biggest element in the skip list

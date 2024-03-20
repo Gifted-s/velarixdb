@@ -68,7 +68,7 @@ impl BloomFilter {
         self.sstable_path = Some(sstable_path);
     }
 
-    pub fn filter_by_sstable_paths<'a>(
+    pub fn bloom_filters_within_key_range<'a>(
         bloom_filters: &'a Vec<BloomFilter>,
         paths: Vec<&'a PathBuf>,
     ) -> Vec<&'a BloomFilter> {
@@ -83,7 +83,7 @@ impl BloomFilter {
         filtered_bfs
     }
 
-    pub fn get_sstable_paths_that_contains_key<T: Hash>(
+    pub fn sstables_within_key_range<T: Hash>(
         bloom_filters: Vec<&BloomFilter>,
         key: &T,
     ) -> Option<Vec<SSTablePath>> {

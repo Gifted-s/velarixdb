@@ -91,7 +91,7 @@ impl SparseIndex {
                     })?;
             // If the end of the file is reached and no match is found, return non
             if bytes_read == 0 {
-                if sstable_file_offset ==-1{
+                if sstable_file_offset == -1 {
                     return Ok(None);
                 }
                 return Ok(Some(sstable_file_offset as u32));
@@ -131,15 +131,13 @@ impl SparseIndex {
                 }
                 std::cmp::Ordering::Greater => {
                     // if all index keys are greater than the searched key then return none
-                    if sstable_file_offset ==-1{
+                    if sstable_file_offset == -1 {
                         return Ok(None);
                     }
                     return Ok(Some(sstable_file_offset as u32));
                 }
             }
         }
-
-        
     }
 }
 

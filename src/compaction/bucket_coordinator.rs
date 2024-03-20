@@ -194,14 +194,13 @@ impl BucketMap {
                         .to_vec(),
                     id: b.id,
                     dir: b.dir.to_owned(),
-                    avarage_size: b.avarage_size, // passing the average size is redundant here becuase
-                                                  // we don't need it for the actual compaction but we leave it to keep things readable
+                    avarage_size: b.avarage_size,
                 })
             });
         (buckets_to_compact, sstables_to_delete)
     }
 
-    // NOTE:  This should be called only after compaction is complete
+    // NOTE: This should be called only after compaction is complete
     pub async fn delete_sstables(
         &mut self,
         sstables_to_delete: &Vec<(Uuid, Vec<SSTablePath>)>,
@@ -255,5 +254,20 @@ impl BucketMap {
             });
         }
         all_sstables_deleted
+    }
+
+    // CAUTION: This removes all sstables and buckets and should only be used for total cleanup
+    pub async fn clear_all(&mut self) {
+        for (_, bucket) in &self.buckets {
+            if fs::metadata(&bucket.dir).await.is_ok() {
+                if let Err(err) = fs::remove_dir_all(&bucket.dir).await {
+                    error!(
+                        "Err sstable not deleted path={:?}, err={:?} ",
+                        bucket.dir, err
+                    );
+                }
+            }
+        }
+        self.buckets = HashMap::new();
     }
 }

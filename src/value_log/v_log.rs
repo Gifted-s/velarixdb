@@ -1,3 +1,4 @@
+use log::error;
 use std::{mem, path::PathBuf};
 use tokio::fs::OpenOptions;
 use tokio::io::{self, AsyncSeekExt, SeekFrom};
@@ -6,6 +7,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
 };
 
+use crate::consts::HEAD_ENTRY_LENGTH;
 use crate::{
     consts::{EOF, VLOG_FILE_NAME},
     err::StorageEngineError,
@@ -461,6 +463,20 @@ impl ValueLog {
                 return Ok(entries);
             }
         }
+    }
+
+    // CAUTION: This deletes the value log file
+    pub async fn clear_all(&mut self) {
+        if fs::metadata(&self.file_path).await.is_ok() {
+            if let Err(err) = fs::remove_dir_all(&self.file_path).await {
+                error!(
+                    "Err sstable not deleted path={:?}, err={:?} ",
+                    self.file_path, err
+                );
+            }
+        }
+        self.tail_offset = 0;
+        self.head_offset = 0;
     }
 }
 
