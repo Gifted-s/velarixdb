@@ -7,7 +7,6 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
 };
 
-use crate::consts::HEAD_ENTRY_LENGTH;
 use crate::{
     consts::{EOF, VLOG_FILE_NAME},
     err::StorageEngineError,

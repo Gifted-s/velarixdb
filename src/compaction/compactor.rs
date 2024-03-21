@@ -2,10 +2,15 @@ use crossbeam_skiplist::SkipMap;
 use log::{error, info, warn};
 use std::{cmp::Ordering, collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::fs;
+use tokio::sync::{mpsc::Receiver, RwLock};
+use tokio::time::{sleep, Duration};
 use uuid::Uuid;
-//use tokio::stream::StreamExt;
 
-use super::{bucket_coordinator::Bucket, BucketMap};
+use super::{
+    bucket_coordinator::{Bucket, BucketID},
+    BucketMap,
+};
+use crate::consts::TOMBSTONE_COMPACTION_INTERVAL_MILLI;
 use crate::{
     bloom_filter::BloomFilter,
     consts::TOMB_STONE_TTL,
@@ -49,6 +54,20 @@ impl Compactor {
             entry_ttl,
         }
     }
+    /// TODO: This method will be used to check for the condition to trigger tombstone compaction
+    /// for now this feature has not been implememnted
+    pub fn tombstone_compaction_condition_background_checker(
+        &self,
+        rcx: Arc<RwLock<Receiver<BucketMap>>>,
+    ) {
+        let receiver = Arc::clone(&rcx);
+        tokio::spawn(async move {
+            loop {
+                let _ = receiver.write().await.try_recv();
+                sleep(Duration::from_millis(TOMBSTONE_COMPACTION_INTERVAL_MILLI)).await;
+            }
+        });
+    }
 
     pub async fn run_compaction(
         &mut self,
@@ -63,8 +82,10 @@ impl Compactor {
         // TODO: Handle this with multiple threads while keeping track of number of Disk IO used
         // so we don't run out of Disk IO during large compactions
         loop {
+            
             // Step 1: Extract buckets to compact
-            let buckets_to_compact_and_sstables_to_remove = buckets.extract_buckets_to_compact();
+            let buckets_to_compact_and_sstables_to_remove =
+                buckets.extract_buckets_to_compact().await?;
             let buckets_to_compact = buckets_to_compact_and_sstables_to_remove.0;
             let sstables_files_to_remove = buckets_to_compact_and_sstables_to_remove.1;
 
@@ -145,24 +166,33 @@ impl Compactor {
                         == actual_number_of_sstables_written_to_disk
                     {
                         // Step 6:  Delete the sstables that we already merged from their previous buckets and update bloom filters
-                        let bloom_filter_updated_opt = self.clean_up_after_compaction(
-                            buckets,
-                            &sstables_files_to_remove,
-                            bloom_filters,
-                            biggest_key_index,
-                        );
-                        match bloom_filter_updated_opt.await {
-                            Some(is_bloom_filter_updated) => {
+                        let bloom_filter_updated_opt = self
+                            .clean_up_after_compaction(
+                                buckets,
+                                &sstables_files_to_remove,
+                                bloom_filters,
+                                biggest_key_index,
+                            )
+                            .await;
+                        match bloom_filter_updated_opt {
+                            Ok(Some(is_bloom_filter_updated)) => {
                                 // clear Tumbstone Map so as to not interfere with the next compaction process
                                 info!(
                                     "{} COMPACTION COMPLETED SUCCESSFULLY : {}",
                                     number_of_compactions, is_bloom_filter_updated
                                 );
                             }
-                            None => {
+                            Ok(None) => {
                                 return Err(StorageEngineError::CompactionPartiallyFailed(String::from(
-                                      "Compaction cleanup failed but sstable merge was successful",
+                                      "Partial failure, obsolete sstables not deleted but sstable merge was successful",
                                   )));
+                            }
+                            Err(err) => {
+                                let mut err_des = String::from(
+                                    "Compaction cleanup failed but sstable merge was successful ",
+                                );
+                                err_des.push_str(&err.to_string());
+                                return Err(StorageEngineError::CompactionPartiallyFailed(err_des));
                             }
                         }
                     } else {
@@ -177,17 +207,17 @@ impl Compactor {
     pub async fn clean_up_after_compaction(
         &self,
         buckets: &mut BucketMap,
-        sstables_to_delete: &Vec<(Uuid, Vec<SSTablePath>)>,
+        sstables_to_delete: &Vec<(BucketID, Vec<SSTablePath>)>,
         bloom_filters_with_both_old_and_new_sstables: &mut Vec<BloomFilter>,
         biggest_key_index: &mut TableBiggestKeys,
-    ) -> Option<bool> {
+    ) -> Result<Option<bool>, StorageEngineError> {
         // Remove obsolete keys from biggest keys index
         sstables_to_delete.iter().for_each(|(_, sstables)| {
             sstables.iter().for_each(|s| {
                 biggest_key_index.remove(s.get_data_file_path());
             })
         });
-        let all_sstables_deleted = buckets.delete_sstables(sstables_to_delete).await;
+        let all_sstables_deleted = buckets.delete_sstables(sstables_to_delete).await?;
         // if all sstables were not deleted then don't remove the associated bloom filters
         // although this can lead to redundancy bloom filters are in-memory and its also less costly
         // since keys are represented in bits
@@ -197,9 +227,9 @@ impl Compactor {
                 bloom_filters_with_both_old_and_new_sstables,
                 sstables_to_delete,
             );
-            return bloom_filter_updated;
+            return Ok(bloom_filter_updated);
         }
-        None
+        Ok(None)
     }
 
     pub fn filter_out_old_bloom_filters(

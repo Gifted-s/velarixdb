@@ -1,6 +1,5 @@
 use crate::consts::{
-    DEFAULT_ALLOW_PREFETCH, DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MAX_WRITE_BUFFER_NUMBER,
-    DEFAULT_PREFETCH_SIZE, ENABLE_TTL, ENTRY_TTL, GC_THREAD_COUNT, WRITE_BUFFER_SIZE,
+    DEFAULT_ALLOW_PREFETCH, DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MAX_WRITE_BUFFER_NUMBER, DEFAULT_PREFETCH_SIZE, DEFUALT_ENABLE_TTL, ENTRY_TTL, GC_THREAD_COUNT, WRITE_BUFFER_SIZE
 };
 
 #[derive(Clone, Debug)]
@@ -62,7 +61,7 @@ impl Default for Config {
         Config {
             gc_thread_count: GC_THREAD_COUNT,
             false_positive_rate: DEFAULT_FALSE_POSITIVE_RATE,
-            enable_ttl: ENABLE_TTL,
+            enable_ttl: DEFUALT_ENABLE_TTL,
             entry_ttl_millis: ENTRY_TTL, // 1 year
             allow_prefetch: DEFAULT_ALLOW_PREFETCH,
             prefetch_size: DEFAULT_PREFETCH_SIZE,

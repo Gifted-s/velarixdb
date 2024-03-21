@@ -154,7 +154,7 @@ impl InMemoryTable<Vec<u8>> {
     }
 
     pub fn generate_table_id() -> Vec<u8> {
-        let mut rng = rand::thread_rng();
+        let rng = rand::thread_rng();
         let id: String = rng
             .sample_iter(&Alphanumeric)
             .take(10)
