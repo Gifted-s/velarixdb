@@ -1,16 +1,14 @@
-use crate::compaction::Bucket;
 use crate::{
-    bloom_filter::BloomFilter, compaction::BucketMap, err::StorageEngineError,
-    key_offseter::TableBiggestKeys, memtable::InMemoryTable, sstable::SSTablePath,
+    bloom_filter::BloomFilter,
+    compaction::{BucketMap, Compactor},
+    consts::{DEFUALT_ENABLE_TTL, ENTRY_TTL},
+    err::StorageEngineError,
+    key_offseter::TableBiggestKeys,
+    memtable::InMemoryTable,
 };
 
-use std::collections::hash_map::RandomState;
-use std::collections::HashMap;
-use std::rc::Rc;
 use std::sync::Arc;
-use tokio::sync::mpsc;
 use tokio::sync::RwLock;
-use uuid::Uuid;
 
 #[derive(Clone, Debug)]
 pub enum BackgroundResponse {
@@ -24,10 +22,7 @@ pub enum BackgroundResponse {
 
 pub enum BackgroundJob {
     // Flush oldest memtable to disk
-    Flush(FlushData), // Remove obsolete keys from the value log
-                      // GarbageCollection,
-                      // // Merge sstables to form bigger ones and also remove deleted and obsolete keys
-                      // Compaction,
+    Flusher(FlushData),
 }
 
 pub struct FlushData {
@@ -36,6 +31,8 @@ pub struct FlushData {
     pub(crate) bucket_map: BucketMap,
     pub(crate) bloom_filters: Vec<BloomFilter>,
     pub(crate) biggest_key_index: TableBiggestKeys,
+    pub(crate) use_ttl: bool,
+    pub(crate) entry_ttl: u64,
 }
 
 impl FlushData {
@@ -45,6 +42,8 @@ impl FlushData {
         bucket_map: BucketMap,
         bloom_filters: Vec<BloomFilter>,
         biggest_key_index: TableBiggestKeys,
+        use_ttl: bool,
+        entry_ttl: u64,
     ) -> Self {
         Self {
             table_to_flush,
@@ -52,6 +51,8 @@ impl FlushData {
             bucket_map,
             bloom_filters,
             biggest_key_index,
+            use_ttl,
+            entry_ttl,
         }
     }
 }
@@ -59,7 +60,7 @@ impl FlushData {
 impl BackgroundJob {
     pub async fn run(&mut self) -> Result<BackgroundResponse, StorageEngineError> {
         match self {
-            BackgroundJob::Flush(flush_data) => {
+            BackgroundJob::Flusher(flush_data) => {
                 let table = Arc::clone(&flush_data.table_to_flush);
                 let table_id = &flush_data.table_id;
                 if table.read().await.index.is_empty() {
@@ -70,7 +71,7 @@ impl BackgroundJob {
                 }
 
                 let table_bloom_filter = &mut table.read().await.bloom_filter.to_owned();
-                let table_biggest_key = table.read().await.find_biggest_key();
+                let table_biggest_key = table.read().await.find_biggest_key()?;
 
                 let hotness = 1;
                 let sstable_path = flush_data
@@ -88,36 +89,44 @@ impl BackgroundJob {
                         .get_hotness()
                         .cmp(&a.get_sstable_path().get_hotness())
                 });
+                flush_data
+                    .biggest_key_index
+                    .set(data_file_path, table_biggest_key);
+                let mut should_compact = false;
 
-                match table_biggest_key {
-                    Ok(biggest_key) => {
-                        flush_data
-                            .biggest_key_index
-                            .set(data_file_path, biggest_key);
-                        // Remove flushed memtable
-                        return Ok(BackgroundResponse::FlushSuccessResponse {
-                            table_id: table_id.to_vec(),
-                            updated_bucket_map: flush_data.bucket_map.to_owned(),
-                            updated_bloom_filters: flush_data.bloom_filters.to_owned(),
-                            updated_biggest_key_index: flush_data.biggest_key_index.to_owned(),
-                        });
-                    }
-                    Err(err) => {
-                        println!(
-                            "Insert succeeded but biggest key index was not set successfully {}",
-                            err.to_string()
-                        );
-                        return Ok(BackgroundResponse::FlushSuccessResponse {
-                            table_id: table_id.to_vec(),
-                            updated_bucket_map: flush_data.bucket_map.to_owned(),
-                            updated_bloom_filters: flush_data.bloom_filters.to_owned(),
-                            updated_biggest_key_index: flush_data.biggest_key_index.to_owned(),
-                        });
+                // check for compaction conditions before returning
+                for (level, (_, bucket)) in flush_data.bucket_map.clone().buckets.iter().enumerate()
+                {
+                    if bucket.should_trigger_compaction(level) {
+                        should_compact = true;
+                        break;
                     }
                 }
 
-                // Self::GarbageCollection => todo!(),
-                // Self::Compaction => todo!(),
+                if should_compact {
+                    let mut compactor = Compactor::new(flush_data.use_ttl, flush_data.entry_ttl);
+                    // compaction will continue to until all the table is balanced
+                    compactor
+                        .run_compaction(
+                            &mut flush_data.bucket_map,
+                            &mut flush_data.bloom_filters,
+                            &mut flush_data.biggest_key_index,
+                        )
+                        .await?;
+                    return Ok(BackgroundResponse::FlushSuccessResponse {
+                        table_id: table_id.to_vec(),
+                        updated_bucket_map: flush_data.bucket_map.to_owned(),
+                        updated_bloom_filters: flush_data.bloom_filters.to_owned(),
+                        updated_biggest_key_index: flush_data.biggest_key_index.to_owned(),
+                    });
+                }
+
+                return Ok(BackgroundResponse::FlushSuccessResponse {
+                    table_id: table_id.to_vec(),
+                    updated_bucket_map: flush_data.bucket_map.to_owned(),
+                    updated_bloom_filters: flush_data.bloom_filters.to_owned(),
+                    updated_biggest_key_index: flush_data.biggest_key_index.to_owned(),
+                });
             }
         }
     }

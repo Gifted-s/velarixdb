@@ -2,11 +2,11 @@ use crate::{
     background::{BackgroundJob, BackgroundResponse, FlushData},
     bloom_filter::BloomFilter,
     cfg::Config,
-    compaction::{Bucket, BucketMap, Compactor},
+    compaction::{Bucket, BucketID, BucketMap, Compactor},
     consts::{
-        BUCKETS_DIRECTORY_NAME, CHANNEL_BUFFER_SIZE, HEAD_ENTRY_KEY, HEAD_ENTRY_LENGTH,
-        META_DIRECTORY_NAME, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, TAIL_ENTRY_KEY,
-        TOMB_STONE_MARKER, VALUE_LOG_DIRECTORY_NAME, WRITE_BUFFER_SIZE,
+        BUCKETS_DIRECTORY_NAME, CHANNEL_BUFFER_SIZE, HEAD_ENTRY_KEY, META_DIRECTORY_NAME,
+        SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, TAIL_ENTRY_KEY, TOMB_STONE_MARKER,
+        VALUE_LOG_DIRECTORY_NAME, WRITE_BUFFER_SIZE,
     },
     err::StorageEngineError,
     key_offseter::TableBiggestKeys,
@@ -17,11 +17,14 @@ use crate::{
     value_log::ValueLog,
 };
 use chrono::Utc;
-use futures::io::Empty;
-use log::{error, info};
-use tokio::sync::{
-    mpsc::{self, error::TryRecvError, Receiver, Sender},
-    RwLock,
+use indexmap::IndexMap;
+use log::error;
+use tokio::{
+    sync::{
+        mpsc::{self, error::TryRecvError, Receiver, Sender},
+        RwLock,
+    },
+    task,
 };
 
 use crate::err::StorageEngineError::*;
@@ -40,8 +43,22 @@ pub struct StorageEngine<K: Hash + PartialOrd + std::cmp::Ord> {
     pub meta: Meta,
     pub config: Config,
     pub read_only_memtables: HashMap<K, Arc<RwLock<InMemoryTable<K>>>>,
-    pub background_channel_rcv: Receiver<Result<BackgroundResponse, StorageEngineError>>,
-    pub background_channel_snd: Arc<RwLock<Sender<Result<BackgroundResponse, StorageEngineError>>>>,
+    pub background_channel_rcv: ChanRecv,
+    pub compaction_channel_rcv: ChanRecv,
+    pub background_chan_sender: ChanSender,
+    pub compaction_chan_sender: ChanSender,
+}
+
+#[derive(Debug, Clone)]
+pub enum ChanSender {
+    FlushSender(Arc<RwLock<Sender<Result<BackgroundResponse, StorageEngineError>>>>),
+    TombStoneCompactionNoticeSender(Sender<BucketMap>),
+}
+
+#[derive(Debug)]
+pub enum ChanRecv {
+    FlushRecv(Receiver<Result<BackgroundResponse, StorageEngineError>>),
+    TombStoneCompactionNoticeRcv(Arc<RwLock<Receiver<BucketMap>>>),
 }
 
 #[derive(Clone, Debug)]
@@ -65,13 +82,21 @@ impl StorageEngine<Vec<u8>> {
         let dir = DirPath::build(dir);
         let default_config = Config::default();
 
-        StorageEngine::with_default_capacity_and_config(
+        let store = StorageEngine::with_default_capacity_and_config(
             dir.clone(),
             SizeUnit::Bytes,
             WRITE_BUFFER_SIZE,
             &default_config,
         )
-        .await
+        .await?;
+
+        // Start background job to check for tombstone compaction condition at regular intervals
+        if let ChanRecv::TombStoneCompactionNoticeRcv(rcx) = &store.compaction_channel_rcv {
+            store
+                .compactor
+                .tombstone_compaction_condition_background_checker(Arc::clone(rcx));
+        }
+        return Ok(store);
     }
 
     pub async fn new_with_custom_config(
@@ -134,19 +159,24 @@ impl StorageEngine<Vec<u8>> {
 
             if self.read_only_memtables.len() >= self.config.max_buffer_write_number {
                 let (table_id, table_to_flush) = self.read_only_memtables.iter().next().unwrap();
-                let mut flush_job = BackgroundJob::Flush(FlushData::new(
+                let mut flush_job = BackgroundJob::Flusher(FlushData::new(
                     Arc::clone(table_to_flush),
                     table_id.to_owned(),
                     self.buckets.to_owned(),
                     self.bloom_filters.to_owned(),
                     self.biggest_key_index.to_owned(),
+                    self.compactor.use_ttl.to_owned(),
+                    self.compactor.entry_ttl.to_owned(),
                 ));
-                let sender_clone = Arc::clone(&self.background_channel_snd);
+                let flush_sender_clone: ChanSender = self.background_chan_sender.clone();
+
                 // Trigger flush in background
-                tokio::spawn(async move {
+                task::spawn(async move {
                     let job_res = flush_job.run().await;
-                    if let Err(err) = sender_clone.write().await.send(job_res).await {
-                        println!("Send to channel error {:?}", err);
+                    if let ChanSender::FlushSender(sender) = flush_sender_clone {
+                        if let Err(err) = sender.write().await.send(job_res).await {
+                            println!("Send to channel error {:?}", err);
+                        }
                     }
                 });
             }
@@ -165,6 +195,7 @@ impl StorageEngine<Vec<u8>> {
         );
 
         self.active_memtable.insert(&entry)?;
+
         Ok(true)
     }
 
@@ -287,33 +318,47 @@ impl StorageEngine<Vec<u8>> {
     pub async fn check_queued_updates(&mut self) {
         // Try getting response from previous flush operations
         for _ in 0..CHANNEL_BUFFER_SIZE {
-            let response = self.background_channel_rcv.try_recv();
-            match response {
-                Ok(channel_response) => match channel_response {
-                    Ok(response_variants) => match response_variants {
-                        BackgroundResponse::FlushSuccessResponse {
-                            table_id,
-                            updated_bucket_map,
-                            updated_bloom_filters,
-                            updated_biggest_key_index,
-                        } => {
-                            self.bloom_filters = updated_bloom_filters;
-                            self.buckets = updated_bucket_map;
-                            self.biggest_key_index = updated_biggest_key_index;
-                            self.read_only_memtables.remove(&table_id);
+            match &mut self.background_channel_rcv {
+                ChanRecv::FlushRecv(response) => match response.try_recv() {
+                    Ok(channel_response) => match channel_response {
+                        Ok(response_variants) => match response_variants {
+                            BackgroundResponse::FlushSuccessResponse {
+                                table_id,
+                                updated_bucket_map,
+                                updated_bloom_filters,
+                                updated_biggest_key_index,
+                            } => {
+                                self.bloom_filters = updated_bloom_filters;
+                                self.buckets = updated_bucket_map.to_owned();
+                                self.biggest_key_index = updated_biggest_key_index;
+                                self.read_only_memtables.remove(&table_id);
+
+                                if let ChanRecv::TombStoneCompactionNoticeRcv(rcv) =
+                                    &self.compaction_channel_rcv
+                                {
+                                    // Remove previous data stored since this we don't want obsolete data in the channel but the latest
+                                    let _ = rcv.write().await.try_recv();
+                                    if let ChanSender::TombStoneCompactionNoticeSender(sdx) =
+                                        &self.compaction_chan_sender
+                                    {
+                                        let _ = sdx.send(updated_bucket_map).await;
+                                    }
+                                }
+                            }
+                        },
+                        Err(err) => println!("Receiever error {:?}", err),
+                    },
+                    Err(err) => match err {
+                        TryRecvError::Empty => {
+                            break;
+                        }
+                        TryRecvError::Disconnected => {
+                            println!("Sender disconnected {:?}", err);
+                            break;
                         }
                     },
-                    Err(err) => println!("Receiever error {:?}", err),
                 },
-                Err(err) => match err {
-                    TryRecvError::Empty => {
-                        break;
-                    }
-                    TryRecvError::Disconnected => {
-                        println!("Sender disconnected {:?}", err);
-                        break;
-                    }
-                },
+                ChanRecv::TombStoneCompactionNoticeRcv(_) => todo!(),
             }
         }
     }
@@ -360,19 +405,23 @@ impl StorageEngine<Vec<u8>> {
 
             if self.read_only_memtables.len() >= self.config.max_buffer_write_number {
                 let (table_id, table_to_flush) = self.read_only_memtables.iter().next().unwrap();
-                let mut flush_job = BackgroundJob::Flush(FlushData::new(
+                let mut flush_job = BackgroundJob::Flusher(FlushData::new(
                     Arc::clone(table_to_flush),
                     table_id.to_owned(),
                     self.buckets.to_owned(),
                     self.bloom_filters.to_owned(),
                     self.biggest_key_index.to_owned(),
+                    self.compactor.use_ttl.to_owned(),
+                    self.compactor.entry_ttl.to_owned(),
                 ));
-                let sender_clone = Arc::clone(&self.background_channel_snd);
+                let sender_clone: ChanSender = self.background_chan_sender.clone();
                 // Trigger flush in background
                 tokio::spawn(async move {
-                    let job_res = flush_job.run().await;
-                    if let Err(err) = sender_clone.write().await.send(job_res).await {
-                        println!("Send to channel error {:?}", err);
+                    let res = flush_job.run().await;
+                    if let ChanSender::FlushSender(sender) = sender_clone {
+                        if let Err(err) = sender.write().await.send(res).await {
+                            println!("Send to channel error {:?}", err);
+                        }
                     }
                 });
 
@@ -465,25 +514,32 @@ impl StorageEngine<Vec<u8>> {
             // insert tail and head to memtable
             active_memtable.insert(&tail_entry.to_owned())?;
             active_memtable.insert(&head_entry.to_owned())?;
+            let buckets = BucketMap::new(buckets_path);
             let (sender, receiver) = mpsc::channel(CHANNEL_BUFFER_SIZE);
+            let (comp_sender, comp_rec) = mpsc::channel(CHANNEL_BUFFER_SIZE);
+
             let read_only_memtables = HashMap::new();
             return Ok(Self {
                 active_memtable,
                 val_log: vlog,
                 bloom_filters: Vec::new(),
-                buckets: BucketMap::new(buckets_path),
+                buckets: buckets.clone(),
                 dir,
                 biggest_key_index: biggest_key_index,
                 compactor: Compactor::new(config.enable_ttl, config.entry_ttl_millis),
                 config: config.clone(),
                 meta,
                 read_only_memtables,
-                background_channel_rcv: receiver,
-                background_channel_snd: Arc::new(RwLock::new(sender)),
+                background_channel_rcv: ChanRecv::FlushRecv(receiver),
+                background_chan_sender: ChanSender::FlushSender(Arc::new(RwLock::new(sender))),
+                compaction_chan_sender: ChanSender::TombStoneCompactionNoticeSender(comp_sender),
+                compaction_channel_rcv: ChanRecv::TombStoneCompactionNoticeRcv(Arc::new(
+                    RwLock::new(comp_rec),
+                )),
             });
         }
 
-        let mut recovered_buckets: HashMap<uuid::Uuid, Bucket> = HashMap::new();
+        let mut recovered_buckets: IndexMap<BucketID, Bucket> = IndexMap::new();
         let mut bloom_filters: Vec<BloomFilter> = Vec::new();
         let mut most_recent_head_timestamp = 0;
         let mut most_recent_head_offset = 0;
@@ -631,6 +687,7 @@ impl StorageEngine<Vec<u8>> {
         )
         .await;
         let (sender, receiver) = mpsc::channel(CHANNEL_BUFFER_SIZE);
+        let (comp_sender, comp_rec) = mpsc::channel(CHANNEL_BUFFER_SIZE);
         match recover_result {
             Ok((active_memtable, read_only_memtables)) => Ok(Self {
                 active_memtable,
@@ -643,8 +700,12 @@ impl StorageEngine<Vec<u8>> {
                 compactor: Compactor::new(config.enable_ttl, config.entry_ttl_millis),
                 config: config.clone(),
                 read_only_memtables,
-                background_channel_rcv: receiver,
-                background_channel_snd: Arc::new(RwLock::new(sender)),
+                background_channel_rcv: ChanRecv::FlushRecv(receiver),
+                background_chan_sender: ChanSender::FlushSender(Arc::new(RwLock::new(sender))),
+                compaction_chan_sender: ChanSender::TombStoneCompactionNoticeSender(comp_sender),
+                compaction_channel_rcv: ChanRecv::TombStoneCompactionNoticeRcv(Arc::new(
+                    RwLock::new(comp_rec),
+                )),
             }),
             Err(err) => Err(MemTableRecoveryError(Box::new(err))),
         }
@@ -711,7 +772,7 @@ impl StorageEngine<Vec<u8>> {
         Ok((active_memtable, read_only_memtables))
     }
     // Flush all memtables
-    async fn flush_all_memtables(&mut self) -> Result<(), StorageEngineError> {
+    pub async fn flush_all_memtables(&mut self) -> Result<(), StorageEngineError> {
         // Flush active memtable
         let hotness = 1;
         self.flush_memtable(
@@ -845,7 +906,7 @@ mod tests {
         let path = PathBuf::new().join("bump1");
         let s_engine = StorageEngine::new(path.clone()).await.unwrap();
         // Specify the number of random strings to generate
-        let num_strings = 50000;
+        let num_strings = 100000;
 
         // Specify the length of each random string
         let string_length = 10;
@@ -879,30 +940,13 @@ mod tests {
         for task in tasks {
             tokio::select! {
                     result = task => {
-                        match result{Ok(v_opt)=>{}
+                        match result{Ok(_)=>{}
                             Err(_) => todo!(), }
                 }
             }
         }
 
         let s_engine = Arc::clone(&sg);
-        let compaction_opt = s_engine.write().await.run_compaction().await;
-        match compaction_opt {
-            Ok(_) => {
-                println!("Compaction is successful");
-                println!(
-                    "Length of bucket after compaction {:?}",
-                    s_engine.read().await.buckets.buckets.len()
-                );
-                println!(
-                    "Length of bloom filters after compaction {:?}",
-                    s_engine.read().await.bloom_filters.len()
-                );
-            }
-            Err(err) => {
-                println!("Error during compaction {}", err)
-            }
-        }
 
         random_strings.sort();
         println!("About to start reading");
@@ -930,7 +974,7 @@ mod tests {
             }
         }
 
-        let _ = fs::remove_dir_all(path.clone()).await;
+        //let _ = fs::remove_dir_all(path.clone()).await;
     }
 
     #[tokio::test]
