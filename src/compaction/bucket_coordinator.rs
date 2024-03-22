@@ -3,13 +3,14 @@ use crate::consts::{
     DEFAULT_TARGET_FILE_SIZE_MULTIPLIER, MAX_TRESHOLD, MIN_SSTABLE_SIZE, MIN_TRESHOLD,
 };
 use crate::err::StorageEngineError;
+
 use crate::sstable::{SSTable, SSTablePath};
 use chrono::Utc;
 use crossbeam_skiplist::SkipMap;
+
 use indexmap::IndexMap;
 use log::{error, info};
 use std::{path::PathBuf, sync::Arc};
-
 use tokio::fs;
 use uuid::Uuid;
 
@@ -84,9 +85,9 @@ impl Bucket {
     async fn calculate_buckets_avg_size(
         sstables: &Vec<SSTablePath>,
     ) -> Result<usize, StorageEngineError> {
-        for ss in sstables{
-            println!("PATH {:?}",ss.data_file_path.clone());
-        }
+        // for ss in sstables {
+        //     println!("PATH {:?}", ss.data_file_path.clone());
+        // }
         let mut all_sstable_size = 0;
         let fetch_files_meta = sstables
             .iter()
@@ -137,6 +138,7 @@ impl BucketMap {
     pub fn set_buckets(&mut self, buckets: IndexMap<BucketID, Bucket>) {
         self.buckets = buckets
     }
+
     pub async fn insert_to_appropriate_bucket<T: IndexWithSizeInBytes>(
         &mut self,
         table: &T,
@@ -144,8 +146,21 @@ impl BucketMap {
     ) -> Result<SSTablePath, StorageEngineError> {
         let added_to_bucket = false;
         let created_at = Utc::now();
+        println!("LENGTH {}", self.buckets.len());
         for (_, bucket) in &mut self.buckets {
             // if (bucket low * bucket avg) is less than sstable size
+            println!(
+                "Condition1 met {}",
+                bucket.avarage_size as f64 * BUCKET_LOW < table.size() as f64
+            );
+            println!(
+                "Condition2 met {}",
+                table.size() < (bucket.avarage_size as f64 * BUCKET_HIGH) as usize
+            );
+            println!(
+                "Condition3 met {}",
+                table.size() < MIN_SSTABLE_SIZE && bucket.avarage_size < MIN_SSTABLE_SIZE
+            );
             if (bucket.avarage_size as f64 * BUCKET_LOW  < table.size() as f64)
                     // and sstable size is less than (bucket avg * bucket high)
                     && (table.size() < (bucket.avarage_size as f64 * BUCKET_HIGH) as usize)

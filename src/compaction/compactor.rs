@@ -82,7 +82,6 @@ impl Compactor {
         // TODO: Handle this with multiple threads while keeping track of number of Disk IO used
         // so we don't run out of Disk IO during large compactions
         loop {
-            
             // Step 1: Extract buckets to compact
             let buckets_to_compact_and_sstables_to_remove =
                 buckets.extract_buckets_to_compact().await?;

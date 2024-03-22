@@ -1,4 +1,4 @@
-pub mod background;
+pub mod flusher;
 pub mod block;
 pub mod bloom_filter;
 pub mod cfg;
