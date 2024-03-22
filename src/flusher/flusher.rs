@@ -106,12 +106,12 @@ impl Flusher {
             .set(data_file_path, table_biggest_key);
         let mut should_compact = false;
         // check for compaction conditions before returning
-        for (level, (_, bucket)) in flush_data.bucket_map.clone().buckets.iter().enumerate() {
-            if bucket.should_trigger_compaction(level) {
-                should_compact = true;
-                break;
-            }
-        }
+        // for (level, (_, bucket)) in flush_data.bucket_map.clone().buckets.iter().enumerate() {
+        //     if bucket.should_trigger_compaction(level) {
+        //         should_compact = true;
+        //         break;
+        //     }
+        // }
 
         if should_compact {
             let mut compactor = Compactor::new(flush_data.use_ttl, flush_data.entry_ttl);

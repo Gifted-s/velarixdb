@@ -146,21 +146,8 @@ impl BucketMap {
     ) -> Result<SSTablePath, StorageEngineError> {
         let added_to_bucket = false;
         let created_at = Utc::now();
-        println!("LENGTH {}", self.buckets.len());
         for (_, bucket) in &mut self.buckets {
             // if (bucket low * bucket avg) is less than sstable size
-            println!(
-                "Condition1 met {}",
-                bucket.avarage_size as f64 * BUCKET_LOW < table.size() as f64
-            );
-            println!(
-                "Condition2 met {}",
-                table.size() < (bucket.avarage_size as f64 * BUCKET_HIGH) as usize
-            );
-            println!(
-                "Condition3 met {}",
-                table.size() < MIN_SSTABLE_SIZE && bucket.avarage_size < MIN_SSTABLE_SIZE
-            );
             if (bucket.avarage_size as f64 * BUCKET_LOW  < table.size() as f64)
                     // and sstable size is less than (bucket avg * bucket high)
                     && (table.size() < (bucket.avarage_size as f64 * BUCKET_HIGH) as usize)
