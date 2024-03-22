@@ -28,7 +28,7 @@ pub const TOMB_STONE_MARKER: usize = 0;
 // This prevents continuous re-compactions of the same file.
 pub const TOMBSTONE_COMPACTION_INTERVAL_MILLI: u64 = 10 * 86400000;
 
-pub const CHANNEL_BUFFER_SIZE: usize = 20;
+pub const CHANNEL_BUFFER_SIZE: usize = 1;
 
 // tombstone should only be removed after 120 days to guarantee that obsolete data don't
 // resurrect by prematurelly deleting tombstone
