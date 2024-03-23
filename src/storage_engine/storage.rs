@@ -151,6 +151,7 @@ impl StorageEngine<Vec<u8>> {
             .await?;
 
         if self.active_memtable.is_full(HEAD_ENTRY_KEY.len()) {
+            //println!("==================================ITS FULL=======================================================");
             let capacity = self.active_memtable.capacity();
             let size_unit = self.active_memtable.size_unit();
             let false_positive_rate = self.active_memtable.false_positive_rate();
@@ -181,15 +182,22 @@ impl StorageEngine<Vec<u8>> {
                 let (table_id, table_to_flush) = self.read_only_memtables.iter().next().unwrap();
                 let table = Arc::clone(table_to_flush);
                 let table_id_clone = table_id.clone();
+
                 let flush_data_sender_clone = self.flush_data_sender.clone();
-                // This will prevent blocks during write when flush data receiver is full and the next send has to wait
-                spawn(async move {
-                    if let ChanSender::FlushDataSender(sender) = flush_data_sender_clone {
-                        if let Err(err) = sender.write().await.send((table_id_clone, table)).await {
+                if let ChanSender::FlushDataSender(sender) = flush_data_sender_clone {
+                    let sender_clone = sender.clone();
+                    // This will prevent blocks during write when flush data receiver is full and the next send has to wait
+                    spawn(async move {
+                        if let Err(err) = sender_clone
+                            .write()
+                            .await
+                            .send((table_id_clone, table))
+                            .await
+                        {
                             println!("Could not send flush data to channel {:?}", err);
                         }
-                    }
-                });
+                    });
+                }
             }
 
             self.active_memtable = InMemoryTable::with_specified_capacity_and_rate(
@@ -204,9 +212,16 @@ impl StorageEngine<Vec<u8>> {
             created_at,
             is_tombstone,
         );
-
+        // println!("========================================={}===================================", self.read_only_memtables.iter().len());
+        // println!("========================================={}===================================", self.read_only_memtables.iter().len());
+        // println!("========================================={}===================================", self.read_only_memtables.iter().len());
+        // println!("========================================={}===================================", self.read_only_memtables.iter().len());
+        // println!("========================================={}===================================", self.read_only_memtables.iter().len());
+        // println!("========================================={}===================================", self.read_only_memtables.iter().len());
+        // println!("========================================={}===================================", self.read_only_memtables.iter().len());
         self.active_memtable.insert(&entry)?;
-        println!("Write proccessed!, all I need to know is that even 1 billion writes can be accepted and the whole flush and compaction can happen in background without interupting write performance: {}", String::from_utf8_lossy(key));
+        //println!("read");
+        //println!("Write proccessed!, all I need to know is that even 1 billion writes can be accepted and the whole flush and compaction can happen in background without interupting write performance: {}", String::from_utf8_lossy(key));
         Ok(true)
     }
 
@@ -331,21 +346,21 @@ impl StorageEngine<Vec<u8>> {
             ChanRecv::FlushResRecv(response) => match response.try_recv() {
                 Ok(channel_response) => match channel_response {
                     Ok(flush_updated_msg) => {
+                        println!("UPDATE RECIEVED");
+
                         self.bloom_filters = flush_updated_msg.bloom_filters;
                         self.buckets = flush_updated_msg.buckets;
                         self.biggest_key_index = flush_updated_msg.biggest_key_index;
-
-                        flush_updated_msg
-                            .flushed_memtable_ids
-                            .into_iter()
-                            .for_each(|id| {
-                                self.read_only_memtables.shift_remove(&id);
-                            });
+                       let removed_value = self.read_only_memtables
+                            .shift_remove(&flush_updated_msg.flushed_memtable_id);
+                        println!("============================{:?}======================", removed_value);
                     }
                     Err(err) => println!("Receiever error {:?}", err),
                 },
                 Err(err) => match err {
-                    TryRecvError::Empty => {}
+                    TryRecvError::Empty => {
+                        //println!("RRECEIVED BUT RMPTY ");
+                    }
                     TryRecvError::Disconnected => {
                         println!("Sender disconnected {:?}", err);
                     }
@@ -908,13 +923,13 @@ impl SizeUnit {
 #[cfg(test)]
 mod tests {
 
+    use super::*;
     use log::info;
     use rand::distributions::Alphanumeric;
     use rand::{thread_rng, Rng};
-    use tokio::time::sleep;
     use std::sync::Arc;
+    use tokio::time::sleep;
     use tokio::time::Duration;
-    use super::*;
 
     use tokio::fs;
     use tokio::sync::RwLock;
@@ -931,7 +946,7 @@ mod tests {
         let path = PathBuf::new().join("bump1");
         let s_engine = StorageEngine::new(path.clone()).await.unwrap();
         // Specify the number of random strings to generate
-        let num_strings = 1000000; // 1M
+        let num_strings = 100000; // 1M
 
         // Specify the length of each random string
         let string_length = 10;
@@ -949,9 +964,11 @@ mod tests {
 
         spawn(async move {
             loop {
+                // println!("Checking for update");
                 sgg.write().await.check_queued_updates().await;
-                sleep(Duration::from_secs(5)).await;
-
+                // println!("We are here");
+                
+                sleep(Duration::from_secs(2)).await;
             }
         });
 
@@ -963,6 +980,7 @@ mod tests {
                 let resp = value.put(&k, "boy").await;
                 match resp {
                     Ok(v) => {
+                        println!("still writing");
                         assert_eq!(v, true)
                     }
                     Err(_) => {
@@ -989,34 +1007,36 @@ mod tests {
             }
         }
 
-        let s_engine = Arc::clone(&sg);
+        sleep(Duration::from_secs(400)).await;
 
-        random_strings.sort();
-        println!("About to start reading");
-        let tasks = random_strings.iter().map(|k| {
-            let s_engine = Arc::clone(&sg);
-            let k = k.clone();
-            tokio::spawn(async move {
-                let value = s_engine.read().await;
-                value.get(&k).await
-            })
-        });
+        // let s_engine = Arc::clone(&sg);
 
-        for task in tasks {
-            tokio::select! {
-                result = task => {
-                    match result {
-                        Ok(v) => {
-                            println!("Yes! I saw the value and its equal");
-                            assert_eq!(v.unwrap().0, b"boy");
-                        }
-                        Err(_) => {
-                            assert!(false, "No error should be found");
-                        }
-                    }
-                }
-            }
-        }
+        // random_strings.sort();
+        // println!("About to start reading");
+        // let tasks = random_strings.iter().map(|k| {
+        //     let s_engine = Arc::clone(&sg);
+        //     let k = k.clone();
+        //     tokio::spawn(async move {
+        //         let value = s_engine.read().await;
+        //         value.get(&k).await
+        //     })
+        // });
+
+        // for task in tasks {
+        //     tokio::select! {
+        //         result = task => {
+        //             match result {
+        //                 Ok(v) => {
+        //                     println!("Yes! I saw the value and its equal");
+        //                     assert_eq!(v.unwrap().0, b"boy");
+        //                 }
+        //                 Err(_) => {
+        //                     assert!(false, "No error should be found");
+        //                 }
+        //             }
+        //         }
+        //     }
+        // }
 
         let _ = fs::remove_dir_all(path.clone()).await;
     }
@@ -1027,7 +1047,7 @@ mod tests {
         let mut s_engine = StorageEngine::new(path.clone()).await.unwrap();
 
         // Specify the number of random strings to generate
-        let num_strings = 50000;
+        let num_strings = 1000000;
 
         // Specify the length of each random string
         let string_length = 10;

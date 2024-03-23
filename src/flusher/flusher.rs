@@ -6,8 +6,9 @@ use crate::{
     key_offseter::TableBiggestKeys,
     memtable::InMemoryTable,
 };
-
 use std::sync::Arc;
+use tokio::time::sleep;
+use tokio::time::Duration;
 
 pub type InActiveMemtableID = Vec<u8>;
 pub type InActiveMemtable = Arc<RwLock<InMemoryTable<Vec<u8>>>>;
@@ -20,7 +21,7 @@ use tokio::sync::RwLock;
 
 #[derive(Debug)]
 pub struct FlushUpdateMsg {
-    pub flushed_memtable_ids: Vec<InActiveMemtableID>,
+    pub flushed_memtable_id: InActiveMemtableID,
     pub buckets: BucketMap,
     pub bloom_filters: Vec<BloomFilter>,
     pub biggest_key_index: TableBiggestKeys,
@@ -105,7 +106,7 @@ impl Flusher {
             .biggest_key_index
             .set(data_file_path, table_biggest_key);
         let mut should_compact = false;
-        // check for compaction conditions before returning
+        //check for compaction conditions before returning
         // for (level, (_, bucket)) in flush_data.bucket_map.clone().buckets.iter().enumerate() {
         //     if bucket.should_trigger_compaction(level) {
         //         should_compact = true;
@@ -113,23 +114,23 @@ impl Flusher {
         //     }
         // }
 
-        if should_compact {
-            let mut compactor = Compactor::new(flush_data.use_ttl, flush_data.entry_ttl);
-            // compaction will continue to until all the table is balanced
-            compactor
-                .run_compaction(
-                    &mut flush_data.bucket_map,
-                    &mut flush_data.bloom_filters,
-                    &mut flush_data.biggest_key_index,
-                )
-                .await?;
-            return Ok(FlushResponse::Success {
-                table_id: table_id.to_vec(),
-                updated_bucket_map: flush_data.bucket_map.to_owned(),
-                updated_bloom_filters: flush_data.bloom_filters.to_owned(),
-                updated_biggest_key_index: flush_data.biggest_key_index.to_owned(),
-            });
-        }
+        // if should_compact {
+        //     let mut compactor = Compactor::new(flush_data.use_ttl, flush_data.entry_ttl);
+        //     // compaction will continue to until all the table is balanced
+        //     compactor
+        //         .run_compaction(
+        //             &mut flush_data.bucket_map,
+        //             &mut flush_data.bloom_filters,
+        //             &mut flush_data.biggest_key_index,
+        //         )
+        //         .await?;
+        //     return Ok(FlushResponse::Success {
+        //         table_id: table_id.to_vec(),
+        //         updated_bucket_map: flush_data.bucket_map.to_owned(),
+        //         updated_bloom_filters: flush_data.bloom_filters.to_owned(),
+        //         updated_biggest_key_index: flush_data.biggest_key_index.to_owned(),
+        //     });
+        // }
 
         return Ok(FlushResponse::Success {
             table_id: table_id.to_vec(),
@@ -155,55 +156,49 @@ impl Flusher {
             let mut current_buckets = buckets;
             let mut current_bloom_filters = bloom_filters;
             let mut current_biggest_key_index = biggest_key_index;
-            let mut flushed_memtable_ids: Vec<InActiveMemtableID> = Vec::new();
-            loop {
-                match rcx_clone.write().await.try_recv() {
-                    Ok((table_id, table_to_flush)) => {
-                        let mut flusher = Flusher::new(
-                            table_to_flush,
+
+            while let Some((table_id, table_to_flush)) = rcx_clone.write().await.recv().await {
+                println!("Flushing started");
+                let mut flusher = Flusher::new(
+                    table_to_flush,
+                    table_id,
+                    current_buckets.clone(),
+                    current_bloom_filters.clone(),
+                    current_biggest_key_index.clone(),
+                    config.enable_ttl,
+                    config.entry_ttl_millis,
+                );
+
+                match flusher.flush().await {
+                    Ok(flush_res) => match flush_res {
+                        FlushResponse::Success {
                             table_id,
-                            current_buckets.to_owned(),
-                            current_bloom_filters.to_owned(),
-                            current_biggest_key_index.to_owned(),
-                            config.enable_ttl,
-                            config.entry_ttl_millis,
-                        );
-                        let response = flusher.flush().await;
-
-                        match response {
-                            Ok(flush_res) => match flush_res {
-                                FlushResponse::Success {
-                                    table_id,
-                                    updated_bucket_map,
-                                    updated_bloom_filters,
-                                    updated_biggest_key_index,
-                                } => {
-                                    flushed_memtable_ids.push(table_id);
-                                    current_bloom_filters = updated_bloom_filters.to_owned();
-                                    current_buckets = updated_bucket_map.to_owned();
-                                    current_biggest_key_index =
-                                        updated_biggest_key_index.to_owned();
-                                }
-
-                                //TODO: Handle failure case
-                                FlushResponse::Failed { reason } => todo!(),
-                            },
-                            Err(err) => {
-                                println!("Flush Err : {}", err)
-                            }
-                        }
-                    }
-                    Err(err) => match err {
-                        tokio::sync::mpsc::error::TryRecvError::Empty => {
+                            updated_bucket_map,
+                            updated_bloom_filters,
+                            updated_biggest_key_index,
+                        } => {
+                            current_buckets = updated_bucket_map;
+                            current_bloom_filters = updated_bloom_filters;
+                            current_biggest_key_index = updated_biggest_key_index;
+                            println!("sent update message");
                             let _ = sdx_clone.write().await.send(Ok(FlushUpdateMsg {
-                                flushed_memtable_ids: flushed_memtable_ids.to_owned(),
+                                flushed_memtable_id: table_id,
                                 buckets: current_buckets.to_owned(),
                                 bloom_filters: current_bloom_filters.to_owned(),
                                 biggest_key_index: current_biggest_key_index.to_owned(),
                             }));
+                            // Sleep for 200 seconds
+                            //sleep(Duration::from_secs(10)).await;
                         }
-                        tokio::sync::mpsc::error::TryRecvError::Disconnected => todo!(),
+                        FlushResponse::Failed { reason } => {
+                            println!("Flush failed: {}", reason);
+                            // Handle failure case here
+                        }
                     },
+                    Err(err) => {
+                        println!("Flush error: {}", err);
+                        // Handle error here
+                    }
                 }
             }
         });
