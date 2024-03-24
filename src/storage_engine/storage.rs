@@ -212,16 +212,17 @@ impl StorageEngine<Vec<u8>> {
             created_at,
             is_tombstone,
         );
-        // println!("========================================={}===================================", self.read_only_memtables.iter().len());
-        // println!("========================================={}===================================", self.read_only_memtables.iter().len());
-        // println!("========================================={}===================================", self.read_only_memtables.iter().len());
-        // println!("========================================={}===================================", self.read_only_memtables.iter().len());
-        // println!("========================================={}===================================", self.read_only_memtables.iter().len());
-        // println!("========================================={}===================================", self.read_only_memtables.iter().len());
-        // println!("========================================={}===================================", self.read_only_memtables.iter().len());
+
         self.active_memtable.insert(&entry)?;
         //println!("read");
-        //println!("Write proccessed!, all I need to know is that even 1 billion writes can be accepted and the whole flush and compaction can happen in background without interupting write performance: {}", String::from_utf8_lossy(key));
+        println!("===========================================LENGTH OF TABLES {}====================================================", self.read_only_memtables.iter().len());
+        println!("===========================================LENGTH OF TABLES {}====================================================", self.read_only_memtables.iter().len());
+        println!("===========================================LENGTH OF TABLES {}====================================================", self.read_only_memtables.iter().len());
+        println!("===========================================LENGTH OF TABLES {}====================================================", self.read_only_memtables.iter().len());
+        println!("===========================================LENGTH OF TABLES {}====================================================", self.read_only_memtables.iter().len());
+        println!("===========================================LENGTH OF TABLES {}====================================================", self.read_only_memtables.iter().len());
+        println!("===========================================LENGTH OF TABLES {}====================================================", self.read_only_memtables.iter().len());
+        println!("Write proccessed!, all I need to know is that even 1 billion writes can be accepted and the whole flush and compaction can happen in background without interupting write performance: {}", String::from_utf8_lossy(key));
         Ok(true)
     }
 
@@ -346,14 +347,11 @@ impl StorageEngine<Vec<u8>> {
             ChanRecv::FlushResRecv(response) => match response.try_recv() {
                 Ok(channel_response) => match channel_response {
                     Ok(flush_updated_msg) => {
-                        println!("UPDATE RECIEVED");
-
                         self.bloom_filters = flush_updated_msg.bloom_filters;
                         self.buckets = flush_updated_msg.buckets;
                         self.biggest_key_index = flush_updated_msg.biggest_key_index;
-                       let removed_value = self.read_only_memtables
+                        self.read_only_memtables
                             .shift_remove(&flush_updated_msg.flushed_memtable_id);
-                        println!("============================{:?}======================", removed_value);
                     }
                     Err(err) => println!("Receiever error {:?}", err),
                 },
@@ -967,7 +965,7 @@ mod tests {
                 // println!("Checking for update");
                 sgg.write().await.check_queued_updates().await;
                 // println!("We are here");
-                
+
                 sleep(Duration::from_secs(2)).await;
             }
         });
@@ -980,7 +978,6 @@ mod tests {
                 let resp = value.put(&k, "boy").await;
                 match resp {
                     Ok(v) => {
-                        println!("still writing");
                         assert_eq!(v, true)
                     }
                     Err(_) => {
@@ -1007,7 +1004,7 @@ mod tests {
             }
         }
 
-        sleep(Duration::from_secs(400)).await;
+        //sleep(Duration::from_secs(400)).await;
 
         // let s_engine = Arc::clone(&sg);
 

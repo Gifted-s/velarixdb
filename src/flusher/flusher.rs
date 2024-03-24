@@ -180,15 +180,19 @@ impl Flusher {
                             current_buckets = updated_bucket_map;
                             current_bloom_filters = updated_bloom_filters;
                             current_biggest_key_index = updated_biggest_key_index;
-                            println!("sent update message");
-                            let _ = sdx_clone.write().await.send(Ok(FlushUpdateMsg {
-                                flushed_memtable_id: table_id,
-                                buckets: current_buckets.to_owned(),
-                                bloom_filters: current_bloom_filters.to_owned(),
-                                biggest_key_index: current_biggest_key_index.to_owned(),
-                            }));
+
+                            let _ = sdx_clone
+                                .write()
+                                .await
+                                .send(Ok(FlushUpdateMsg {
+                                    flushed_memtable_id: table_id,
+                                    buckets: current_buckets.to_owned(),
+                                    bloom_filters: current_bloom_filters.to_owned(),
+                                    biggest_key_index: current_biggest_key_index.to_owned(),
+                                }))
+                                .await;
                             // Sleep for 200 seconds
-                            //sleep(Duration::from_secs(10)).await;
+                            //sleep(Duration::from_secs(1)).await;
                         }
                         FlushResponse::Failed { reason } => {
                             println!("Flush failed: {}", reason);
