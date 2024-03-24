@@ -966,7 +966,7 @@ mod tests {
                 sgg.write().await.check_queued_updates().await;
                 // println!("We are here");
 
-                sleep(Duration::from_secs(2)).await;
+                sleep(Duration::from_secs(1)).await;
             }
         });
 
