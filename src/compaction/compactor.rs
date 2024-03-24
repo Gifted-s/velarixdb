@@ -1,5 +1,6 @@
 use crossbeam_skiplist::SkipMap;
 use log::{error, info, warn};
+use std::thread::spawn;
 use std::{cmp::Ordering, collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::fs;
 use tokio::sync::{mpsc::Receiver, RwLock};
@@ -10,7 +11,9 @@ use super::{
     bucket_coordinator::{Bucket, BucketID},
     BucketMap,
 };
+use crate::bloom_filter;
 use crate::consts::TOMBSTONE_COMPACTION_INTERVAL_MILLI;
+use crate::storage_engine::ExcRwAcc;
 use crate::{
     bloom_filter::BloomFilter,
     consts::TOMB_STONE_TTL,
@@ -71,9 +74,9 @@ impl Compactor {
 
     pub async fn run_compaction(
         &mut self,
-        buckets: &mut BucketMap,
-        bloom_filters: &mut Vec<BloomFilter>,
-        biggest_key_index: &mut TableBiggestKeys,
+        bucket_map: ExcRwAcc<BucketMap>,
+        bf: ExcRwAcc<Vec<BloomFilter>>,
+        biggest_key_index: ExcRwAcc<TableBiggestKeys>,
     ) -> Result<bool, StorageEngineError> {
         let mut number_of_compactions = 0;
         // The compaction loop will keep running until there
@@ -82,9 +85,12 @@ impl Compactor {
         // TODO: Handle this with multiple threads while keeping track of number of Disk IO used
         // so we don't run out of Disk IO during large compactions
         loop {
+            let buckets = Arc::clone(&bucket_map);
+            let bloom_filters = Arc::clone(&bf);
+            let biggest_key_index = Arc::clone(&biggest_key_index);
             // Step 1: Extract buckets to compact
             let buckets_to_compact_and_sstables_to_remove =
-                buckets.extract_buckets_to_compact().await?;
+                buckets.read().await.extract_buckets_to_compact().await?;
             let buckets_to_compact = buckets_to_compact_and_sstables_to_remove.0;
             let sstables_files_to_remove = buckets_to_compact_and_sstables_to_remove.1;
 
@@ -105,6 +111,8 @@ impl Compactor {
                     // Step 3: Write merged sstables to bucket map
                     for (_, mut m) in merged_sstables.into_iter().enumerate() {
                         match buckets
+                            .write()
+                            .await
                             .insert_to_appropriate_bucket(&m.sstable, m.hotness)
                             .await
                         {
@@ -118,12 +126,15 @@ impl Compactor {
                                 m.bloom_filter.set_sstable_path(sst_file_path);
 
                                 // Step 5: Store the bloom filter in the bloom filters vector
-                                bloom_filters.push(m.bloom_filter);
+                                bloom_filters.write().await.push(m.bloom_filter);
                                 let biggest_key = m.sstable.find_biggest_key()?;
                                 if biggest_key.is_empty() {
                                     return Err(BiggestKeyIndexError);
                                 }
-                                biggest_key_index.set(sstable_data_file_path, biggest_key);
+                                biggest_key_index
+                                    .write()
+                                    .await
+                                    .set(sstable_data_file_path, biggest_key);
                                 actual_number_of_sstables_written_to_disk += 1;
                             }
                             Err(err) => {
@@ -132,12 +143,12 @@ impl Compactor {
                                 // Ensure that bloom filter is restored to the previous state by removing entries added so far in
                                 // the compaction process and also remove merged sstables written to disk so far to prevent unstable state
                                 while actual_number_of_sstables_written_to_disk > 0 {
-                                    if let Some(bf) = bloom_filters.pop() {
+                                    if let Some(bf) = bloom_filters.write().await.pop() {
                                         match fs::remove_dir_all(bf.get_sstable_path().dir.clone())
                                             .await
                                         {
                                             Ok(()) => {
-                                                biggest_key_index.remove(
+                                                biggest_key_index.write().await.remove(
                                                     bf.get_sstable_path().data_file_path.clone(),
                                                 );
                                                 info!("Stale SSTable File successfully deleted.")
@@ -205,18 +216,29 @@ impl Compactor {
 
     pub async fn clean_up_after_compaction(
         &self,
-        buckets: &mut BucketMap,
+        buckets: ExcRwAcc<BucketMap>,
         sstables_to_delete: &Vec<(BucketID, Vec<SSTablePath>)>,
-        bloom_filters_with_both_old_and_new_sstables: &mut Vec<BloomFilter>,
-        biggest_key_index: &mut TableBiggestKeys,
+        bloom_filters_with_both_old_and_new_sstables: ExcRwAcc<Vec<BloomFilter>>,
+        biggest_key_index: ExcRwAcc<TableBiggestKeys>,
     ) -> Result<Option<bool>, StorageEngineError> {
         // Remove obsolete keys from biggest keys index
         sstables_to_delete.iter().for_each(|(_, sstables)| {
             sstables.iter().for_each(|s| {
-                biggest_key_index.remove(s.get_data_file_path());
+                let index = Arc::clone(&biggest_key_index);
+                let path = s.get_data_file_path();
+                tokio::spawn(async move {
+                    index
+                        .write()
+                        .await
+                        .remove(path);
+                });
             })
         });
-        let all_sstables_deleted = buckets.delete_sstables(sstables_to_delete).await?;
+        let all_sstables_deleted = buckets
+            .write()
+            .await
+            .delete_sstables(sstables_to_delete)
+            .await?;
         // if all sstables were not deleted then don't remove the associated bloom filters
         // although this can lead to redundancy bloom filters are in-memory and its also less costly
         // since keys are represented in bits
@@ -225,19 +247,21 @@ impl Compactor {
             let bloom_filter_updated = self.filter_out_old_bloom_filters(
                 bloom_filters_with_both_old_and_new_sstables,
                 sstables_to_delete,
-            );
+            ).await;
             return Ok(bloom_filter_updated);
         }
         Ok(None)
     }
 
-    pub fn filter_out_old_bloom_filters(
+    pub async fn filter_out_old_bloom_filters(
         &self,
-        bloom_filters_with_both_old_and_new_sstables: &mut Vec<BloomFilter>,
+        bloom_filters_with_both_old_and_new_sstables: ExcRwAcc<Vec<BloomFilter>>,
         sstables_to_delete: &Vec<(Uuid, Vec<SSTablePath>)>,
     ) -> Option<bool> {
         let mut bloom_filters_map: HashMap<PathBuf, BloomFilter> =
             bloom_filters_with_both_old_and_new_sstables
+                .read()
+                .await
                 .iter()
                 .map(|b| (b.get_sstable_path().dir.to_owned(), b.to_owned()))
                 .collect();
@@ -249,8 +273,14 @@ impl Compactor {
                     bloom_filters_map.remove(&file_path_to_delete.dir);
                 })
             });
-        bloom_filters_with_both_old_and_new_sstables.clear();
-        bloom_filters_with_both_old_and_new_sstables.extend(bloom_filters_map.into_values());
+        bloom_filters_with_both_old_and_new_sstables
+            .write()
+            .await
+            .clear();
+        bloom_filters_with_both_old_and_new_sstables
+            .write()
+            .await
+            .extend(bloom_filters_map.into_values());
         Some(true)
     }
 
