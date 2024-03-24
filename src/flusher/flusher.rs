@@ -1,24 +1,16 @@
 use crate::{
-    bloom_filter::BloomFilter,
-    cfg::Config,
-    compaction::{BucketMap, Compactor},
-    err::StorageEngineError,
-    key_offseter::TableBiggestKeys,
-    memtable::InMemoryTable,
-    storage_engine::ExcRwAcc,
+    bloom_filter::BloomFilter, cfg::Config, compaction::BucketMap, err::StorageEngineError,
+    key_offseter::TableBiggestKeys, memtable::InMemoryTable, storage_engine::ExRW,
 };
 use indexmap::IndexMap;
 use std::sync::Arc;
 use std::{borrow::Borrow, hash::Hash};
-use tokio::time::sleep;
-use tokio::time::Duration;
 pub type InActiveMemtableID = Vec<u8>;
 pub type InActiveMemtable = Arc<RwLock<InMemoryTable<Vec<u8>>>>;
 pub type FlushDataMemTable = (InActiveMemtableID, InActiveMemtable);
 
 use tokio::spawn;
 use tokio::sync::mpsc::Receiver;
-use tokio::sync::mpsc::Sender;
 use tokio::sync::RwLock;
 
 #[derive(Debug)]
@@ -47,12 +39,12 @@ pub struct Flusher<K>
 where
     K: Hash + PartialOrd + Ord + Send + Sync,
 {
-    pub(crate) read_only_memtable: ExcRwAcc<IndexMap<K, Arc<RwLock<InMemoryTable<K>>>>>,
-    pub(crate) table_to_flush: Arc<RwLock<InMemoryTable<Vec<u8>>>>,
+    pub(crate) read_only_memtable: ExRW<IndexMap<K, ExRW<InMemoryTable<K>>>>,
+    pub(crate) table_to_flush: ExRW<InMemoryTable<Vec<u8>>>,
     pub(crate) table_id: Vec<u8>,
-    pub(crate) bucket_map: ExcRwAcc<BucketMap>,
-    pub(crate) bloom_filters: ExcRwAcc<Vec<BloomFilter>>,
-    pub(crate) biggest_key_index: ExcRwAcc<TableBiggestKeys>,
+    pub(crate) bucket_map: ExRW<BucketMap>,
+    pub(crate) bloom_filters: ExRW<Vec<BloomFilter>>,
+    pub(crate) biggest_key_index: ExRW<TableBiggestKeys>,
     pub(crate) use_ttl: bool,
     pub(crate) entry_ttl: u64,
 }
@@ -62,12 +54,12 @@ where
     K: Hash + PartialOrd + Ord + Send + Sync + 'static + Borrow<std::vec::Vec<u8>>,
 {
     pub fn new(
-        read_only_memtable: ExcRwAcc<IndexMap<K, Arc<RwLock<InMemoryTable<K>>>>>,
-        table_to_flush: Arc<RwLock<InMemoryTable<Vec<u8>>>>,
+        read_only_memtable: ExRW<IndexMap<K, ExRW<InMemoryTable<K>>>>,
+        table_to_flush: ExRW<InMemoryTable<Vec<u8>>>,
         table_id: Vec<u8>,
-        bucket_map: ExcRwAcc<BucketMap>,
-        bloom_filters: ExcRwAcc<Vec<BloomFilter>>,
-        biggest_key_index: ExcRwAcc<TableBiggestKeys>,
+        bucket_map: ExRW<BucketMap>,
+        bloom_filters: ExRW<Vec<BloomFilter>>,
+        biggest_key_index: ExRW<TableBiggestKeys>,
         use_ttl: bool,
         entry_ttl: u64,
     ) -> Self {
@@ -86,7 +78,7 @@ where
     pub async fn flush(&mut self) -> Result<(), StorageEngineError> {
         let flush_data = self;
         let table = Arc::clone(&flush_data.table_to_flush);
-        let table_id = &flush_data.table_id;
+        // let table_id = &flush_data.table_id;
         if table.read().await.index.is_empty() {
             println!("Cannot flush an empty table");
             return Err(StorageEngineError::FailedToInsertToBucket(
@@ -125,6 +117,7 @@ where
             .await
             .set(data_file_path, table_biggest_key);
         let mut should_compact = false;
+
         //check for compaction conditions before returning
         // for (level, (_, bucket)) in flush_data.bucket_map.clone().buckets.iter().enumerate() {
         //     if bucket.should_trigger_compaction(level) {
@@ -144,21 +137,20 @@ where
         //         )
         //         .await?;
         // }
+
         Ok(())
     }
 
     pub fn flush_data_collector(
         &self,
-        rcx: Arc<RwLock<Receiver<FlushDataMemTable>>>,
-        sdx: Arc<RwLock<Sender<Result<FlushUpdateMsg, StorageEngineError>>>>,
-        buckets: ExcRwAcc<BucketMap>,
-        bloom_filters: ExcRwAcc<Vec<BloomFilter>>,
-        biggest_key_index: ExcRwAcc<TableBiggestKeys>,
-        read_only_memtable: ExcRwAcc<IndexMap<K, Arc<RwLock<InMemoryTable<K>>>>>,
+        rcx: ExRW<Receiver<FlushDataMemTable>>,
+        buckets: ExRW<BucketMap>,
+        bloom_filters: ExRW<Vec<BloomFilter>>,
+        biggest_key_index: ExRW<TableBiggestKeys>,
+        read_only_memtable: ExRW<IndexMap<K, ExRW<InMemoryTable<K>>>>,
         config: Config,
     ) {
         let rcx_clone = Arc::clone(&rcx);
-        let sdx_clone = Arc::clone(&sdx);
 
         spawn(async move {
             let current_buckets = Arc::clone(&buckets);
@@ -184,13 +176,10 @@ where
                             .await
                             .shift_remove(&table_id);
                         println!("Fix is successful")
-                        // Sleep for 200 seconds
-                        //sleep(Duration::from_secs(1)).await;
                     }
                     // Handle failure case here
                     Err(err) => {
                         println!("Flush error: {}", err);
-                        // Handle error here
                     }
                 }
             }

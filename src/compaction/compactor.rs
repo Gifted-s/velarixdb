@@ -1,6 +1,5 @@
 use crossbeam_skiplist::SkipMap;
 use log::{error, info, warn};
-use std::thread::spawn;
 use std::{cmp::Ordering, collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::fs;
 use tokio::sync::{mpsc::Receiver, RwLock};
@@ -11,9 +10,8 @@ use super::{
     bucket_coordinator::{Bucket, BucketID},
     BucketMap,
 };
-use crate::bloom_filter;
 use crate::consts::TOMBSTONE_COMPACTION_INTERVAL_MILLI;
-use crate::storage_engine::ExcRwAcc;
+use crate::storage_engine::ExRW;
 use crate::{
     bloom_filter::BloomFilter,
     consts::TOMB_STONE_TTL,
@@ -74,9 +72,9 @@ impl Compactor {
 
     pub async fn run_compaction(
         &mut self,
-        bucket_map: ExcRwAcc<BucketMap>,
-        bf: ExcRwAcc<Vec<BloomFilter>>,
-        biggest_key_index: ExcRwAcc<TableBiggestKeys>,
+        bucket_map: ExRW<BucketMap>,
+        bf: ExRW<Vec<BloomFilter>>,
+        biggest_key_index: ExRW<TableBiggestKeys>,
     ) -> Result<bool, StorageEngineError> {
         let mut number_of_compactions = 0;
         // The compaction loop will keep running until there
@@ -216,10 +214,10 @@ impl Compactor {
 
     pub async fn clean_up_after_compaction(
         &self,
-        buckets: ExcRwAcc<BucketMap>,
+        buckets: ExRW<BucketMap>,
         sstables_to_delete: &Vec<(BucketID, Vec<SSTablePath>)>,
-        bloom_filters_with_both_old_and_new_sstables: ExcRwAcc<Vec<BloomFilter>>,
-        biggest_key_index: ExcRwAcc<TableBiggestKeys>,
+        bloom_filters_with_both_old_and_new_sstables: ExRW<Vec<BloomFilter>>,
+        biggest_key_index: ExRW<TableBiggestKeys>,
     ) -> Result<Option<bool>, StorageEngineError> {
         // Remove obsolete keys from biggest keys index
         sstables_to_delete.iter().for_each(|(_, sstables)| {
@@ -227,10 +225,7 @@ impl Compactor {
                 let index = Arc::clone(&biggest_key_index);
                 let path = s.get_data_file_path();
                 tokio::spawn(async move {
-                    index
-                        .write()
-                        .await
-                        .remove(path);
+                    index.write().await.remove(path);
                 });
             })
         });
@@ -244,10 +239,12 @@ impl Compactor {
         // since keys are represented in bits
         if all_sstables_deleted {
             // Step 7: Delete the bloom filters associated with the sstables that we already merged
-            let bloom_filter_updated = self.filter_out_old_bloom_filters(
-                bloom_filters_with_both_old_and_new_sstables,
-                sstables_to_delete,
-            ).await;
+            let bloom_filter_updated = self
+                .filter_out_old_bloom_filters(
+                    bloom_filters_with_both_old_and_new_sstables,
+                    sstables_to_delete,
+                )
+                .await;
             return Ok(bloom_filter_updated);
         }
         Ok(None)
@@ -255,7 +252,7 @@ impl Compactor {
 
     pub async fn filter_out_old_bloom_filters(
         &self,
-        bloom_filters_with_both_old_and_new_sstables: ExcRwAcc<Vec<BloomFilter>>,
+        bloom_filters_with_both_old_and_new_sstables: ExRW<Vec<BloomFilter>>,
         sstables_to_delete: &Vec<(Uuid, Vec<SSTablePath>)>,
     ) -> Option<bool> {
         let mut bloom_filters_map: HashMap<PathBuf, BloomFilter> =
