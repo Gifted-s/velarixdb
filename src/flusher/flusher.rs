@@ -1,22 +1,16 @@
 use crate::{
-    bloom_filter::BloomFilter,
-    cfg::Config,
-    compaction::{BucketMap, Compactor},
-    err::StorageEngineError,
-    key_offseter::TableBiggestKeys,
-    memtable::InMemoryTable,
+    bloom_filter::BloomFilter, cfg::Config, compaction::BucketMap, err::StorageEngineError,
+    key_offseter::TableBiggestKeys, memtable::InMemoryTable, storage_engine::ExRW,
 };
+use indexmap::IndexMap;
 use std::sync::Arc;
-use tokio::time::sleep;
-use tokio::time::Duration;
-
+use std::{borrow::Borrow, hash::Hash};
 pub type InActiveMemtableID = Vec<u8>;
 pub type InActiveMemtable = Arc<RwLock<InMemoryTable<Vec<u8>>>>;
 pub type FlushDataMemTable = (InActiveMemtableID, InActiveMemtable);
 
 use tokio::spawn;
 use tokio::sync::mpsc::Receiver;
-use tokio::sync::mpsc::Sender;
 use tokio::sync::RwLock;
 
 #[derive(Debug)]
@@ -41,27 +35,36 @@ pub enum FlushResponse {
 }
 
 #[derive(Debug, Clone)]
-pub struct Flusher {
-    pub(crate) table_to_flush: Arc<RwLock<InMemoryTable<Vec<u8>>>>,
+pub struct Flusher<K>
+where
+    K: Hash + PartialOrd + Ord + Send + Sync,
+{
+    pub(crate) read_only_memtable: ExRW<IndexMap<K, ExRW<InMemoryTable<K>>>>,
+    pub(crate) table_to_flush: ExRW<InMemoryTable<Vec<u8>>>,
     pub(crate) table_id: Vec<u8>,
-    pub(crate) bucket_map: BucketMap,
-    pub(crate) bloom_filters: Vec<BloomFilter>,
-    pub(crate) biggest_key_index: TableBiggestKeys,
+    pub(crate) bucket_map: ExRW<BucketMap>,
+    pub(crate) bloom_filters: ExRW<Vec<BloomFilter>>,
+    pub(crate) biggest_key_index: ExRW<TableBiggestKeys>,
     pub(crate) use_ttl: bool,
     pub(crate) entry_ttl: u64,
 }
 
-impl Flusher {
+impl<K> Flusher<K>
+where
+    K: Hash + PartialOrd + Ord + Send + Sync + 'static + Borrow<std::vec::Vec<u8>>,
+{
     pub fn new(
-        table_to_flush: Arc<RwLock<InMemoryTable<Vec<u8>>>>,
+        read_only_memtable: ExRW<IndexMap<K, ExRW<InMemoryTable<K>>>>,
+        table_to_flush: ExRW<InMemoryTable<Vec<u8>>>,
         table_id: Vec<u8>,
-        bucket_map: BucketMap,
-        bloom_filters: Vec<BloomFilter>,
-        biggest_key_index: TableBiggestKeys,
+        bucket_map: ExRW<BucketMap>,
+        bloom_filters: ExRW<Vec<BloomFilter>>,
+        biggest_key_index: ExRW<TableBiggestKeys>,
         use_ttl: bool,
         entry_ttl: u64,
     ) -> Self {
         Self {
+            read_only_memtable,
             table_to_flush,
             table_id,
             bucket_map,
@@ -72,10 +75,10 @@ impl Flusher {
         }
     }
 
-    pub async fn flush(&mut self) -> Result<FlushResponse, StorageEngineError> {
+    pub async fn flush(&mut self) -> Result<(), StorageEngineError> {
         let flush_data = self;
         let table = Arc::clone(&flush_data.table_to_flush);
-        let table_id = &flush_data.table_id;
+        // let table_id = &flush_data.table_id;
         if table.read().await.index.is_empty() {
             println!("Cannot flush an empty table");
             return Err(StorageEngineError::FailedToInsertToBucket(
@@ -89,23 +92,32 @@ impl Flusher {
         let hotness = 1;
         let sstable_path = flush_data
             .bucket_map
+            .write()
+            .await
             .insert_to_appropriate_bucket(&table.read().await.to_owned(), hotness)
             .await?;
 
         let data_file_path = sstable_path.get_data_file_path().clone();
         table_bloom_filter.set_sstable_path(sstable_path);
-        flush_data.bloom_filters.push(table_bloom_filter.to_owned());
+        flush_data
+            .bloom_filters
+            .write()
+            .await
+            .push(table_bloom_filter.to_owned());
 
         // sort bloom filter by hotness
-        flush_data.bloom_filters.sort_by(|a, b| {
+        flush_data.bloom_filters.write().await.sort_by(|a, b| {
             b.get_sstable_path()
                 .get_hotness()
                 .cmp(&a.get_sstable_path().get_hotness())
         });
         flush_data
             .biggest_key_index
+            .write()
+            .await
             .set(data_file_path, table_biggest_key);
         let mut should_compact = false;
+
         //check for compaction conditions before returning
         // for (level, (_, bucket)) in flush_data.bucket_map.clone().buckets.iter().enumerate() {
         //     if bucket.should_trigger_compaction(level) {
@@ -124,84 +136,50 @@ impl Flusher {
         //             &mut flush_data.biggest_key_index,
         //         )
         //         .await?;
-        //     return Ok(FlushResponse::Success {
-        //         table_id: table_id.to_vec(),
-        //         updated_bucket_map: flush_data.bucket_map.to_owned(),
-        //         updated_bloom_filters: flush_data.bloom_filters.to_owned(),
-        //         updated_biggest_key_index: flush_data.biggest_key_index.to_owned(),
-        //     });
         // }
 
-        return Ok(FlushResponse::Success {
-            table_id: table_id.to_vec(),
-            updated_bucket_map: flush_data.bucket_map.to_owned(),
-            updated_bloom_filters: flush_data.bloom_filters.to_owned(),
-            updated_biggest_key_index: flush_data.biggest_key_index.to_owned(),
-        });
+        Ok(())
     }
 
     pub fn flush_data_collector(
         &self,
-        rcx: Arc<RwLock<Receiver<FlushDataMemTable>>>,
-        sdx: Arc<RwLock<Sender<Result<FlushUpdateMsg, StorageEngineError>>>>,
-        buckets: BucketMap,
-        bloom_filters: Vec<BloomFilter>,
-        biggest_key_index: TableBiggestKeys,
+        rcx: ExRW<Receiver<FlushDataMemTable>>,
+        buckets: ExRW<BucketMap>,
+        bloom_filters: ExRW<Vec<BloomFilter>>,
+        biggest_key_index: ExRW<TableBiggestKeys>,
+        read_only_memtable: ExRW<IndexMap<K, ExRW<InMemoryTable<K>>>>,
         config: Config,
     ) {
         let rcx_clone = Arc::clone(&rcx);
-        let sdx_clone = Arc::clone(&sdx);
 
         spawn(async move {
-            let mut current_buckets = buckets;
-            let mut current_bloom_filters = bloom_filters;
-            let mut current_biggest_key_index = biggest_key_index;
-
+            let current_buckets = Arc::clone(&buckets);
+            let current_bloom_filters = Arc::clone(&bloom_filters);
+            let current_biggest_key_index = Arc::clone(&biggest_key_index);
+            let current_read_only_memtables = Arc::clone(&read_only_memtable);
             while let Some((table_id, table_to_flush)) = rcx_clone.write().await.recv().await {
-                println!("Flushing started");
-                let mut flusher = Flusher::new(
+                let mut flusher = Flusher::<K>::new(
+                    Arc::clone(&read_only_memtable),
                     table_to_flush,
-                    table_id,
-                    current_buckets.clone(),
-                    current_bloom_filters.clone(),
-                    current_biggest_key_index.clone(),
+                    table_id.to_owned(),
+                    Arc::clone(&current_buckets),
+                    Arc::clone(&current_bloom_filters),
+                    Arc::clone(&current_biggest_key_index),
                     config.enable_ttl,
                     config.entry_ttl_millis,
                 );
 
                 match flusher.flush().await {
-                    Ok(flush_res) => match flush_res {
-                        FlushResponse::Success {
-                            table_id,
-                            updated_bucket_map,
-                            updated_bloom_filters,
-                            updated_biggest_key_index,
-                        } => {
-                            current_buckets = updated_bucket_map;
-                            current_bloom_filters = updated_bloom_filters;
-                            current_biggest_key_index = updated_biggest_key_index;
-
-                            let _ = sdx_clone
-                                .write()
-                                .await
-                                .send(Ok(FlushUpdateMsg {
-                                    flushed_memtable_id: table_id,
-                                    buckets: current_buckets.to_owned(),
-                                    bloom_filters: current_bloom_filters.to_owned(),
-                                    biggest_key_index: current_biggest_key_index.to_owned(),
-                                }))
-                                .await;
-                            // Sleep for 200 seconds
-                            //sleep(Duration::from_secs(1)).await;
-                        }
-                        FlushResponse::Failed { reason } => {
-                            println!("Flush failed: {}", reason);
-                            // Handle failure case here
-                        }
-                    },
+                    Ok(_) => {
+                        current_read_only_memtables
+                            .write()
+                            .await
+                            .shift_remove(&table_id);
+                        println!("Fix is successful")
+                    }
+                    // Handle failure case here
                     Err(err) => {
                         println!("Flush error: {}", err);
-                        // Handle error here
                     }
                 }
             }
