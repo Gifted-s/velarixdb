@@ -1,10 +1,10 @@
-pub mod flusher;
 pub mod block;
 pub mod bloom_filter;
 pub mod cfg;
 pub mod compaction;
 pub mod consts;
 pub mod err;
+pub mod flusher;
 pub mod garbage_collector;
 pub mod key_offseter;
 pub mod memtable;

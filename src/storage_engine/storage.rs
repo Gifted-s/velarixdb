@@ -7,7 +7,7 @@ use crate::{
         SIZE_OF_U8, TAIL_ENTRY_KEY, TOMB_STONE_MARKER, VALUE_LOG_DIRECTORY_NAME, WRITE_BUFFER_SIZE,
     },
     err::StorageEngineError,
-    flusher::{FlushDataMemTable, FlushResponse, FlushUpdateMsg, Flusher},
+    flusher::{FlushDataMemTable, Flusher},
     key_offseter::TableBiggestKeys,
     memtable::{Entry, InMemoryTable},
     meta::Meta,
@@ -21,7 +21,7 @@ use log::error;
 use tokio::{
     spawn,
     sync::{
-        mpsc::{self, error::TryRecvError, Receiver, Sender},
+        mpsc::{self, Receiver, Sender},
         RwLock,
     },
 };
@@ -29,8 +29,21 @@ use tokio::{
 use crate::err::StorageEngineError::*;
 use std::{fs, path::PathBuf};
 use std::{hash::Hash, sync::Arc};
-/// Exclusive read and write access (Multiple readers or exactly one writer at a time)
-pub type ExRW<T> = Arc<RwLock<T>>;
+
+/// Exclusive write access
+/// Multiple readers or exactly one writer at a time
+pub type ExRw<T> = Arc<RwLock<T>>;
+trait ExRwFactory<T> {
+    fn new(v: T) -> ExRw<T>;
+}
+struct ExRwWrapper<T>(ExRw<T>);
+
+impl<T> ExRwFactory<T> for ExRwWrapper<T> {
+    fn new(v: T) -> ExRw<T> {
+        Arc::new(RwLock::new(v))
+    }
+}
+
 #[derive(Debug)]
 pub struct StorageEngine<K>
 where
@@ -38,31 +51,31 @@ where
 {
     pub dir: DirPath,
     pub active_memtable: InMemoryTable<K>,
-    pub bloom_filters: ExRW<Vec<BloomFilter>>,
+    pub bloom_filters: ExRw<Vec<BloomFilter>>,
     pub val_log: ValueLog,
-    pub buckets: ExRW<BucketMap>,
-    pub biggest_key_index: ExRW<TableBiggestKeys>,
+    pub buckets: ExRw<BucketMap>,
+    pub biggest_key_index: ExRw<TableBiggestKeys>,
     pub compactor: Compactor,
     pub meta: Meta,
     pub flusher: Flusher<K>,
     pub config: Config,
-    pub read_only_memtables: ExRW<IndexMap<K, Arc<RwLock<InMemoryTable<K>>>>>,
+    pub read_only_memtables: ExRw<IndexMap<K, ExRw<InMemoryTable<K>>>>,
     pub flush_data_sender: ChanSender,
     pub flush_data_recevier: ChanRecv,
-    pub compaction_chan_sender: ChanSender,
-    pub compaction_channel_rcv: ChanRecv,
+    pub tombstone_compaction_sender: ChanSender,
+    pub tombstone_compaction_rcv: ChanRecv,
 }
 
 #[derive(Debug, Clone)]
 pub enum ChanSender {
-    FlushDataSender(Arc<RwLock<Sender<FlushDataMemTable>>>),
+    FlushDataSender(ExRw<Sender<FlushDataMemTable>>),
     TombStoneCompactionNoticeSender(Sender<BucketMap>),
 }
 
 #[derive(Debug)]
 pub enum ChanRecv {
-    FlushDataRecv(Arc<RwLock<Receiver<FlushDataMemTable>>>),
-    TombStoneCompactionNoticeRcv(Arc<RwLock<Receiver<BucketMap>>>),
+    FlushDataRecv(ExRw<Receiver<FlushDataMemTable>>),
+    TombStoneCompactionNoticeRcv(ExRw<Receiver<BucketMap>>),
 }
 
 #[derive(Clone, Debug)]
@@ -93,27 +106,8 @@ impl StorageEngine<Vec<u8>> {
             &default_config,
         )
         .await?;
-
-        // Start background job to check for tombstone compaction condition at regular intervals 20 days
-        if let ChanRecv::TombStoneCompactionNoticeRcv(rcx) = &store.compaction_channel_rcv {
-            store
-                .compactor
-                .tombstone_compaction_condition_background_checker(Arc::clone(rcx));
-        }
-
-        // Start background to constantly check accept flush data in a seperate tokio task and
-        // process them sequetially to prevent interterence
-        if let ChanRecv::FlushDataRecv(rcx) = &store.flush_data_recevier {
-            store.flusher.flush_data_collector(
-                Arc::clone(rcx),
-                Arc::clone(&store.buckets),
-                Arc::clone(&store.bloom_filters),
-                Arc::clone(&store.biggest_key_index),
-                Arc::clone(&store.read_only_memtables),
-                store.config.to_owned(),
-            );
-        }
-
+        let started = store.trigger_background_tasks()?;
+        println!("Background job started: {}", started);
         return Ok(store);
     }
 
@@ -129,6 +123,34 @@ impl StorageEngine<Vec<u8>> {
             config,
         )
         .await
+    }
+    pub fn trigger_background_tasks(&self) -> Result<bool, StorageEngineError> {
+        // Start background job to check for tombstone compaction condition at regular intervals 20 days
+        if let ChanRecv::TombStoneCompactionNoticeRcv(rcx) = &self.tombstone_compaction_rcv {
+            self.compactor
+                .tombstone_compaction_condition_background_checker(Arc::clone(rcx));
+        }
+
+        // Start background to constantly check accept flush data in a seperate tokio task and
+        // process them sequetially to prevent interterence
+        if let ChanRecv::FlushDataRecv(rcx) = &self.flush_data_recevier {
+            self.flusher.flush_data_collector(
+                Arc::clone(rcx),
+                Arc::clone(&self.buckets),
+                Arc::clone(&self.bloom_filters),
+                Arc::clone(&self.biggest_key_index),
+                Arc::clone(&self.read_only_memtables),
+                self.config.to_owned(),
+            );
+        }
+
+        // Start background job to check for compaction condition at regular intervals 20 days
+        self.compactor.start_periodic_background_compaction(
+            Arc::clone(&self.buckets),
+            Arc::clone(&self.bloom_filters),
+            Arc::clone(&self.biggest_key_index),
+        );
+        return Ok(true);
     }
 
     /// A Result indicating success or an `StorageEngineError` if an error occurred.
@@ -169,7 +191,7 @@ impl StorageEngine<Vec<u8>> {
             self.active_memtable.read_only = true;
             self.read_only_memtables.write().await.insert(
                 InMemoryTable::generate_table_id(),
-                Arc::new(RwLock::new(self.active_memtable.to_owned())),
+                ExRwWrapper::new(self.active_memtable.to_owned()),
             );
 
             if self.read_only_memtables.read().await.len() >= self.config.max_buffer_write_number {
@@ -364,7 +386,7 @@ impl StorageEngine<Vec<u8>> {
             self.active_memtable.read_only = true;
             self.read_only_memtables.write().await.insert(
                 InMemoryTable::generate_table_id(),
-                Arc::new(RwLock::new(self.active_memtable.to_owned())),
+                ExRwWrapper::new(self.active_memtable.to_owned()),
             );
 
             if self.read_only_memtables.read().await.len() >= self.config.max_buffer_write_number {
@@ -473,39 +495,38 @@ impl StorageEngine<Vec<u8>> {
             let buckets = BucketMap::new(buckets_path);
             let (flush_data_sender, flush_data_rec) = mpsc::channel(100);
             let (comp_sender, comp_rec) = mpsc::channel(1);
-
             let read_only_memtables = IndexMap::new();
 
             let flusher = Flusher::new(
-                Arc::new(RwLock::new(read_only_memtables.to_owned())),
-                Arc::new(RwLock::new(active_memtable.to_owned())),
+                ExRwWrapper::new(read_only_memtables.to_owned()),
+                ExRwWrapper::new(active_memtable.to_owned()),
                 Vec::new(),
-                Arc::new(RwLock::new(buckets.to_owned())),
-                Arc::new(RwLock::new(Vec::new())),
-                Arc::new(RwLock::new(biggest_key_index.to_owned())),
+                ExRwWrapper::new(buckets.to_owned()),
+                ExRwWrapper::new(Vec::new()),
+                ExRwWrapper::new(biggest_key_index.to_owned()),
                 config.enable_ttl,
                 config.entry_ttl_millis,
             );
             return Ok(Self {
                 active_memtable,
                 val_log: vlog,
-                bloom_filters: Arc::new(RwLock::new(Vec::new())),
-                buckets: Arc::new(RwLock::new(buckets.to_owned())),
+                bloom_filters: ExRwWrapper::new(Vec::new()),
+                buckets: ExRwWrapper::new(buckets.to_owned()),
                 dir,
-                biggest_key_index: Arc::new(RwLock::new(biggest_key_index)),
+                biggest_key_index: ExRwWrapper::new(biggest_key_index),
                 compactor: Compactor::new(config.enable_ttl, config.entry_ttl_millis),
                 config: config.clone(),
                 meta,
                 flusher,
-                read_only_memtables: Arc::new(RwLock::new(read_only_memtables)),
-                compaction_chan_sender: ChanSender::TombStoneCompactionNoticeSender(comp_sender),
-                compaction_channel_rcv: ChanRecv::TombStoneCompactionNoticeRcv(Arc::new(
+                read_only_memtables: ExRwWrapper::new(read_only_memtables),
+                tombstone_compaction_sender: ChanSender::TombStoneCompactionNoticeSender(
+                    comp_sender,
+                ),
+                tombstone_compaction_rcv: ChanRecv::TombStoneCompactionNoticeRcv(Arc::new(
                     RwLock::new(comp_rec),
                 )),
-                flush_data_sender: ChanSender::FlushDataSender(Arc::new(RwLock::new(
-                    flush_data_sender,
-                ))),
-                flush_data_recevier: ChanRecv::FlushDataRecv(Arc::new(RwLock::new(flush_data_rec))),
+                flush_data_sender: ChanSender::FlushDataSender(ExRwWrapper::new(flush_data_sender)),
+                flush_data_recevier: ChanRecv::FlushDataRecv(ExRwWrapper::new(flush_data_rec)),
             });
         }
 
@@ -657,19 +678,18 @@ impl StorageEngine<Vec<u8>> {
         )
         .await;
         let (flush_data_sender, flush_data_rec) = mpsc::channel(100);
-        let (comp_sender, comp_rec) = mpsc::channel(1);
-
+        let (tomb_comp_sender, tomb_comp_rec) = mpsc::channel(1);
         match recover_result {
             Ok((active_memtable, read_only_memtables)) => {
                 let (table_id, table_to_flush) = read_only_memtables.iter().next().unwrap();
 
-                let buckets_map_arc = Arc::new(RwLock::new(buckets_map.to_owned()));
-                let bloom_filter_arc = Arc::new(RwLock::new(bloom_filters));
+                let buckets_map_arc = ExRwWrapper::new(buckets_map.to_owned());
+                let bloom_filter_arc = ExRwWrapper::new(bloom_filters);
                 //TODO:  we also need to recover this from memory
-                let biggest_key_index_arc = Arc::new(RwLock::new(biggest_key_index.to_owned()));
+                let biggest_key_index_arc = ExRwWrapper::new(biggest_key_index.to_owned());
 
                 let flusher = Flusher::new(
-                    Arc::new(RwLock::new(read_only_memtables.to_owned())),
+                    ExRwWrapper::new(read_only_memtables.to_owned()),
                     Arc::clone(table_to_flush),
                     table_id.to_owned(),
                     buckets_map_arc.to_owned(),
@@ -690,19 +710,17 @@ impl StorageEngine<Vec<u8>> {
                     flusher,
                     compactor: Compactor::new(config.enable_ttl, config.entry_ttl_millis),
                     config: config.clone(),
-                    read_only_memtables: Arc::new(RwLock::new(read_only_memtables)),
-                    compaction_chan_sender: ChanSender::TombStoneCompactionNoticeSender(
-                        comp_sender,
+                    read_only_memtables: ExRwWrapper::new(read_only_memtables),
+                    tombstone_compaction_sender: ChanSender::TombStoneCompactionNoticeSender(
+                        tomb_comp_sender,
                     ),
-                    compaction_channel_rcv: ChanRecv::TombStoneCompactionNoticeRcv(Arc::new(
-                        RwLock::new(comp_rec),
+                    tombstone_compaction_rcv: ChanRecv::TombStoneCompactionNoticeRcv(Arc::new(
+                        RwLock::new(tomb_comp_rec),
                     )),
-                    flush_data_sender: ChanSender::FlushDataSender(Arc::new(RwLock::new(
+                    flush_data_sender: ChanSender::FlushDataSender(ExRwWrapper::new(
                         flush_data_sender,
-                    ))),
-                    flush_data_recevier: ChanRecv::FlushDataRecv(Arc::new(RwLock::new(
-                        flush_data_rec,
-                    ))),
+                    )),
+                    flush_data_recevier: ChanRecv::FlushDataRecv(ExRwWrapper::new(flush_data_rec)),
                 })
             }
             Err(err) => Err(MemTableRecoveryError(Box::new(err))),
@@ -749,7 +767,7 @@ impl StorageEngine<Vec<u8>> {
                     active_memtable.read_only = true;
                     read_only_memtables.insert(
                         InMemoryTable::generate_table_id(),
-                        Arc::new(RwLock::new(active_memtable.to_owned())),
+                        ExRwWrapper::new(active_memtable.to_owned()),
                     );
                     active_memtable = InMemoryTable::with_specified_capacity_and_rate(
                         size_unit,
@@ -773,11 +791,8 @@ impl StorageEngine<Vec<u8>> {
     pub async fn flush_all_memtables(&mut self) -> Result<(), StorageEngineError> {
         // Flush active memtable
         let hotness = 1;
-        self.flush_memtable(
-            &Arc::new(RwLock::new(self.active_memtable.to_owned())),
-            hotness,
-        )
-        .await?;
+        self.flush_memtable(&ExRwWrapper::new(self.active_memtable.to_owned()), hotness)
+            .await?;
 
         // Flush all read-only memtables
         let memtable_lock = self.read_only_memtables.read().await;
@@ -800,7 +815,7 @@ impl StorageEngine<Vec<u8>> {
 
         // clear the memtables
         self.active_memtable.clear();
-        self.read_only_memtables = Arc::new(RwLock::new(IndexMap::new()));
+        self.read_only_memtables = ExRwWrapper::new(IndexMap::new());
         Ok(())
     }
 
@@ -891,11 +906,8 @@ mod tests {
     use rand::distributions::Alphanumeric;
     use rand::{thread_rng, Rng};
     use std::sync::Arc;
-    use tokio::time::sleep;
-    use tokio::time::Duration;
 
     use tokio::fs;
-    use tokio::sync::RwLock;
     fn generate_random_string(length: usize) -> String {
         let rng = thread_rng();
         rng.sample_iter(&Alphanumeric)
@@ -909,7 +921,7 @@ mod tests {
         let path = PathBuf::new().join("bump1");
         let s_engine = StorageEngine::new(path.clone()).await.unwrap();
         // Specify the number of random strings to generate
-        let num_strings = 100000; // 1M
+        let num_strings = 1000000; // 1M
 
         // Specify the length of each random string
         let string_length = 20;
@@ -922,7 +934,7 @@ mod tests {
         // for k in random_strings.clone() {
         //     s_engine.put(&k, "boyode").await.unwrap();
         // }
-        let sg = Arc::new(RwLock::new(s_engine));
+        let sg = ExRwWrapper::new(s_engine);
 
         let tasks = random_strings.iter().map(|k| {
             let s_engine = Arc::clone(&sg);
@@ -1055,7 +1067,7 @@ mod tests {
         // for k in random_strings.clone() {
         //     s_engine.put(&k, "boyode").await.unwrap();
         // }
-        let sg = Arc::new(RwLock::new(s_engine));
+        let sg = ExRwWrapper::new(s_engine);
         let binding = random_strings.clone();
         let tasks = binding.iter().map(|k| {
             let s_engine = Arc::clone(&sg);
@@ -1231,7 +1243,7 @@ mod tests {
         for k in random_strings.clone() {
             s_engine.put(&k, "boyode").await.unwrap();
         }
-        let sg = Arc::new(RwLock::new(s_engine));
+        let sg = ExRwWrapper::new(s_engine);
         let binding = random_strings.clone();
         let tasks = binding.iter().map(|k| {
             let s_engine = Arc::clone(&sg);
@@ -1346,7 +1358,7 @@ mod tests {
         // for k in random_strings.clone() {
         //     s_engine.put(&k, "boyode").await.unwrap();
         // }
-        let sg = Arc::new(RwLock::new(s_engine));
+        let sg = ExRwWrapper::new(s_engine);
         let binding = random_strings.clone();
         let tasks = binding.iter().map(|k| {
             let s_engine = Arc::clone(&sg);

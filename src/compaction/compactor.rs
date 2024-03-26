@@ -10,8 +10,10 @@ use super::{
     bucket_coordinator::{Bucket, BucketID},
     BucketMap,
 };
-use crate::consts::TOMBSTONE_COMPACTION_INTERVAL_MILLI;
-use crate::storage_engine::ExRW;
+use crate::consts::{
+    DEFAULT_COMPACTION_INTERVAL_MILLI, DEFAULT_TOMBSTONE_COMPACTION_INTERVAL_MILLI,
+};
+use crate::storage_engine::ExRw;
 use crate::{
     bloom_filter::BloomFilter,
     consts::TOMB_STONE_TTL,
@@ -65,17 +67,69 @@ impl Compactor {
         tokio::spawn(async move {
             loop {
                 let _ = receiver.write().await.try_recv();
-                sleep(Duration::from_millis(TOMBSTONE_COMPACTION_INTERVAL_MILLI)).await;
+                sleep(Duration::from_millis(
+                    DEFAULT_TOMBSTONE_COMPACTION_INTERVAL_MILLI,
+                ))
+                .await;
+            }
+        });
+    }
+
+    pub fn start_periodic_background_compaction(
+        &self,
+        bucket_map: ExRw<BucketMap>,
+        bloom_filters: ExRw<Vec<BloomFilter>>,
+        biggest_key_index: ExRw<TableBiggestKeys>,
+    ) {
+        let use_ttl = self.use_ttl;
+        let entry_ttl = self.entry_ttl;
+        tokio::spawn(async move {
+            let current_buckets = &bucket_map;
+            let current_bloom_filters = &bloom_filters;
+            let current_biggest_key_index = &biggest_key_index;
+            loop {
+                let mut should_compact = false;
+
+                // check for compaction conditions before returning
+                for (level, (_, bucket)) in current_buckets.read().await.buckets.iter().enumerate()
+                {
+                    if bucket.should_trigger_compaction(level) {
+                        should_compact = true;
+                        break;
+                    }
+                }
+
+                if should_compact {
+                    // compaction will continue to until all the table is balanced
+                    let mut compactor = Compactor::new(use_ttl, entry_ttl);
+                    let comp_res = compactor
+                        .run_compaction(
+                            Arc::clone(&current_buckets),
+                            Arc::clone(&current_bloom_filters),
+                            Arc::clone(&current_biggest_key_index),
+                        )
+                        .await;
+                    match comp_res {
+                        Ok(done) => {
+                            println!("Compactoin complete : {}", done);
+                        }
+                        Err(err) => {
+                            println!("Error during compaction : {}", err)
+                        }
+                    }
+                }
+                sleep(Duration::from_millis(DEFAULT_COMPACTION_INTERVAL_MILLI)).await;
             }
         });
     }
 
     pub async fn run_compaction(
         &mut self,
-        bucket_map: ExRW<BucketMap>,
-        bf: ExRW<Vec<BloomFilter>>,
-        biggest_key_index: ExRW<TableBiggestKeys>,
+        bucket_map: ExRw<BucketMap>,
+        bf: ExRw<Vec<BloomFilter>>,
+        biggest_key_index: ExRw<TableBiggestKeys>,
     ) -> Result<bool, StorageEngineError> {
+        println!("Compaction started");
         let mut number_of_compactions = 0;
         // The compaction loop will keep running until there
         // are no more buckets with more than minimum treshold size
@@ -214,10 +268,10 @@ impl Compactor {
 
     pub async fn clean_up_after_compaction(
         &self,
-        buckets: ExRW<BucketMap>,
+        buckets: ExRw<BucketMap>,
         sstables_to_delete: &Vec<(BucketID, Vec<SSTablePath>)>,
-        bloom_filters_with_both_old_and_new_sstables: ExRW<Vec<BloomFilter>>,
-        biggest_key_index: ExRW<TableBiggestKeys>,
+        bloom_filters_with_both_old_and_new_sstables: ExRw<Vec<BloomFilter>>,
+        biggest_key_index: ExRw<TableBiggestKeys>,
     ) -> Result<Option<bool>, StorageEngineError> {
         // Remove obsolete keys from biggest keys index
         sstables_to_delete.iter().for_each(|(_, sstables)| {
@@ -252,7 +306,7 @@ impl Compactor {
 
     pub async fn filter_out_old_bloom_filters(
         &self,
-        bloom_filters_with_both_old_and_new_sstables: ExRW<Vec<BloomFilter>>,
+        bloom_filters_with_both_old_and_new_sstables: ExRw<Vec<BloomFilter>>,
         sstables_to_delete: &Vec<(Uuid, Vec<SSTablePath>)>,
     ) -> Option<bool> {
         let mut bloom_filters_map: HashMap<PathBuf, BloomFilter> =

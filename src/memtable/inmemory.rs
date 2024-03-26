@@ -15,6 +15,11 @@ use StorageEngineError::*;
 
 use std::{hash::Hash, sync::Arc};
 
+pub type SkipMapKey = Vec<u8>;
+pub type ValueOffset = usize;
+pub type InsertionTime = u64;
+pub type IsDeleted = bool;
+
 #[derive(PartialOrd, PartialEq, Copy, Clone, Debug)]
 pub struct Entry<K: Hash + PartialOrd, V> {
     pub key: K,
@@ -35,7 +40,7 @@ pub struct InMemoryTable<K: Hash + PartialOrd + cmp::Ord> {
 }
 
 impl IndexWithSizeInBytes for InMemoryTable<Vec<u8>> {
-    fn get_index(&self) -> Arc<SkipMap<Vec<u8>, (usize, u64, bool)>> {
+    fn get_index(&self) -> Arc<SkipMap<SkipMapKey, (ValueOffset, InsertionTime, IsDeleted)>> {
         Arc::clone(&self.index)
     }
     fn size(&self) -> usize {

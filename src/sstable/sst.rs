@@ -16,7 +16,7 @@ use crate::{
     compaction::IndexWithSizeInBytes,
     consts::{DEFAULT_FALSE_POSITIVE_RATE, EOF, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8},
     err::StorageEngineError,
-    memtable::Entry,
+    memtable::{Entry, InsertionTime, IsDeleted, SkipMapKey, ValueOffset},
     sparse_index::{self, SparseIndex},
 };
 
@@ -27,13 +27,13 @@ pub struct SSTable {
     pub data_file_path: PathBuf,
     pub index_file_path: PathBuf,
     pub sstable_dir: PathBuf,
-    pub index: Arc<SkipMap<Vec<u8>, (usize, u64, bool)>>,
+    pub index: Arc<SkipMap<SkipMapKey, (ValueOffset, InsertionTime, IsDeleted)>>,
     pub created_at: u64,
     pub size: usize,
 }
 
 impl IndexWithSizeInBytes for SSTable {
-    fn get_index(&self) -> Arc<SkipMap<Vec<u8>, (usize, u64, bool)>> {
+    fn get_index(&self) -> Arc<SkipMap<SkipMapKey, (ValueOffset, InsertionTime, IsDeleted)>> {
         Arc::clone(&self.index)
     }
     fn size(&self) -> usize {

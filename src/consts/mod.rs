@@ -26,7 +26,10 @@ pub const TOMB_STONE_MARKER: usize = 0;
 
 // This is a minimum time that must pass since the last compaction attempt for a specific data file (SSTable).
 // This prevents continuous re-compactions of the same file.
-pub const TOMBSTONE_COMPACTION_INTERVAL_MILLI: u64 = 10 * 86400000;
+pub const DEFAULT_TOMBSTONE_COMPACTION_INTERVAL_MILLI: u64 = 10 * 86400000;
+
+// 2 minute (will change this)
+pub const DEFAULT_COMPACTION_INTERVAL_MILLI: u64 = 60000;
 
 pub const CHANNEL_BUFFER_SIZE: usize = 1;
 

@@ -4,6 +4,7 @@ use crate::consts::{
 };
 use crate::err::StorageEngineError;
 
+use crate::memtable::{InsertionTime, IsDeleted, SkipMapKey, ValueOffset};
 use crate::sstable::{SSTable, SSTablePath};
 use chrono::Utc;
 use crossbeam_skiplist::SkipMap;
@@ -14,6 +15,8 @@ use std::{path::PathBuf, sync::Arc};
 use tokio::fs;
 use uuid::Uuid;
 
+type SSTablesToRemove = Vec<(BucketID, Vec<SSTablePath>)>;
+type BucketsToCompact = Result<(Vec<Bucket>, SSTablesToRemove), StorageEngineError>;
 pub type BucketID = Uuid;
 
 #[derive(Debug, Clone)]
@@ -33,13 +36,10 @@ pub struct Bucket {
 use StorageEngineError::*;
 
 pub trait IndexWithSizeInBytes {
-    fn get_index(&self) -> Arc<SkipMap<Vec<u8>, (usize, u64, bool)>>; // usize for value offset, u64 to store entry creation date in milliseconds
+    fn get_index(&self) -> Arc<SkipMap<SkipMapKey, (ValueOffset, InsertionTime, IsDeleted)>>; // usize for value offset, u64 to store entry creation date in milliseconds
     fn size(&self) -> usize;
     fn find_biggest_key_from_table(&self) -> Result<Vec<u8>, StorageEngineError>;
 }
-type SSTablesToRemove = Vec<(BucketID, Vec<SSTablePath>)>;
-
-type BucketsToCompact = Result<(Vec<Bucket>, SSTablesToRemove), StorageEngineError>;
 
 impl Bucket {
     pub async fn new(dir: PathBuf) -> Self {

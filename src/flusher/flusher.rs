@@ -1,17 +1,17 @@
 use crate::{
     bloom_filter::BloomFilter, cfg::Config, compaction::BucketMap, err::StorageEngineError,
-    key_offseter::TableBiggestKeys, memtable::InMemoryTable, storage_engine::ExRW,
+    key_offseter::TableBiggestKeys, memtable::InMemoryTable, storage_engine::ExRw,
 };
 use indexmap::IndexMap;
 use std::sync::Arc;
 use std::{borrow::Borrow, hash::Hash};
 pub type InActiveMemtableID = Vec<u8>;
-pub type InActiveMemtable = Arc<RwLock<InMemoryTable<Vec<u8>>>>;
+pub type InActiveMemtable = ExRw<InMemoryTable<Vec<u8>>>;
 pub type FlushDataMemTable = (InActiveMemtableID, InActiveMemtable);
 
 use tokio::spawn;
 use tokio::sync::mpsc::Receiver;
-use tokio::sync::RwLock;
+
 
 #[derive(Debug)]
 pub struct FlushUpdateMsg {
@@ -39,12 +39,12 @@ pub struct Flusher<K>
 where
     K: Hash + PartialOrd + Ord + Send + Sync,
 {
-    pub(crate) read_only_memtable: ExRW<IndexMap<K, ExRW<InMemoryTable<K>>>>,
-    pub(crate) table_to_flush: ExRW<InMemoryTable<Vec<u8>>>,
+    pub(crate) read_only_memtable: ExRw<IndexMap<K, ExRw<InMemoryTable<K>>>>,
+    pub(crate) table_to_flush: ExRw<InMemoryTable<Vec<u8>>>,
     pub(crate) table_id: Vec<u8>,
-    pub(crate) bucket_map: ExRW<BucketMap>,
-    pub(crate) bloom_filters: ExRW<Vec<BloomFilter>>,
-    pub(crate) biggest_key_index: ExRW<TableBiggestKeys>,
+    pub(crate) bucket_map: ExRw<BucketMap>,
+    pub(crate) bloom_filters: ExRw<Vec<BloomFilter>>,
+    pub(crate) biggest_key_index: ExRw<TableBiggestKeys>,
     pub(crate) use_ttl: bool,
     pub(crate) entry_ttl: u64,
 }
@@ -54,12 +54,12 @@ where
     K: Hash + PartialOrd + Ord + Send + Sync + 'static + Borrow<std::vec::Vec<u8>>,
 {
     pub fn new(
-        read_only_memtable: ExRW<IndexMap<K, ExRW<InMemoryTable<K>>>>,
-        table_to_flush: ExRW<InMemoryTable<Vec<u8>>>,
+        read_only_memtable: ExRw<IndexMap<K, ExRw<InMemoryTable<K>>>>,
+        table_to_flush: ExRw<InMemoryTable<Vec<u8>>>,
         table_id: Vec<u8>,
-        bucket_map: ExRW<BucketMap>,
-        bloom_filters: ExRW<Vec<BloomFilter>>,
-        biggest_key_index: ExRW<TableBiggestKeys>,
+        bucket_map: ExRw<BucketMap>,
+        bloom_filters: ExRw<Vec<BloomFilter>>,
+        biggest_key_index: ExRw<TableBiggestKeys>,
         use_ttl: bool,
         entry_ttl: u64,
     ) -> Self {
@@ -98,6 +98,13 @@ where
             .await?;
 
         let data_file_path = sstable_path.get_data_file_path().clone();
+
+        flush_data
+            .biggest_key_index
+            .write()
+            .await
+            .set(data_file_path, table_biggest_key);
+
         table_bloom_filter.set_sstable_path(sstable_path);
         flush_data
             .bloom_filters
@@ -111,52 +118,26 @@ where
                 .get_hotness()
                 .cmp(&a.get_sstable_path().get_hotness())
         });
-        flush_data
-            .biggest_key_index
-            .write()
-            .await
-            .set(data_file_path, table_biggest_key);
-        let mut should_compact = false;
-
-        //check for compaction conditions before returning
-        // for (level, (_, bucket)) in flush_data.bucket_map.clone().buckets.iter().enumerate() {
-        //     if bucket.should_trigger_compaction(level) {
-        //         should_compact = true;
-        //         break;
-        //     }
-        // }
-
-        // if should_compact {
-        //     let mut compactor = Compactor::new(flush_data.use_ttl, flush_data.entry_ttl);
-        //     // compaction will continue to until all the table is balanced
-        //     compactor
-        //         .run_compaction(
-        //             &mut flush_data.bucket_map,
-        //             &mut flush_data.bloom_filters,
-        //             &mut flush_data.biggest_key_index,
-        //         )
-        //         .await?;
-        // }
 
         Ok(())
     }
 
     pub fn flush_data_collector(
         &self,
-        rcx: ExRW<Receiver<FlushDataMemTable>>,
-        buckets: ExRW<BucketMap>,
-        bloom_filters: ExRW<Vec<BloomFilter>>,
-        biggest_key_index: ExRW<TableBiggestKeys>,
-        read_only_memtable: ExRW<IndexMap<K, ExRW<InMemoryTable<K>>>>,
+        rcx: ExRw<Receiver<FlushDataMemTable>>,
+        buckets: ExRw<BucketMap>,
+        bloom_filters: ExRw<Vec<BloomFilter>>,
+        biggest_key_index: ExRw<TableBiggestKeys>,
+        read_only_memtable: ExRw<IndexMap<K, ExRw<InMemoryTable<K>>>>,
         config: Config,
     ) {
         let rcx_clone = Arc::clone(&rcx);
 
         spawn(async move {
-            let current_buckets = Arc::clone(&buckets);
-            let current_bloom_filters = Arc::clone(&bloom_filters);
-            let current_biggest_key_index = Arc::clone(&biggest_key_index);
-            let current_read_only_memtables = Arc::clone(&read_only_memtable);
+            let current_buckets = &buckets;
+            let current_bloom_filters = &bloom_filters;
+            let current_biggest_key_index = &biggest_key_index;
+            let current_read_only_memtables = &read_only_memtable;
             while let Some((table_id, table_to_flush)) = rcx_clone.write().await.recv().await {
                 let mut flusher = Flusher::<K>::new(
                     Arc::clone(&read_only_memtable),
@@ -175,7 +156,6 @@ where
                             .write()
                             .await
                             .shift_remove(&table_id);
-                        println!("Fix is successful")
                     }
                     // Handle failure case here
                     Err(err) => {
