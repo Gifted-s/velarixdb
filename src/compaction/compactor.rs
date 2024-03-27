@@ -89,7 +89,7 @@ impl Compactor {
             let current_biggest_key_index = &biggest_key_index;
             loop {
                 let mut should_compact = false;
-
+                println!("running loop");
                 // check for compaction conditions before returning
                 for (level, (_, bucket)) in current_buckets.read().await.buckets.iter().enumerate()
                 {

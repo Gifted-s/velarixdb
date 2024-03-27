@@ -167,3 +167,4 @@ pub enum StorageEngineError {
     #[error("Failed to insert to a bucket, reason `{0}`")]
     FailedToInsertToBucket(String),
 }
+
