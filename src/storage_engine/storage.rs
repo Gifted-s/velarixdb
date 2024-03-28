@@ -18,12 +18,7 @@ use crate::{
 use chrono::Utc;
 use indexmap::IndexMap;
 use log::error;
-use tokio::{fs::File, io};
-use tokio::{fs::OpenOptions, io::AsyncSeekExt};
-use tokio::{
-    fs::{self, read_dir},
-    io::AsyncReadExt,
-};
+use tokio::fs::{self, read_dir};
 use tokio::{
     spawn,
     sync::{
@@ -37,7 +32,7 @@ use std::path::PathBuf;
 
 use std::{hash::Hash, sync::Arc};
 
-/// Exclusive write access
+/// Exclusive write access:
 /// Multiple readers or exactly one writer at a time
 pub type ExRw<T> = Arc<RwLock<T>>;
 trait ExRwFactory<T> {
@@ -161,18 +156,26 @@ impl StorageEngine<Vec<u8>> {
     }
 
     /// A Result indicating success or an `StorageEngineError` if an error occurred.
-    pub async fn put(&mut self, key: &str, value: &str) -> Result<bool, StorageEngineError> {
+    pub async fn put(
+        &mut self,
+        key: &str,
+        value: &str,
+        existing_v_offset: Option<usize>,
+    ) -> Result<bool, StorageEngineError> {
         // Convert the key and value into Vec<u8> from given &str.
         let key = &key.as_bytes().to_vec();
         let value = &value.as_bytes().to_vec();
         let created_at = Utc::now().timestamp_millis() as u64;
         let is_tombstone = false;
-
-        // Write to value log first which returns the offset
-        let v_offset = self
-            .val_log
-            .append(key, value, created_at, is_tombstone)
-            .await?;
+        let v_offset;
+        if let Some(v_off) = existing_v_offset {
+            v_offset = v_off;
+        } else {
+            v_offset = self
+                .val_log
+                .append(key, value, created_at, is_tombstone)
+                .await?;
+        }
 
         if self.active_memtable.is_full(HEAD_ENTRY_KEY.len()) {
             let capacity = self.active_memtable.capacity();
@@ -186,7 +189,7 @@ impl StorageEngine<Vec<u8>> {
 
             // reset head in vLog
             self.val_log
-                .set_head(head_offset.clone().unwrap().value().0);
+                .set_head(head_offset.to_owned().unwrap().value().0);
             let head_entry = Entry::new(
                 HEAD_ENTRY_KEY.to_vec(),
                 head_offset.unwrap().value().0,
@@ -230,15 +233,9 @@ impl StorageEngine<Vec<u8>> {
                 false_positive_rate,
             );
         }
-        let entry = Entry::new(
-            key.to_vec(),
-            v_offset.try_into().unwrap(),
-            created_at,
-            is_tombstone,
-        );
+        let entry = Entry::new(key.to_vec(), v_offset, created_at, is_tombstone);
 
         self.active_memtable.insert(&entry)?;
-        println!("Inserted ==================================== {:?}", entry.key);
         Ok(true)
     }
 
@@ -431,7 +428,7 @@ impl StorageEngine<Vec<u8>> {
 
     pub async fn update(&mut self, key: &str, value: &str) -> Result<bool, StorageEngineError> {
         // Call set method defined in StorageEngine.
-        self.put(key, value).await
+        self.put(key, value, None).await
     }
 
     pub async fn clear(&mut self) -> Result<Self, StorageEngineError> {
@@ -474,12 +471,10 @@ impl StorageEngine<Vec<u8>> {
                 .map_err(GetFileMetaDataError)?
                 .len()
                 == 0;
-        println!("EMPTY : {}", vlog_empty);
         let biggest_key_index = TableBiggestKeys::new();
         let mut vlog = ValueLog::new(vlog_path).await?;
         let meta = Meta::new(&dir.meta);
         if vlog_empty {
-            println!("empty");
             let mut active_memtable = InMemoryTable::with_specified_capacity_and_rate(
                 size_unit,
                 capacity,
@@ -941,7 +936,7 @@ mod tests {
         // Specify the number of random strings to generate
         let num_strings = 100000; // 100k
 
-       // Specify the length of each random string
+        // Specify the length of each random string
         let string_length = 2;
         // Generate random strings and store them in a vector
         let mut random_strings: Vec<String> = Vec::with_capacity(num_strings);
@@ -959,7 +954,7 @@ mod tests {
             let k = k.clone();
             tokio::spawn(async move {
                 let mut value = s_engine.write().await;
-                let resp = value.put(&k, "boy").await;
+                let resp = value.put(&k, "boy", None).await;
                 match resp {
                     Ok(v) => {
                         assert_eq!(v, true)
@@ -1027,7 +1022,7 @@ mod tests {
 
         // Insert the generated random strings
         for (_, s) in random_strings.iter().enumerate() {
-            s_engine.put(s, "boyode").await.unwrap();
+            s_engine.put(s, "boyode", None).await.unwrap();
         }
         // let compactor = Compactor::new();
 
@@ -1092,7 +1087,7 @@ mod tests {
             let k = k.clone();
             tokio::spawn(async move {
                 let mut value = s_engine.write().await;
-                value.put(&k, "boyode").await
+                value.put(&k, "boyode", None).await
             })
         });
 
@@ -1259,7 +1254,7 @@ mod tests {
             random_strings.push(random_string);
         }
         for k in random_strings.clone() {
-            s_engine.put(&k, "boyode").await.unwrap();
+            s_engine.put(&k, "boyode", None).await.unwrap();
         }
         let sg = ExRwWrapper::new(s_engine);
         let binding = random_strings.clone();
@@ -1268,7 +1263,7 @@ mod tests {
             let k = k.clone();
             tokio::spawn(async move {
                 let mut value = s_engine.write().await;
-                value.put(&k, "boyode").await
+                value.put(&k, "boyode", None).await
             })
         });
 
@@ -1383,11 +1378,11 @@ mod tests {
             let k = k.clone();
             tokio::spawn(async move {
                 let mut value = s_engine.write().await;
-                value.put(&k, "boyode").await
+                value.put(&k, "boyode", None).await
             })
         });
         let key = "aunkanmi";
-        let _ = sg.write().await.put(key, "boyode").await;
+        let _ = sg.write().await.put(key, "boyode", None).await;
         // // Collect the results from the spawned tasks
         for task in tasks {
             tokio::select! {
