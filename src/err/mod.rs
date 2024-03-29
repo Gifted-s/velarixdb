@@ -175,6 +175,11 @@ pub enum StorageEngineError {
      /// Error punching hole in file
      #[error("Error punching hole in file, reason `{0}`")]
      GCErrorFailedToPunchHoleInVlogFile(io::Error),
+
+    /// Error running GC in an unsurpported operating system
+    #[error("Unsuported OS, err message `{0}`")]
+     GCErrorUnsupportedPlatform(String)
  
 }
+
 

@@ -1,68 +1,6 @@
-// extern crate nix;
-// extern crate libc;
+// NOTE: GC is only supported on Linux based OS for now because File Systems for other OS does not
+// support the FILE_PUNCH_HOLE command which is crucial for reclaiming unused spaces on the disk
 
-// use std::fs::File;
-// use std::io::{Error, Result};
-// use std::os::unix::io::AsRawFd;
-
-// use nix::libc::{c_int, off_t};
-
-// extern "C" {
-//     fn fallocate(fd: libc::c_int, mode: c_int, offset: off_t, len: off_t) -> c_int;
-// }
-
-// const FALLOC_FL_PUNCH_HOLE: c_int = 0x2;
-// const FALLOC_FL_KEEP_SIZE: c_int = 0x1;
-
-// fn punch_holes(file_path: &str, offset: off_t, length: off_t) -> Result<()> {
-//     let file = File::open(file_path)?;
-
-//     let fd = file.as_raw_fd();
-
-//     unsafe {
-//         let result = fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, offset, length);
-
-//         if result == 0 {
-//             Ok(())
-//         } else {
-//             Err(Error::last_os_error())
-//         }
-//     }
-// }
-
-// fn main() {
-//     let file_path = "example.txt";
-//     let offset = 10; // Offset where holes should start
-//     let length = 120; // Length of the hole to punch
-
-//     match punch_holes(file_path, offset, length) {
-//         Ok(()) => println!("Holes punched successfully"),
-//         Err(err) => eprintln!("Error punching holes: {}", err),
-//     }
-// }
-
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use crate::bloom_filter;
-//     use log::info;
-//     use std::fs::remove_dir;
-
-//     // Generate test to find keys after compaction
-//     #[test]
-//     fn gc_test() {
-//        // Specify the file path, offset, and length for punching a hole
-//     let file_path = "example.txt";
-//     let offset = 10;
-//     let length = 120;
-
-//     // Call the punch_hole function
-//     match punch_holes(file_path, offset, length) {
-//         Ok(()) => println!("Hole punched successfully."),
-//         Err(err) => eprintln!("Error punching hole: {}", err),
-//     }
-//     }
-// }
 extern crate libc;
 extern crate nix;
 
@@ -87,7 +25,6 @@ use std::sync::Arc;
 pub(crate) type K = Vec<u8>;
 pub(crate) type V = Vec<u8>;
 pub(crate) type VOffset = usize;
-
 
 extern "C" {
     fn fallocate(fd: libc::c_int, mode: c_int, offset: off_t, len: off_t) -> c_int;
@@ -114,6 +51,7 @@ impl GarbageCollector {
         // Step 1: Read chunks to garbage collect
         // TODO handle errors
         let store = engine.read().await;
+        let punch_hole_start_offset = store.val_log.tail_offset;
         let (entries, total_bytes_read) = store
             .val_log
             .read_chunk_to_garbage_collect(GC_CHUNK_SIZE)
@@ -239,28 +177,47 @@ impl GarbageCollector {
                 .await;
         }
 
+        self.garbage_collect(
+            Arc::clone(&engine),
+            invalid_entries,
+            punch_hole_start_offset,
+            total_bytes_read,
+        )
+        .await?;
+
         Ok(())
     }
 
-    pub fn garbage_collect(
+    pub async fn garbage_collect(
         &self,
         engine: ExRw<StorageEngine<K>>,
         invalid_entries: ExRw<Vec<ValueLogEntry>>,
+        punch_hole_start_offset: usize,
+        punch_hole_length: usize,
     ) -> std::result::Result<(), StorageEngineError> {
-        
-        // #[cfg(target_os = "windows")]
-        // // Punchole in file for windows specific architectures
-    
-        // #[cfg(target_os = "macos")]
-        // // Punchole in file for mac specific architectures
-    
-        // // Punchole in file for linux specific architectures
-        // #[cfg(target_os = "linux")]
-        
-        Ok(())
+        #[cfg(target_os = "linux")]
+        {
+            let eng_read_lock = engine.read().await;
+            let garbage_collected = self
+                .punch_holes(
+                    eng_read_lock.val_log.file_path.to_str().unwrap(),
+                    punch_hole_start_offset as i64,
+                    punch_hole_length as i64,
+                )
+                .await?;
+            Ok(())
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            return Err(StorageEngineError::GCErrorUnsupportedPlatform(
+                String::from("File system does not support file punch hole"),
+            ));
+        }
     }
 
     pub async fn punch_holes(
+        &self,
         file_path: &str,
         offset: off_t,
         length: off_t,
