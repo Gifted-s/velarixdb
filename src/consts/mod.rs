@@ -2,6 +2,8 @@ use crate::storage_engine::SizeUnit;
 
 pub const GC_THREAD_COUNT: u32 = 5;
 
+pub const GC_CHUNK_SIZE: usize  = SizeUnit::Kilobytes.to_bytes(1);
+
 pub const WRITE_BUFFER_SIZE: usize = SizeUnit::Kilobytes.to_bytes(10);
 
 pub const DEFAULT_MAX_WRITE_BUFFER_NUMBER: usize = 2;

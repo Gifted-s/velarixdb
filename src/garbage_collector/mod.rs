@@ -1,2 +1,2 @@
 mod gc;
-mod gc2;
+pub use gc::GarbageCollector;

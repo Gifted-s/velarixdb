@@ -12,6 +12,7 @@ use crate::{
     err::StorageEngineError,
 };
 use StorageEngineError::*;
+type TotalBytesRead = usize;
 #[derive(Debug, Clone)]
 pub struct ValueLog {
     pub file_path: PathBuf,
@@ -331,9 +332,9 @@ impl ValueLog {
     }
 
     pub async fn read_chunk_to_garbage_collect(
-        &mut self,
+        &self,
         bytes_to_collect: usize,
-    ) -> Result<Vec<ValueLogEntry>, StorageEngineError> {
+    ) -> Result<(Vec<ValueLogEntry>, TotalBytesRead), StorageEngineError> {
         let file_path = PathBuf::from(&self.file_path);
         let mut file = OpenOptions::new()
             .read(true)
@@ -348,7 +349,7 @@ impl ValueLog {
             .map_err(|err| FileSeekError(err))?;
         let mut entries = Vec::new();
 
-        let mut total_bytes_read = 0;
+        let mut total_bytes_read: usize = 0;
 
         loop {
             // get key length
@@ -360,7 +361,7 @@ impl ValueLog {
                         error: io::Error::new(err.kind(), EOF),
                     })?;
             if bytes_read == 0 {
-                return Ok(entries);
+                return Ok((entries, total_bytes_read));
             }
             total_bytes_read += bytes_read;
             let key_len = u32::from_le_bytes(key_len_bytes);
@@ -459,7 +460,7 @@ impl ValueLog {
 
             // Ensure the size read from value log is approximately bytes expected to be garbage collected
             if total_bytes_read >= bytes_to_collect {
-                return Ok(entries);
+                return Ok((entries, total_bytes_read));
             }
         }
     }
