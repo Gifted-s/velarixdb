@@ -59,7 +59,7 @@ pub const MAX_TRESHOLD: usize = 32;
 
 pub const DEFAULT_ALLOW_PREFETCH: bool = true;
 
-pub const DEFAULT_PREFETCH_SIZE: usize = 32;
+pub const DEFAULT_PREFETCH_SIZE: usize = 10;
 
 pub const EOF: &str = "EOF";
 

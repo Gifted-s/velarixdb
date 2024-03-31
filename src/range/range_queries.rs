@@ -2,17 +2,17 @@ use serde_json::map::Entry;
 
 use crate::storage_engine::StorageEngine;
 
-struct RangeIterator<'a> {
-    start: i64,
-    current: i64,
-    end: i64,
+pub struct RangeIterator<'a> {
+    start: u64,
+    current: u64,
+    end: u64,
     allow_prefetch: bool,
     prefetch_entries_size: usize,
     prefetch_entries: Vec<Entry<'a>>,
 }
 
 impl<'a> RangeIterator<'a> {
-    fn new(&self, start: i64, allow_prefetch: bool, prefetch_entries_size: usize) -> Self {
+    fn new(start: u64, allow_prefetch: bool, prefetch_entries_size: usize) -> Self {
         Self {
             start,
             current: 0,
@@ -21,10 +21,6 @@ impl<'a> RangeIterator<'a> {
             prefetch_entries_size,
             prefetch_entries: Vec::new(),
         }
-    }
-
-    fn seek(&mut self) -> Option<Entry> {
-        None
     }
 
     fn next(&mut self) -> Option<Entry> {
@@ -45,7 +41,6 @@ impl<'a> RangeIterator<'a> {
     fn end(&mut self) -> Option<Entry> {
         None
     }
-
 }
 
 impl<'a> Iterator for RangeIterator<'a> {
@@ -56,5 +51,8 @@ impl<'a> Iterator for RangeIterator<'a> {
     }
 }
 
-
-impl StorageEngine<Vec<u8>> {}
+impl StorageEngine<Vec<u8>> {
+    pub async fn seek(&self, start: u64) -> impl Iterator {
+        RangeIterator::new(start, self.config.allow_prefetch, self.config.prefetch_size)
+    }
+}

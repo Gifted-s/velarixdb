@@ -300,9 +300,9 @@ impl StorageEngine<Vec<u8>> {
                                 Ok(result) => {
                                     if let Some(block_offset) = result {
                                         let sst = SSTable::new_with_exisiting_file_path(
-                                            sstable.dir.clone(),
-                                            sstable.data_file_path.clone(),
-                                            sstable.index_file_path.clone(),
+                                            sstable.dir.to_owned(),
+                                            sstable.data_file_path.to_owned(),
+                                            sstable.index_file_path.to_owned(),
                                         );
                                         match sst.get(block_offset, &key).await {
                                             Ok(None) => continue,
