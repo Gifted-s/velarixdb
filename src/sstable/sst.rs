@@ -46,6 +46,10 @@ impl IndexWithSizeInBytes for SSTable {
     fn find_biggest_key_from_table(&self) -> Result<Vec<u8>, StorageEngineError> {
         self.find_biggest_key()
     }
+
+    fn find_smallest_key_from_table(&self) -> Result<Vec<u8>, StorageEngineError> {
+        self.find_smallest_key()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -144,6 +148,16 @@ impl SSTable {
             None => Err(BiggestKeyIndexError),
         }
     }
+
+    // Find the biggest element in the skip list
+    pub fn find_smallest_key(&self) -> Result<Vec<u8>, StorageEngineError> {
+        let largest_entry = self.index.iter().next();
+        match largest_entry {
+            Some(e) => return Ok(e.key().to_vec()),
+            None => Err(LowestKeyIndexError),
+        }
+    }
+
     pub(crate) async fn write_to_file(&self) -> Result<(), StorageEngineError> {
         // Open the file in write mode with the append flag.
         let data_file_path = &self.data_file_path;

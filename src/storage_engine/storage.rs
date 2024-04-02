@@ -8,7 +8,7 @@ use crate::{
     },
     err::StorageEngineError,
     flusher::{FlushDataMemTable, Flusher},
-    key_offseter::TableBiggestKeys,
+    key_offseter::KeyRange,
     memtable::{Entry, InMemoryTable},
     meta::Meta,
     sparse_index::SparseIndex,
@@ -56,7 +56,7 @@ where
     pub bloom_filters: ExRw<Vec<BloomFilter>>,
     pub val_log: ValueLog,
     pub buckets: ExRw<BucketMap>,
-    pub biggest_key_index: ExRw<TableBiggestKeys>,
+    pub key_range: ExRw<KeyRange>,
     pub compactor: Compactor,
     pub meta: Meta,
     pub flusher: Flusher<K>,
@@ -140,7 +140,7 @@ impl StorageEngine<Vec<u8>> {
                 Arc::clone(rcx),
                 Arc::clone(&self.buckets),
                 Arc::clone(&self.bloom_filters),
-                Arc::clone(&self.biggest_key_index),
+                Arc::clone(&self.key_range),
                 Arc::clone(&self.read_only_memtables),
                 self.config.to_owned(),
             );
@@ -150,7 +150,7 @@ impl StorageEngine<Vec<u8>> {
         self.compactor.start_periodic_background_compaction(
             Arc::clone(&self.buckets),
             Arc::clone(&self.bloom_filters),
-            Arc::clone(&self.biggest_key_index),
+            Arc::clone(&self.key_range),
         );
         return Ok(true);
     }
@@ -272,9 +272,9 @@ impl StorageEngine<Vec<u8>> {
                 return Err(KeyFoundAsTombstoneInMemtableError);
             } else if most_recent_insert_time == 0 {
                 //Step 3 > Check the sstables
-                let biggest_key_index_r_lock = &self.biggest_key_index.read().await;
+                let key_range_r_lock = &self.key_range.read().await;
                 let sstables_within_key_range =
-                    biggest_key_index_r_lock.filter_sstables_by_biggest_key(&key);
+                    key_range_r_lock.filter_sstables_by_biggest_key(&key);
                 if sstables_within_key_range.is_empty() {
                     return Err(KeyNotFoundInAnySSTableError);
                 }
@@ -471,7 +471,7 @@ impl StorageEngine<Vec<u8>> {
                 .map_err(GetFileMetaDataError)?
                 .len()
                 == 0;
-        let biggest_key_index = TableBiggestKeys::new();
+        let key_range = KeyRange::new();
         let mut vlog = ValueLog::new(vlog_path).await?;
         let meta = Meta::new(&dir.meta);
         if vlog_empty {
@@ -511,7 +511,7 @@ impl StorageEngine<Vec<u8>> {
                 Vec::new(),
                 ExRwWrapper::new(buckets.to_owned()),
                 ExRwWrapper::new(Vec::new()),
-                ExRwWrapper::new(biggest_key_index.to_owned()),
+                ExRwWrapper::new(key_range.to_owned()),
                 config.enable_ttl,
                 config.entry_ttl_millis,
             );
@@ -521,7 +521,7 @@ impl StorageEngine<Vec<u8>> {
                 bloom_filters: ExRwWrapper::new(Vec::new()),
                 buckets: ExRwWrapper::new(buckets.to_owned()),
                 dir,
-                biggest_key_index: ExRwWrapper::new(biggest_key_index),
+                key_range: ExRwWrapper::new(key_range),
                 compactor: Compactor::new(config.enable_ttl, config.entry_ttl_millis),
                 config: config.clone(),
                 meta,
@@ -699,7 +699,7 @@ impl StorageEngine<Vec<u8>> {
                 let buckets_map_arc = ExRwWrapper::new(buckets_map.to_owned());
                 let bloom_filter_arc = ExRwWrapper::new(bloom_filters);
                 //TODO:  we also need to recover this from memory
-                let biggest_key_index_arc = ExRwWrapper::new(biggest_key_index.to_owned());
+                let key_range_arc = ExRwWrapper::new(key_range.to_owned());
 
                 let flusher = Flusher::new(
                     ExRwWrapper::new(read_only_memtables.to_owned()),
@@ -707,7 +707,7 @@ impl StorageEngine<Vec<u8>> {
                     table_id.to_owned(),
                     buckets_map_arc.to_owned(),
                     bloom_filter_arc.to_owned(),
-                    biggest_key_index_arc.to_owned(),
+                    key_range_arc.to_owned(),
                     config.enable_ttl,
                     config.entry_ttl_millis,
                 );
@@ -718,7 +718,7 @@ impl StorageEngine<Vec<u8>> {
                     dir,
                     buckets: buckets_map_arc.to_owned(),
                     bloom_filters: bloom_filter_arc,
-                    biggest_key_index: biggest_key_index_arc,
+                    key_range: key_range_arc,
                     meta,
                     flusher,
                     compactor: Compactor::new(config.enable_ttl, config.entry_ttl_millis),
@@ -851,10 +851,12 @@ impl StorageEngine<Vec<u8>> {
         self.bloom_filters.write().await.push(bf);
 
         let biggest_key = memtable.read().await.find_biggest_key()?;
-        self.biggest_key_index
-            .write()
-            .await
-            .set(sstable_path.get_data_file_path(), biggest_key);
+        let smallest_key = memtable.read().await.find_smallest_key()?;
+        self.key_range.write().await.set(
+            sstable_path.get_data_file_path(),
+            smallest_key,
+            biggest_key,
+        );
 
         Ok(())
     }
@@ -864,7 +866,7 @@ impl StorageEngine<Vec<u8>> {
             .run_compaction(
                 Arc::clone(&self.buckets),
                 Arc::clone(&self.bloom_filters.clone()),
-                Arc::clone(&self.biggest_key_index),
+                Arc::clone(&self.key_range),
             )
             .await
     }

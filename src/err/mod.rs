@@ -133,9 +133,9 @@ pub enum StorageEngineError {
     #[error("Failed to read value log file : {error}")]
     ValueLogFileReadError { error: io::Error },
 
-     /// There was an error while atttempting to sync writes to the value log file
-     #[error("Failed to sync writes to value log file : {error}")]
-     ValueLogFileSyncError { error: io::Error },
+    /// There was an error while atttempting to sync writes to the value log file
+    #[error("Failed to sync writes to value log file : {error}")]
+    ValueLogFileSyncError { error: io::Error },
 
     /// There was an error while atttempting to open v_log directory
     #[error("Failed to open value log directory `{error}`")]
@@ -148,7 +148,6 @@ pub enum StorageEngineError {
     /// Block is full
     #[error("Block is full")]
     BlockIsFullError,
-
 
     /// Error while writing to index file
     #[error("Index file write error")]
@@ -165,6 +164,9 @@ pub enum StorageEngineError {
     #[error("Error finding biggest key in memtable (None was returned)")]
     BiggestKeyIndexError,
 
+    #[error("Error finding lowest key in memtable (None was returned)")]
+    LowestKeyIndexError,
+
     #[error("All bloom filters return false for all sstables")]
     KeyNotFoundByAnyBloomFilterError,
 
@@ -172,14 +174,11 @@ pub enum StorageEngineError {
     #[error("Failed to insert to a bucket, reason `{0}`")]
     FailedToInsertToBucket(String),
 
-     /// Error punching hole in file
-     #[error("Error punching hole in file, reason `{0}`")]
-     GCErrorFailedToPunchHoleInVlogFile(io::Error),
+    /// Error punching hole in file
+    #[error("Error punching hole in file, reason `{0}`")]
+    GCErrorFailedToPunchHoleInVlogFile(io::Error),
 
     /// Error running GC in an unsurpported operating system
     #[error("Unsuported OS, err message `{0}`")]
-     GCErrorUnsupportedPlatform(String)
- 
+    GCErrorUnsupportedPlatform(String),
 }
-
-

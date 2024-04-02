@@ -18,7 +18,7 @@ use crate::{
     bloom_filter::BloomFilter,
     consts::TOMB_STONE_TTL,
     err::StorageEngineError,
-    key_offseter::TableBiggestKeys,
+    key_offseter::KeyRange,
     memtable::Entry,
     sstable::{SSTable, SSTablePath},
 };
@@ -79,17 +79,16 @@ impl Compactor {
         &self,
         bucket_map: ExRw<BucketMap>,
         bloom_filters: ExRw<Vec<BloomFilter>>,
-        biggest_key_index: ExRw<TableBiggestKeys>,
+        key_range: ExRw<KeyRange>,
     ) {
         let use_ttl = self.use_ttl;
         let entry_ttl = self.entry_ttl;
         tokio::spawn(async move {
             let current_buckets = &bucket_map;
             let current_bloom_filters = &bloom_filters;
-            let current_biggest_key_index = &biggest_key_index;
+            let current_key_range = &key_range;
             loop {
                 let mut should_compact = false;
-                println!("running loop");
                 // check for compaction conditions before returning
                 for (level, (_, bucket)) in current_buckets.read().await.buckets.iter().enumerate()
                 {
@@ -106,7 +105,7 @@ impl Compactor {
                         .run_compaction(
                             Arc::clone(&current_buckets),
                             Arc::clone(&current_bloom_filters),
-                            Arc::clone(&current_biggest_key_index),
+                            Arc::clone(&current_key_range),
                         )
                         .await;
                     match comp_res {
@@ -127,7 +126,7 @@ impl Compactor {
         &mut self,
         bucket_map: ExRw<BucketMap>,
         bf: ExRw<Vec<BloomFilter>>,
-        biggest_key_index: ExRw<TableBiggestKeys>,
+        key_range: ExRw<KeyRange>,
     ) -> Result<bool, StorageEngineError> {
         println!("Compaction started");
         let mut number_of_compactions = 0;
@@ -139,7 +138,7 @@ impl Compactor {
         loop {
             let buckets = Arc::clone(&bucket_map);
             let bloom_filters = Arc::clone(&bf);
-            let biggest_key_index = Arc::clone(&biggest_key_index);
+            let key_range = Arc::clone(&key_range);
             // Step 1: Extract buckets to compact
             let buckets_to_compact_and_sstables_to_remove =
                 buckets.read().await.extract_buckets_to_compact().await?;
@@ -180,13 +179,18 @@ impl Compactor {
                                 // Step 5: Store the bloom filter in the bloom filters vector
                                 bloom_filters.write().await.push(m.bloom_filter);
                                 let biggest_key = m.sstable.find_biggest_key()?;
+                                let smallest_key = m.sstable.find_smallest_key()?;
                                 if biggest_key.is_empty() {
                                     return Err(BiggestKeyIndexError);
                                 }
-                                biggest_key_index
-                                    .write()
-                                    .await
-                                    .set(sstable_data_file_path, biggest_key);
+                                if smallest_key.is_empty() {
+                                    return Err(LowestKeyIndexError);
+                                }
+                                key_range.write().await.set(
+                                    sstable_data_file_path,
+                                    smallest_key,
+                                    biggest_key,
+                                );
                                 actual_number_of_sstables_written_to_disk += 1;
                             }
                             Err(err) => {
@@ -200,7 +204,7 @@ impl Compactor {
                                             .await
                                         {
                                             Ok(()) => {
-                                                biggest_key_index.write().await.remove(
+                                                key_range.write().await.remove(
                                                     bf.get_sstable_path().data_file_path.clone(),
                                                 );
                                                 info!("Stale SSTable File successfully deleted.")
@@ -233,7 +237,7 @@ impl Compactor {
                                 buckets,
                                 &sstables_files_to_remove,
                                 bloom_filters,
-                                biggest_key_index,
+                                key_range,
                             )
                             .await;
                         match bloom_filter_updated_opt {
@@ -271,12 +275,12 @@ impl Compactor {
         buckets: ExRw<BucketMap>,
         sstables_to_delete: &Vec<(BucketID, Vec<SSTablePath>)>,
         bloom_filters_with_both_old_and_new_sstables: ExRw<Vec<BloomFilter>>,
-        biggest_key_index: ExRw<TableBiggestKeys>,
+        key_range: ExRw<KeyRange>,
     ) -> Result<Option<bool>, StorageEngineError> {
         // Remove obsolete keys from biggest keys index
         sstables_to_delete.iter().for_each(|(_, sstables)| {
             sstables.iter().for_each(|s| {
-                let index = Arc::clone(&biggest_key_index);
+                let index = Arc::clone(&key_range);
                 let path = s.get_data_file_path();
                 tokio::spawn(async move {
                     index.write().await.remove(path);

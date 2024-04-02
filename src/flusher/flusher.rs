@@ -1,6 +1,6 @@
 use crate::{
     bloom_filter::BloomFilter, cfg::Config, compaction::BucketMap, err::StorageEngineError,
-    key_offseter::TableBiggestKeys, memtable::InMemoryTable, storage_engine::ExRw,
+    key_offseter::KeyRange, memtable::InMemoryTable, storage_engine::ExRw,
 };
 use indexmap::IndexMap;
 use std::sync::Arc;
@@ -17,7 +17,7 @@ pub struct FlushUpdateMsg {
     pub flushed_memtable_id: InActiveMemtableID,
     pub buckets: BucketMap,
     pub bloom_filters: Vec<BloomFilter>,
-    pub biggest_key_index: TableBiggestKeys,
+    pub key_range: KeyRange,
 }
 
 #[derive(Debug)]
@@ -26,7 +26,7 @@ pub enum FlushResponse {
         table_id: Vec<u8>,
         updated_bucket_map: BucketMap,
         updated_bloom_filters: Vec<BloomFilter>,
-        updated_biggest_key_index: TableBiggestKeys,
+        key_range: KeyRange,
     },
     Failed {
         reason: StorageEngineError,
@@ -43,7 +43,7 @@ where
     pub(crate) table_id: Vec<u8>,
     pub(crate) bucket_map: ExRw<BucketMap>,
     pub(crate) bloom_filters: ExRw<Vec<BloomFilter>>,
-    pub(crate) biggest_key_index: ExRw<TableBiggestKeys>,
+    pub(crate) key_range: ExRw<KeyRange>,
     pub(crate) use_ttl: bool,
     pub(crate) entry_ttl: u64,
 }
@@ -58,7 +58,7 @@ where
         table_id: Vec<u8>,
         bucket_map: ExRw<BucketMap>,
         bloom_filters: ExRw<Vec<BloomFilter>>,
-        biggest_key_index: ExRw<TableBiggestKeys>,
+        key_range: ExRw<KeyRange>,
         use_ttl: bool,
         entry_ttl: u64,
     ) -> Self {
@@ -68,7 +68,7 @@ where
             table_id,
             bucket_map,
             bloom_filters,
-            biggest_key_index,
+            key_range,
             use_ttl,
             entry_ttl,
         }
@@ -87,7 +87,7 @@ where
 
         let table_bloom_filter = &mut table.read().await.bloom_filter.to_owned();
         let table_biggest_key = table.read().await.find_biggest_key()?;
-
+        let table_smallest_key = table.read().await.find_smallest_key()?;
         let hotness = 1;
         let sstable_path = flush_data
             .bucket_map
@@ -98,11 +98,11 @@ where
 
         let data_file_path = sstable_path.get_data_file_path().clone();
 
-        flush_data
-            .biggest_key_index
-            .write()
-            .await
-            .set(data_file_path, table_biggest_key);
+        flush_data.key_range.write().await.set(
+            data_file_path,
+            table_smallest_key,
+            table_biggest_key,
+        );
 
         table_bloom_filter.set_sstable_path(sstable_path);
         flush_data
@@ -126,7 +126,7 @@ where
         rcx: ExRw<Receiver<FlushDataMemTable>>,
         buckets: ExRw<BucketMap>,
         bloom_filters: ExRw<Vec<BloomFilter>>,
-        biggest_key_index: ExRw<TableBiggestKeys>,
+        key_range: ExRw<KeyRange>,
         read_only_memtable: ExRw<IndexMap<K, ExRw<InMemoryTable<K>>>>,
         config: Config,
     ) {
@@ -135,7 +135,7 @@ where
         spawn(async move {
             let current_buckets = &buckets;
             let current_bloom_filters = &bloom_filters;
-            let current_biggest_key_index = &biggest_key_index;
+            let current_key_range = &key_range;
             let current_read_only_memtables = &read_only_memtable;
             while let Some((table_id, table_to_flush)) = rcx_clone.write().await.recv().await {
                 let mut flusher = Flusher::<K>::new(
@@ -144,7 +144,7 @@ where
                     table_id.to_owned(),
                     Arc::clone(&current_buckets),
                     Arc::clone(&current_bloom_filters),
-                    Arc::clone(&current_biggest_key_index),
+                    Arc::clone(&key_range),
                     config.enable_ttl,
                     config.entry_ttl_millis,
                 );
