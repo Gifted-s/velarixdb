@@ -21,6 +21,10 @@ use crate::{
 };
 
 use StorageEngineError::*;
+pub(crate) type K = Vec<u8>;
+pub(crate) type V = usize;
+pub(crate) type LastReadOffset = u64;
+pub(crate) type VOffset = usize;
 
 #[derive(Debug, Clone)]
 pub struct SSTable {
@@ -41,6 +45,10 @@ impl IndexWithSizeInBytes for SSTable {
     }
     fn find_biggest_key_from_table(&self) -> Result<Vec<u8>, StorageEngineError> {
         self.find_biggest_key()
+    }
+
+    fn find_smallest_key_from_table(&self) -> Result<Vec<u8>, StorageEngineError> {
+        self.find_smallest_key()
     }
 }
 
@@ -140,6 +148,16 @@ impl SSTable {
             None => Err(BiggestKeyIndexError),
         }
     }
+
+    // Find the biggest element in the skip list
+    pub fn find_smallest_key(&self) -> Result<Vec<u8>, StorageEngineError> {
+        let largest_entry = self.index.iter().next();
+        match largest_entry {
+            Some(e) => return Ok(e.key().to_vec()),
+            None => Err(LowestKeyIndexError),
+        }
+    }
+
     pub(crate) async fn write_to_file(&self) -> Result<(), StorageEngineError> {
         // Open the file in write mode with the append flag.
         let data_file_path = &self.data_file_path;
@@ -310,6 +328,113 @@ impl SSTable {
             let is_tombstone = is_tombstone_byte[0] == 1;
             if key == searched_key {
                 return Ok(Some((value_offset as usize, created_at, is_tombstone)));
+            }
+        }
+    }
+
+    pub(crate) async fn range(
+        &self,
+        start_offset: u32,
+        prefetch_size: usize,
+    ) -> Result<Option<(Vec<Entry<K, V>>, LastReadOffset)>, StorageEngineError> {
+        let mut entries = Vec::new();
+        // Open the file in read mode
+        let file_path = PathBuf::from(&self.data_file_path);
+        let mut file = OpenOptions::new()
+            .read(true)
+            .open(file_path.clone())
+            .await
+            .map_err(|err| SSTableFileOpenError {
+                path: file_path.clone(),
+                error: err,
+            })?;
+
+        file.seek(tokio::io::SeekFrom::Start(start_offset.into()))
+            .await
+            .map_err(|err| FileSeekError(err))?;
+
+        // search sstable for key
+        loop {
+            let mut key_len_bytes = [0; mem::size_of::<u32>()];
+            let mut bytes_read =
+                file.read(&mut key_len_bytes)
+                    .await
+                    .map_err(|err| SSTableFileReadError {
+                        path: file_path.clone(),
+                        error: err,
+                    })?;
+            if bytes_read == 0 {
+                return Ok(None);
+            }
+            let key_len = u32::from_le_bytes(key_len_bytes);
+            let mut key = vec![0; key_len as usize];
+            bytes_read = file
+                .read(&mut key)
+                .await
+                .map_err(|err| SSTableFileReadError {
+                    path: file_path.clone(),
+                    error: err,
+                })?;
+            if bytes_read == 0 {
+                return Err(UnexpectedEOF(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    EOF,
+                )));
+            }
+            let mut val_offset_bytes = [0; mem::size_of::<u32>()];
+            bytes_read =
+                file.read(&mut val_offset_bytes)
+                    .await
+                    .map_err(|err| SSTableFileReadError {
+                        path: file_path.clone(),
+                        error: err,
+                    })?;
+            if bytes_read == 0 {
+                return Err(UnexpectedEOF(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    EOF,
+                )));
+            }
+            let mut created_at_bytes = [0; mem::size_of::<u64>()];
+            bytes_read =
+                file.read(&mut created_at_bytes)
+                    .await
+                    .map_err(|err| SSTableFileReadError {
+                        path: file_path.clone(),
+                        error: err,
+                    })?;
+            if bytes_read == 0 {
+                return Err(UnexpectedEOF(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    EOF,
+                )));
+            }
+
+            let mut is_tombstone_byte = [0; 1];
+            bytes_read =
+                file.read(&mut is_tombstone_byte)
+                    .await
+                    .map_err(|err| SSTableFileReadError {
+                        path: file_path.clone(),
+                        error: err,
+                    })?;
+            if bytes_read == 0 {
+                return Err(UnexpectedEOF(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    EOF,
+                )));
+            }
+
+            let created_at = u64::from_le_bytes(created_at_bytes);
+            let value_offset = u32::from_le_bytes(val_offset_bytes) as usize;
+            let is_tombstone = is_tombstone_byte[0] == 1;
+            entries.push(Entry::new(key, value_offset, created_at, is_tombstone));
+            if entries.len() == prefetch_size {
+                let last_read_offset = file
+                    .seek(tokio::io::SeekFrom::Current(0))
+                    .await
+                    .map_err(|err| return StorageEngineError::FileSeekError(err))?;
+                return Ok(Some((entries, last_read_offset)));
             }
         }
     }

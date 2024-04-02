@@ -39,6 +39,7 @@ pub trait IndexWithSizeInBytes {
     fn get_index(&self) -> Arc<SkipMap<SkipMapKey, (ValueOffset, InsertionTime, IsDeleted)>>; // usize for value offset, u64 to store entry creation date in milliseconds
     fn size(&self) -> usize;
     fn find_biggest_key_from_table(&self) -> Result<Vec<u8>, StorageEngineError>;
+    fn find_smallest_key_from_table(&self) -> Result<Vec<u8>, StorageEngineError>;
 }
 
 impl Bucket {

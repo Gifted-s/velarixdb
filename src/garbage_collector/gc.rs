@@ -235,7 +235,7 @@ impl GarbageCollector {
                 offset,
                 length,
             );
-
+            // 0 return means the punch was successful
             if result == 0 {
                 Ok(())
             } else {

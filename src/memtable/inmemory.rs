@@ -49,6 +49,10 @@ impl IndexWithSizeInBytes for InMemoryTable<Vec<u8>> {
     fn find_biggest_key_from_table(&self) -> Result<Vec<u8>, StorageEngineError> {
         self.find_biggest_key()
     }
+
+    fn find_smallest_key_from_table(&self) -> Result<Vec<u8>, StorageEngineError> {
+        self.find_smallest_key()
+    }
 }
 
 impl Entry<Vec<u8>, usize> {
@@ -195,6 +199,15 @@ impl InMemoryTable<Vec<u8>> {
         match largest_entry {
             Some(e) => return Ok(e.key().to_vec()),
             None => Err(BiggestKeyIndexError),
+        }
+    }
+
+    // Find the smallest element in the skip list
+    pub fn find_smallest_key(&self) -> Result<Vec<u8>, StorageEngineError> {
+        let smallest_entry = self.index.iter().next();
+        match smallest_entry {
+            Some(e) => return Ok(e.key().to_vec()),
+            None => Err(LowestKeyIndexError),
         }
     }
     pub fn false_positive_rate(&mut self) -> f64 {

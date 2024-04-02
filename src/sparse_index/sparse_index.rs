@@ -10,6 +10,13 @@ use crate::{
     err::StorageEngineError,
 };
 use StorageEngineError::*;
+
+struct SparseIndexEntry {
+    key_prefix: u32,
+    key: Vec<u8>,
+    offset: u32,
+}
+
 pub struct SparseIndex {
     entries: Vec<SparseIndexEntry>,
     file_path: PathBuf,
@@ -25,8 +32,8 @@ impl SparseIndex {
 
     pub fn insert(&mut self, key_prefix: u32, key: Vec<u8>, offset: u32) {
         self.entries.push(SparseIndexEntry {
-            key,
             key_prefix,
+            key,
             offset,
         })
     }
@@ -139,10 +146,4 @@ impl SparseIndex {
             }
         }
     }
-}
-
-struct SparseIndexEntry {
-    key_prefix: u32,
-    key: Vec<u8>,
-    offset: u32,
 }

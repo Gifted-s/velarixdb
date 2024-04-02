@@ -2,7 +2,7 @@ use crate::storage_engine::SizeUnit;
 
 pub const GC_THREAD_COUNT: u32 = 5;
 
-pub const GC_CHUNK_SIZE: usize  = SizeUnit::Kilobytes.to_bytes(1);
+pub const GC_CHUNK_SIZE: usize = SizeUnit::Kilobytes.to_bytes(1);
 
 pub const WRITE_BUFFER_SIZE: usize = SizeUnit::Kilobytes.to_bytes(10);
 
@@ -59,7 +59,7 @@ pub const MAX_TRESHOLD: usize = 32;
 
 pub const DEFAULT_ALLOW_PREFETCH: bool = true;
 
-pub const DEFAULT_PREFETCH_SIZE: usize = 32;
+pub const DEFAULT_PREFETCH_SIZE: usize = 10;
 
 pub const EOF: &str = "EOF";
 
