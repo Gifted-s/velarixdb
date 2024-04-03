@@ -47,7 +47,7 @@ impl<'a> Iterator for RangeIterator<'a> {
     type Item = Entry<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        todo!()
+        None
     }
 }
 
