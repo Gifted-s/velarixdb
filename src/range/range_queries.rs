@@ -52,6 +52,7 @@ impl<'a> Iterator for RangeIterator<'a> {
 }
 
 impl StorageEngine<Vec<u8>> {
+    // Start if the range query
     pub async fn seek(&self, start: u64) -> impl Iterator {
         RangeIterator::new(start, self.config.allow_prefetch, self.config.prefetch_size)
     }
