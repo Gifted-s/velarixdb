@@ -113,7 +113,7 @@ impl GarbageCollector {
                 result = task => {
                     match result {
                         Ok(_) => {
-                            info!("Valid entries fetch complete")
+                            info!("Valid entries fetch completed")
                         }
                         Err(err) => {
                             error!("Error running task {}", err)
