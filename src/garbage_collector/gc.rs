@@ -195,7 +195,7 @@ impl GarbageCollector {
         punch_hole_start_offset: usize,
         punch_hole_length: usize,
     ) -> std::result::Result<(), StorageEngineError> {
-        // Punch hole in file for linux
+        // Punch hole in file for linux operating system
         #[cfg(target_os = "linux")]
         {
             let eng_read_lock = engine.read().await;
