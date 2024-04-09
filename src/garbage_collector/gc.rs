@@ -113,7 +113,7 @@ impl GarbageCollector {
                 result = task => {
                     match result {
                         Ok(_) => {
-                            info!("Valid entries fetch complete")
+                            info!("Valid entries fetch completed")
                         }
                         Err(err) => {
                             error!("Error running task {}", err)
@@ -195,6 +195,7 @@ impl GarbageCollector {
         punch_hole_start_offset: usize,
         punch_hole_length: usize,
     ) -> std::result::Result<(), StorageEngineError> {
+        // Punch hole in file for linux operating system
         #[cfg(target_os = "linux")]
         {
             let eng_read_lock = engine.read().await;
