@@ -698,7 +698,7 @@ impl StorageEngine<Vec<u8>> {
 
                 let buckets_map_arc = ExRwWrapper::new(buckets_map.to_owned());
                 let bloom_filter_arc = ExRwWrapper::new(bloom_filters);
-                //TODO:  we also need to recover this from memory
+                //TODO:  we also need to recover this from sstable
                 let key_range_arc = ExRwWrapper::new(key_range.to_owned());
 
                 let flusher = Flusher::new(
