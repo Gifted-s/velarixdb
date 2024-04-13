@@ -748,11 +748,11 @@ impl StorageEngine<Vec<u8>> {
     ) -> Result<
         (
             InMemoryTable<Vec<u8>>,
-            IndexMap<Vec<u8>, Arc<RwLock<InMemoryTable<Vec<u8>>>>>,
+            IndexMap<Vec<u8>, ExRw<InMemoryTable<Vec<u8>>>>,
         ),
         StorageEngineError,
     > {
-        let mut read_only_memtables: IndexMap<Vec<u8>, Arc<RwLock<InMemoryTable<Vec<u8>>>>> =
+        let mut read_only_memtables: IndexMap<Vec<u8>, ExRw<InMemoryTable<Vec<u8>>>> =
             IndexMap::new();
         let mut active_memtable = InMemoryTable::with_specified_capacity_and_rate(
             size_unit,
@@ -834,7 +834,7 @@ impl StorageEngine<Vec<u8>> {
 
     async fn flush_memtable(
         &mut self,
-        memtable: &Arc<RwLock<InMemoryTable<Vec<u8>>>>,
+        memtable: &ExRw<InMemoryTable<Vec<u8>>>,
         hotness: u64,
     ) -> Result<(), StorageEngineError> {
         let sstable_path = self
