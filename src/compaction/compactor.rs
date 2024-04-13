@@ -61,7 +61,7 @@ impl Compactor {
     /// for now this feature has not been implememnted
     pub fn tombstone_compaction_condition_background_checker(
         &self,
-        rcx: Arc<RwLock<Receiver<BucketMap>>>,
+        rcx: ExRw<Receiver<BucketMap>>,
     ) {
         let receiver = Arc::clone(&rcx);
         tokio::spawn(async move {
