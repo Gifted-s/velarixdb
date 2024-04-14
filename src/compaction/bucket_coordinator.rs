@@ -86,9 +86,6 @@ impl Bucket {
     async fn calculate_buckets_avg_size(
         sstables: &Vec<SSTablePath>,
     ) -> Result<usize, StorageEngineError> {
-        // for ss in sstables {
-        //     println!("PATH {:?}", ss.data_file_path.clone());
-        // }
         let mut all_sstable_size = 0;
         let fetch_files_meta = sstables
             .iter()
