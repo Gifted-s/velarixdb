@@ -231,7 +231,7 @@ impl Compactor {
                     if expected_sstables_to_be_writtten_to_disk
                         == actual_number_of_sstables_written_to_disk
                     {
-                        // Step 6:  Delete the sstables that we already merged from their previous buckets and update bloom filters
+                        // Step 7:  Delete the sstables that we already merged from their previous buckets and update bloom filters
                         let bloom_filter_updated_opt = self
                             .clean_up_after_compaction(
                                 buckets,
@@ -296,7 +296,7 @@ impl Compactor {
         // although this can lead to redundancy bloom filters are in-memory and its also less costly
         // since keys are represented in bits
         if all_sstables_deleted {
-            // Step 7: Delete the bloom filters associated with the sstables that we already merged
+            // Step 8: Delete the bloom filters associated with the sstables that we already merged
             let bloom_filter_updated = self
                 .filter_out_old_bloom_filters(
                     bloom_filters_with_both_old_and_new_sstables,
