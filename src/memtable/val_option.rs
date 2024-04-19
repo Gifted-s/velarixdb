@@ -9,6 +9,6 @@ pub enum ValueOption {
     /// Value offset gotten from value position in value log
     Offset(usize),
 
-    // Represents deleted key
+    // Represents deleted entry
     ThumbStone(u8),
 }
