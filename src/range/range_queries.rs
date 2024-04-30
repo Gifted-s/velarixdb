@@ -1,3 +1,7 @@
+// NOTE: STCS can handle range queries but scans within identified SSTables might be neccessary.
+// Data for your range might be spread across multiple SSTables. Even with a successful bloom filter check,
+// each identified SSTable might still contain data outside your desired range. For heavily range query-focused workloads, LCS or TWSC should be considered
+// Although this stratedy is not available for now, It will be implmented in the future
 use serde_json::map::Entry;
 
 use crate::storage_engine::StorageEngine;

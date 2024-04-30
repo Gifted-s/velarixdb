@@ -144,7 +144,7 @@ where
                     table_id.to_owned(),
                     Arc::clone(&current_buckets),
                     Arc::clone(&current_bloom_filters),
-                    Arc::clone(&key_range),
+                    Arc::clone(&current_key_range),
                     config.enable_ttl,
                     config.entry_ttl_millis,
                 );
