@@ -14,10 +14,12 @@ use crate::{
     block::Block,
     bloom_filter::BloomFilter,
     compaction::IndexWithSizeInBytes,
-    consts::{DEFAULT_FALSE_POSITIVE_RATE, EOF, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8},
+    consts::{
+        DEFAULT_FALSE_POSITIVE_RATE, EOF, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, SIZE_OF_USIZE,
+    },
     err::StorageEngineError,
     memtable::{Entry, InsertionTime, IsDeleted, SkipMapKey, ValueOffset},
-    sparse_index::{self, SparseIndex},
+    sparse_index::{self, RangeOffset, SparseIndex},
 };
 
 use StorageEngineError::*;
@@ -334,9 +336,8 @@ impl SSTable {
 
     pub(crate) async fn range(
         &self,
-        start_offset: u32,
-        prefetch_size: usize,
-    ) -> Result<Option<(Vec<Entry<K, V>>, LastReadOffset)>, StorageEngineError> {
+        range_offset: RangeOffset,
+    ) -> Result<Vec<Entry<Vec<u8>, usize>>, StorageEngineError> {
         let mut entries = Vec::new();
         // Open the file in read mode
         let file_path = PathBuf::from(&self.data_file_path);
@@ -348,8 +349,8 @@ impl SSTable {
                 path: file_path.clone(),
                 error: err,
             })?;
-
-        file.seek(tokio::io::SeekFrom::Start(start_offset.into()))
+        let mut total_bytes_read = range_offset.start_offset as usize;
+        file.seek(tokio::io::SeekFrom::Start(range_offset.start_offset.into()))
             .await
             .map_err(|err| FileSeekError(err))?;
 
@@ -364,8 +365,9 @@ impl SSTable {
                         error: err,
                     })?;
             if bytes_read == 0 {
-                return Ok(None);
+                return Ok(entries);
             }
+            total_bytes_read += bytes_read;
             let key_len = u32::from_le_bytes(key_len_bytes);
             let mut key = vec![0; key_len as usize];
             bytes_read = file
@@ -381,6 +383,7 @@ impl SSTable {
                     EOF,
                 )));
             }
+            total_bytes_read += bytes_read;
             let mut val_offset_bytes = [0; mem::size_of::<u32>()];
             bytes_read =
                 file.read(&mut val_offset_bytes)
@@ -395,6 +398,7 @@ impl SSTable {
                     EOF,
                 )));
             }
+            total_bytes_read += bytes_read;
             let mut created_at_bytes = [0; mem::size_of::<u64>()];
             bytes_read =
                 file.read(&mut created_at_bytes)
@@ -409,6 +413,7 @@ impl SSTable {
                     EOF,
                 )));
             }
+            total_bytes_read += bytes_read;
 
             let mut is_tombstone_byte = [0; 1];
             bytes_read =
@@ -424,17 +429,15 @@ impl SSTable {
                     EOF,
                 )));
             }
+            total_bytes_read += bytes_read;
 
             let created_at = u64::from_le_bytes(created_at_bytes);
             let value_offset = u32::from_le_bytes(val_offset_bytes) as usize;
             let is_tombstone = is_tombstone_byte[0] == 1;
             entries.push(Entry::new(key, value_offset, created_at, is_tombstone));
-            if entries.len() == prefetch_size {
-                let last_read_offset = file
-                    .seek(tokio::io::SeekFrom::Current(0))
-                    .await
-                    .map_err(|err| return StorageEngineError::FileSeekError(err))?;
-                return Ok(Some((entries, last_read_offset)));
+
+            if total_bytes_read as u32 >= range_offset.end_offset {
+                return Ok(entries);
             }
         }
     }
@@ -442,7 +445,7 @@ impl SSTable {
     pub(crate) fn build_bloomfilter_from_sstable(
         index: &Arc<SkipMap<Vec<u8>, (usize, u64, bool)>>,
     ) -> BloomFilter {
-        //TODO: FALSE POS should be from config
+        //TODO: FALSE POSITIVE should be from config
         // Rebuild the bloom filter since a new sstable has been created
         let mut new_bloom_filter = BloomFilter::new(DEFAULT_FALSE_POSITIVE_RATE, index.len());
         index.iter().for_each(|e| new_bloom_filter.set(e.key()));
@@ -479,12 +482,7 @@ impl SSTable {
         self.size = self
             .index
             .iter()
-            .map(|e| {
-                e.key().len()
-                    + mem::size_of::<usize>()
-                    + mem::size_of::<u64>()
-                    + mem::size_of::<u8>()
-            })
+            .map(|e| e.key().len() + SIZE_OF_USIZE + SIZE_OF_U64 + SIZE_OF_U8)
             .sum::<usize>();
     }
 

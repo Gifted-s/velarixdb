@@ -10,7 +10,7 @@ use crate::{
     err::StorageEngineError,
 };
 use StorageEngineError::*;
-
+type Offset = u32;
 struct SparseIndexEntry {
     key_prefix: u32,
     key: Vec<u8>,
@@ -20,6 +20,20 @@ struct SparseIndexEntry {
 pub struct SparseIndex {
     entries: Vec<SparseIndexEntry>,
     file_path: PathBuf,
+}
+
+pub struct RangeOffset {
+    pub start_offset: Offset,
+    pub end_offset: Offset,
+}
+
+impl RangeOffset {
+    pub fn new(start: Offset, end: Offset) -> Self {
+        Self {
+            start_offset: start,
+            end_offset: end,
+        }
+    }
 }
 
 impl SparseIndex {
@@ -73,7 +87,7 @@ impl SparseIndex {
     }
 
     pub(crate) async fn get(&self, searched_key: &[u8]) -> Result<Option<u32>, StorageEngineError> {
-        let mut sstable_file_offset = -1;
+        let mut block_offset = -1;
         // Open the file in read mode
         let file_path = PathBuf::from(&self.file_path);
         let mut file = OpenOptions::new()
@@ -98,10 +112,10 @@ impl SparseIndex {
                     })?;
             // If the end of the file is reached and no match is found, return non
             if bytes_read == 0 {
-                if sstable_file_offset == -1 {
+                if block_offset == -1 {
                     return Ok(None);
                 }
-                return Ok(Some(sstable_file_offset as u32));
+                return Ok(Some(block_offset as u32));
             }
             let key_len = u32::from_le_bytes(key_len_bytes);
             let mut key = vec![0; key_len as usize];
@@ -132,17 +146,90 @@ impl SparseIndex {
 
             let offset = u32::from_le_bytes(key_offset_bytes);
             match key.cmp(&searched_key.to_vec()) {
-                std::cmp::Ordering::Less => sstable_file_offset = offset as i32,
+                std::cmp::Ordering::Less => block_offset = offset as i32,
                 std::cmp::Ordering::Equal => {
                     return Ok(Some(offset));
                 }
                 std::cmp::Ordering::Greater => {
                     // if all index keys are greater than the searched key then return none
-                    if sstable_file_offset == -1 {
+                    if block_offset == -1 {
                         return Ok(None);
                     }
-                    return Ok(Some(sstable_file_offset as u32));
+                    return Ok(Some(block_offset as u32));
                 }
+            }
+        }
+    }
+
+    pub(crate) async fn get_offset_range(
+        &self,
+        start_key: &[u8],
+        end_key: &[u8],
+    ) -> Result<RangeOffset, StorageEngineError> {
+        let mut range_offset = RangeOffset::new(0, 0);
+        // Open the file in read mode
+        let file_path = PathBuf::from(&self.file_path);
+        let mut file = OpenOptions::new()
+            .read(true)
+            .open(file_path.clone())
+            .await
+            .map_err(|err| SSTableFileOpenError {
+                path: file_path.clone(),
+                error: err,
+            })?;
+
+        // read bloom filter to check if the key possbly exists in the sstable
+        // search sstable for key
+        loop {
+            let mut key_len_bytes = [0; SIZE_OF_U32];
+            let mut bytes_read =
+                file.read(&mut key_len_bytes)
+                    .await
+                    .map_err(|err| SSTableFileReadError {
+                        path: file_path.clone(),
+                        error: err,
+                    })?;
+            // If the end of the file is reached and no match is found, return non
+            if bytes_read == 0 {
+                return Ok(range_offset);
+            }
+            let key_len = u32::from_le_bytes(key_len_bytes);
+            let mut key = vec![0; key_len as usize];
+            bytes_read = file
+                .read(&mut key)
+                .await
+                .map_err(|err| IndexFileReadError(err))?;
+            if bytes_read == 0 {
+                return Err(UnexpectedEOF(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    EOF,
+                )));
+            }
+            let mut key_offset_bytes = [0; SIZE_OF_U32];
+            bytes_read =
+                file.read(&mut key_offset_bytes)
+                    .await
+                    .map_err(|err| SSTableFileReadError {
+                        path: file_path.clone(),
+                        error: err,
+                    })?;
+            if bytes_read == 0 {
+                return Err(UnexpectedEOF(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    EOF,
+                )));
+            }
+
+            let offset = u32::from_le_bytes(key_offset_bytes);
+            match key.cmp(&start_key.to_vec()) {
+                std::cmp::Ordering::Greater => match key.cmp(&end_key.to_vec()) {
+                    std::cmp::Ordering::Greater => {
+                        range_offset.end_offset = offset;
+                        return Ok(range_offset);
+                    }
+                    _ => range_offset.end_offset = offset,
+                },
+                _ => range_offset.start_offset = offset,
             }
         }
     }
