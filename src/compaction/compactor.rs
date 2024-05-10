@@ -174,7 +174,7 @@ impl Compactor {
                                 );
                                 // Step 4: Map this bloom filter to its sstable file path
                                 let sstable_data_file_path = sst_file_path.get_data_file_path();
-                                m.bloom_filter.set_sstable_path(sst_file_path);
+                                m.bloom_filter.set_sstable_path(sst_file_path.clone());
 
                                 // Step 5: Store the bloom filter in the bloom filters vector
                                 bloom_filters.write().await.push(m.bloom_filter);
@@ -190,6 +190,7 @@ impl Compactor {
                                     sstable_data_file_path,
                                     smallest_key,
                                     biggest_key,
+                                    sst_file_path,
                                 );
                                 actual_number_of_sstables_written_to_disk += 1;
                             }

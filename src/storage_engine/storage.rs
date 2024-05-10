@@ -856,6 +856,7 @@ impl StorageEngine<Vec<u8>> {
             sstable_path.get_data_file_path(),
             smallest_key,
             biggest_key,
+            sstable_path,
         );
 
         Ok(())

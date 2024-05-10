@@ -102,6 +102,7 @@ where
             data_file_path,
             table_smallest_key,
             table_biggest_key,
+            sstable_path.clone(),
         );
 
         table_bloom_filter.set_sstable_path(sstable_path);

@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, collections::HashMap, path::PathBuf};
+use std::{cmp::Ordering, collections::HashMap};
 
 // NOTE: STCS can handle range queries but scans within identified SSTables might be neccessary.
 // Data for your range might be spread across multiple SSTables. Even with a successful bloom filter check,
@@ -6,7 +6,7 @@ use std::{cmp::Ordering, collections::HashMap, path::PathBuf};
 // Although this stratedy is not available for now, It will be implmented in the future
 
 use crate::{
-    memtable::{self, Entry, InsertionTime, IsDeleted, SkipMapKey, ValueOffset},
+    err::StorageEngineError, memtable::Entry, sparse_index::SparseIndex, sstable::SSTable,
     storage_engine::StorageEngine,
 };
 
@@ -14,17 +14,17 @@ pub(crate) type Key = Vec<u8>;
 pub(crate) type ValOffset = usize;
 
 pub struct FetchedEntry {
-    pub Key: Vec<u8>,
-    pub Val: Vec<u8>,
+    pub key: Vec<u8>,
+    pub val: Vec<u8>,
 }
 pub struct RangeIterator<'a> {
-    start: &'a [u8],
-    current: u32,
-    end: &'a [u8],
-    allow_prefetch: bool,
-    prefetch_entries_size: usize,
-    prefetch_entries: Vec<FetchedEntry>,
-    keys: Vec<Vec<(Key, (ValueOffset, InsertionTime, IsDeleted))>>,
+    pub start: &'a [u8],
+    pub current: u32,
+    pub end: &'a [u8],
+    pub allow_prefetch: bool,
+    pub prefetch_entries_size: usize,
+    pub prefetch_entries: Vec<FetchedEntry>,
+    pub keys: Vec<Entry<Key, ValOffset>>,
 }
 
 impl<'a> RangeIterator<'a> {
@@ -33,6 +33,7 @@ impl<'a> RangeIterator<'a> {
         end: &'a [u8],
         allow_prefetch: bool,
         prefetch_entries_size: usize,
+        keys: Vec<Entry<Key, ValOffset>>,
     ) -> Self {
         Self {
             start,
@@ -41,26 +42,26 @@ impl<'a> RangeIterator<'a> {
             allow_prefetch,
             prefetch_entries_size,
             prefetch_entries: Vec::new(),
-            keys: Vec::new(),
+            keys,
         }
     }
 
-    fn next(&mut self) -> Option<FetchedEntry> {
+    pub fn next(&mut self) -> Option<FetchedEntry> {
         None
     }
-    fn prev(&mut self) -> Option<FetchedEntry> {
+    pub fn prev(&mut self) -> Option<FetchedEntry> {
         None
     }
-    fn key<K>(&mut self) -> Option<K> {
+    pub fn key<K>(&mut self) -> Option<K> {
         None
     }
 
-    fn value<V>(&mut self) -> Option<V> {
+    pub fn value<V>(&mut self) -> Option<V> {
         None
     }
 
     // Move the iterator to the end of the collection.
-    fn end(&mut self) -> Option<FetchedEntry> {
+    pub fn end(&mut self) -> Option<FetchedEntry> {
         None
     }
 }
@@ -73,10 +74,21 @@ impl<'a> Iterator for RangeIterator<'a> {
     }
 }
 
+impl<'a> DoubleEndedIterator for RangeIterator<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        None
+        // ... (implementation to return next element from back)
+    }
+}
+
 impl StorageEngine<Vec<u8>> {
     // Start if the range query
-    pub async fn seek<'a>(&self, start: &'a [u8], end: &'a [u8]) -> impl Iterator + 'a {
-        let mut entries = Vec::new();
+    pub async fn seek<'a>(
+        &self,
+        start: &'a [u8],
+        end: &'a [u8],
+    ) -> Result<Box<dyn Iterator<Item = FetchedEntry> + 'a>, StorageEngineError> {
+        let mut merger = Merger::new();
         // check entries within active memtable
         if !self.active_memtable.index.is_empty() {
             if self
@@ -90,7 +102,7 @@ impl StorageEngine<Vec<u8>> {
                     .upper_bound(std::ops::Bound::Included(end))
                     .is_some()
             {
-                entries.push(
+                merger.merge_entries(
                     self.active_memtable
                         .clone()
                         .index
@@ -98,7 +110,7 @@ impl StorageEngine<Vec<u8>> {
                         .map(|e| {
                             Entry::new(e.key().to_vec(), e.value().0, e.value().1, e.value().2)
                         })
-                        .collect::<Vec<Entry<Vec<u8>, usize>>>(),
+                        .collect::<Vec<Entry<Key, ValOffset>>>(),
                 );
             }
         }
@@ -117,7 +129,7 @@ impl StorageEngine<Vec<u8>> {
                         .upper_bound(std::ops::Bound::Included(end))
                         .is_some()
                 {
-                    entries.push(
+                    merger.merge_entries(
                         memtable_ref
                             .clone()
                             .index
@@ -133,64 +145,117 @@ impl StorageEngine<Vec<u8>> {
 
         let sstables_within_range = {
             let mut sstable_path = HashMap::new();
-            let bloom_filters = self.bloom_filters.read().await;
-            for b in bloom_filters.iter(){
-              if b.contains(&start.to_vec()) || b.contains(&end.to_vec()){
-                sstable_path.insert(b.sstable_path.as_ref().unwrap().data_file_path.to_str().unwrap(), b.sstable_path.as_ref());
-              }
+            let bf = self.bloom_filters.read().await.clone();
+            for b in bf.into_iter() {
+                let bf_inner = b.to_owned();
+                let bf_sstable = bf_inner.sstable_path.to_owned().unwrap();
+                let data_path = bf_sstable.data_file_path.to_str().unwrap();
+                if bf_inner.contains(&start.to_vec()) || bf_inner.contains(&end.to_vec()) {
+                    sstable_path.insert(data_path.to_owned(), bf_sstable.to_owned());
+                }
             }
+
             let key_range = self.key_range.read().await;
             let paths_from_key_range = key_range.range_scan(&start.to_vec(), &end.to_vec());
-            if !paths_from_key_range.is_empty(){
-                for path in paths_from_key_range.iter() {
-                    let sparse_index =
-                        SparseIndex::new(path.index_file_path.clone()).await;
-
-                    match sparse_index.get(&key).await {
-                        Ok(None) => continue,
-                        Ok(result) => {
-                            if let Some(block_offset) = result {
-                                let sst = SSTable::new_with_exisiting_file_path(
-                                    sstable.dir.to_owned(),
-                                    sstable.data_file_path.to_owned(),
-                                    sstable.index_file_path.to_owned(),
-                                );
-                                match sst.get(block_offset, &key).await {
-                                    Ok(None) => continue,
-                                    Ok(result) => {
-                                        if let Some((
-                                            value_offset,
-                                            created_at,
-                                            is_tombstone,
-                                        )) = result
-                                        {
-                                            if created_at > most_recent_insert_time {
-                                                offset = value_offset;
-                                                most_recent_insert_time = created_at;
-                                                is_deleted = is_tombstone;
-                                            }
-                                        }
-                                    }
-                                    Err(err) => error!("{}", err),
-                                }
-                            }
-                        }
-                        Err(err) => error!("{}", err),
+            if !paths_from_key_range.is_empty() {
+                for range in paths_from_key_range.iter() {
+                    if !sstable_path
+                        .contains_key(range.full_sst_path.data_file_path.to_str().unwrap())
+                    {
+                        sstable_path.insert(
+                            range
+                                .full_sst_path
+                                .data_file_path
+                                .to_str()
+                                .unwrap()
+                                .to_owned(),
+                            range.full_sst_path.to_owned(),
+                        );
                     }
                 }
             }
-            // let bucket_map = self.buckets.read().await;
-            // for (_, bucket) in &bucket_map.buckets{
-              
-            // }
-             None
+            sstable_path
         };
-        println!("{:?}", entries);
-        RangeIterator::new(
+
+        for (_, sst) in sstables_within_range {
+            let sparse_index = SparseIndex::new(sst.index_file_path.clone()).await;
+
+            match sparse_index.get_block_offset_range(&start, &end).await {
+                Ok(range_offset) => {
+                    let sst = SSTable::new_with_exisiting_file_path(
+                        sst.dir.to_owned(),
+                        sst.data_file_path.to_owned(),
+                        sst.index_file_path.to_owned(),
+                    );
+                    match sst.range(range_offset).await {
+                        Ok(sstable_entries) => merger.merge_entries(sstable_entries),
+                        Err(err) => return Err(err),
+                    }
+                }
+                Err(err) => return Err(StorageEngineError::RangeScanError(Box::new(err))),
+            }
+        }
+
+        Ok(Box::new(RangeIterator::new(
             start,
             end,
             self.config.allow_prefetch,
             self.config.prefetch_size,
-        )
+            merger.entries,
+        )))
+    }
+}
+
+pub struct Merger {
+    entries: Vec<Entry<Key, ValOffset>>,
+}
+
+impl Merger {
+    fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+
+    fn merge_entries(&mut self, entries_to_merge: Vec<Entry<Key, ValOffset>>) {
+        let mut merged_indexes = Vec::new();
+        let e1 = &self.entries;
+        let e2 = entries_to_merge;
+
+        let (mut i, mut j) = (0, 0);
+        // Compare elements from both arrays and merge them
+        while i < e1.len() && j < e2.len() {
+            match e1[i].key.cmp(&e2[j].key) {
+                Ordering::Less => {
+                    merged_indexes.push(e1[i].to_owned());
+                    i += 1;
+                }
+                Ordering::Equal => {
+                    if e1[i].created_at > e2[j].created_at {
+                        merged_indexes.push(e1[i].to_owned());
+                    } else {
+                        merged_indexes.push(e2[j].to_owned());
+                    }
+                    i += 1;
+                    j += 1;
+                }
+                Ordering::Greater => {
+                    merged_indexes.push(e2[j].to_owned());
+                    j += 1;
+                }
+            }
+        }
+
+        // If there are any remaining entries in e1, append them
+        while i < e1.len() {
+            merged_indexes.push(e1[i].to_owned());
+            i += 1;
+        }
+
+        // If there are any remaining entries in e2, append them
+        while j < e2.len() {
+            merged_indexes.push(e2[j].to_owned());
+            j += 1;
+        }
     }
 }

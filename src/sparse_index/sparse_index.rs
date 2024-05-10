@@ -161,7 +161,7 @@ impl SparseIndex {
         }
     }
 
-    pub(crate) async fn get_offset_range(
+    pub(crate) async fn get_block_offset_range(
         &self,
         start_key: &[u8],
         end_key: &[u8],
