@@ -1,16 +1,20 @@
+use crate::types;
 use crate::{
     bloom_filter::BloomFilter, cfg::Config, compaction::BucketMap, err::StorageEngineError,
     key_offseter::KeyRange, memtable::InMemoryTable, storage_engine::ExRw,
 };
 use indexmap::IndexMap;
 use std::sync::Arc;
-use std::{borrow::Borrow, hash::Hash};
+
+type K = types::Key;
+
 pub type InActiveMemtableID = Vec<u8>;
-pub type InActiveMemtable = ExRw<InMemoryTable<Vec<u8>>>;
+pub type InActiveMemtable = ExRw<InMemoryTable<K>>;
 pub type FlushDataMemTable = (InActiveMemtableID, InActiveMemtable);
 
 use tokio::spawn;
 use tokio::sync::mpsc::Receiver;
+
 
 #[derive(Debug)]
 pub struct FlushUpdateMsg {
@@ -34,12 +38,9 @@ pub enum FlushResponse {
 }
 
 #[derive(Debug, Clone)]
-pub struct Flusher<K>
-where
-    K: Hash + PartialOrd + Ord + Send + Sync,
-{
+pub struct Flusher {
     pub(crate) read_only_memtable: ExRw<IndexMap<K, ExRw<InMemoryTable<K>>>>,
-    pub(crate) table_to_flush: ExRw<InMemoryTable<Vec<u8>>>,
+    pub(crate) table_to_flush: ExRw<InMemoryTable<K>>,
     pub(crate) table_id: Vec<u8>,
     pub(crate) bucket_map: ExRw<BucketMap>,
     pub(crate) bloom_filters: ExRw<Vec<BloomFilter>>,
@@ -48,13 +49,10 @@ where
     pub(crate) entry_ttl: u64,
 }
 
-impl<K> Flusher<K>
-where
-    K: Hash + PartialOrd + Ord + Send + Sync + 'static + Borrow<std::vec::Vec<u8>>,
-{
+impl Flusher {
     pub fn new(
         read_only_memtable: ExRw<IndexMap<K, ExRw<InMemoryTable<K>>>>,
-        table_to_flush: ExRw<InMemoryTable<Vec<u8>>>,
+        table_to_flush: ExRw<InMemoryTable<K>>,
         table_id: Vec<u8>,
         bucket_map: ExRw<BucketMap>,
         bloom_filters: ExRw<Vec<BloomFilter>>,
@@ -139,7 +137,7 @@ where
             let current_key_range = &key_range;
             let current_read_only_memtables = &read_only_memtable;
             while let Some((table_id, table_to_flush)) = rcx_clone.write().await.recv().await {
-                let mut flusher = Flusher::<K>::new(
+                let mut flusher = Flusher::new(
                     Arc::clone(&read_only_memtable),
                     table_to_flush,
                     table_id.to_owned(),

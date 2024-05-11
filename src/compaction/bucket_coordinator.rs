@@ -4,8 +4,9 @@ use crate::consts::{
 };
 use crate::err::StorageEngineError;
 
-use crate::memtable::{InsertionTime, IsDeleted, SkipMapKey, ValueOffset};
+use crate::memtable::{InsertionTime, IsDeleted};
 use crate::sstable::{SSTable, SSTablePath};
+use crate::types::{Key, ValOffset};
 use chrono::Utc;
 use crossbeam_skiplist::SkipMap;
 
@@ -36,7 +37,7 @@ pub struct Bucket {
 use StorageEngineError::*;
 
 pub trait IndexWithSizeInBytes {
-    fn get_index(&self) -> Arc<SkipMap<SkipMapKey, (ValueOffset, InsertionTime, IsDeleted)>>; // usize for value offset, u64 to store entry creation date in milliseconds
+    fn get_index(&self) -> Arc<SkipMap<Key, (ValOffset, InsertionTime, IsDeleted)>>; // usize for value offset, u64 to store entry creation date in milliseconds
     fn size(&self) -> usize;
     fn find_biggest_key_from_table(&self) -> Result<Vec<u8>, StorageEngineError>;
     fn find_smallest_key_from_table(&self) -> Result<Vec<u8>, StorageEngineError>;

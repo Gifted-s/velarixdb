@@ -1,9 +1,9 @@
 use std::{cmp::Ordering, collections::HashMap, path::PathBuf};
 
-use crate::sstable::SSTablePath;
+use crate::{sstable::SSTablePath, types::{self, Key}};
 
-type LargestKey = Vec<u8>;
-type SmallestKey = Vec<u8>;
+type LargestKey = types::Key;
+type SmallestKey = types::Key;
 #[derive(Clone, Debug)]
 pub struct KeyRange {
     pub key_ranges: HashMap<PathBuf, Range>,
@@ -55,7 +55,7 @@ impl KeyRange {
     }
 
     // Returns SSTables whose last key is greater than the supplied key parameter
-    pub fn filter_sstables_by_biggest_key(&self, key: &Vec<u8>) -> Vec<&PathBuf> {
+    pub fn filter_sstables_by_biggest_key(&self, key: &Key) -> Vec<&PathBuf> {
         self.key_ranges
             .iter()
             .filter(|(_, range)| {

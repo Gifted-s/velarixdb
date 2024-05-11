@@ -11,8 +11,10 @@ use crate::{
     key_offseter::KeyRange,
     memtable::{Entry, InMemoryTable},
     meta::Meta,
+    range::RangeIterator,
     sparse_index::SparseIndex,
     sstable::{SSTable, SSTablePath},
+    types::{self, Key, ValOffset},
     value_log::ValueLog,
 };
 use chrono::Utc;
@@ -28,7 +30,7 @@ use tokio::{
 };
 
 use crate::err::StorageEngineError::*;
-use std::path::PathBuf;
+use std::{borrow::Borrow, path::PathBuf};
 
 use std::{hash::Hash, sync::Arc};
 
@@ -47,9 +49,9 @@ impl<T> ExRwFactory<T> for ExRwWrapper<T> {
 }
 
 #[derive(Debug)]
-pub struct StorageEngine<K>
+pub struct StorageEngine<'a, K>
 where
-    K: Hash + PartialOrd + Ord + Send + Sync,
+    K: Hash + PartialOrd + Ord + Send + Sync + Borrow<Vec<u8>>,
 {
     pub dir: DirPath,
     pub active_memtable: InMemoryTable<K>,
@@ -59,8 +61,9 @@ where
     pub key_range: ExRw<KeyRange>,
     pub compactor: Compactor,
     pub meta: Meta,
-    pub flusher: Flusher<K>,
+    pub flusher: Flusher,
     pub config: Config,
+    pub range_iterator: RangeIterator<'a>,
     pub read_only_memtables: ExRw<IndexMap<K, ExRw<InMemoryTable<K>>>>,
     pub flush_data_sender: ChanSender,
     pub flush_data_recevier: ChanRecv,
@@ -96,8 +99,8 @@ pub enum SizeUnit {
     Gigabytes,
 }
 
-impl StorageEngine<Vec<u8>> {
-    pub async fn new(dir: PathBuf) -> Result<Self, StorageEngineError> {
+impl<'a> StorageEngine<'a, Key> {
+    pub async fn new(dir: PathBuf) -> Result<StorageEngine<'a, Key>, StorageEngineError> {
         let dir = DirPath::build(dir);
         let default_config = Config::default();
 
@@ -105,7 +108,7 @@ impl StorageEngine<Vec<u8>> {
             dir.clone(),
             SizeUnit::Bytes,
             WRITE_BUFFER_SIZE,
-            &default_config,
+            default_config,
         )
         .await?;
         let started = store.trigger_background_tasks()?;
@@ -115,8 +118,8 @@ impl StorageEngine<Vec<u8>> {
 
     pub async fn new_with_custom_config(
         dir: PathBuf,
-        config: &Config,
-    ) -> Result<Self, StorageEngineError> {
+        config: Config,
+    ) -> Result<StorageEngine<'a, Key>, StorageEngineError> {
         let dir = DirPath::build(dir);
         StorageEngine::with_default_capacity_and_config(
             dir.clone(),
@@ -160,7 +163,7 @@ impl StorageEngine<Vec<u8>> {
         &mut self,
         key: &str,
         value: &str,
-        existing_v_offset: Option<usize>,
+        existing_v_offset: Option<ValOffset>,
     ) -> Result<bool, StorageEngineError> {
         // Convert the key and value into Vec<u8> from given &str.
         let key = &key.as_bytes().to_vec();
@@ -431,37 +434,41 @@ impl StorageEngine<Vec<u8>> {
         self.put(key, value, None).await
     }
 
-    pub async fn clear(&mut self) -> Result<Self, StorageEngineError> {
+    pub async fn clear(&'a mut self) -> Result<StorageEngine<'a, types::Key>, StorageEngineError> {
         let capacity = self.active_memtable.capacity();
 
         let size_unit = self.active_memtable.size_unit();
 
         self.active_memtable.clear();
 
-        let config = self.config.clone();
-
         self.buckets.write().await.clear_all().await;
 
         self.val_log.clear_all().await;
 
-        StorageEngine::with_capacity_and_rate(self.dir.clone(), size_unit, capacity, &config).await
+        StorageEngine::with_capacity_and_rate(
+            self.dir.clone(),
+            size_unit,
+            capacity,
+            self.config.to_owned(),
+        )
+        .await
     }
 
     async fn with_default_capacity_and_config(
         dir: DirPath,
         size_unit: SizeUnit,
         capacity: usize,
-        config: &Config,
-    ) -> Result<Self, StorageEngineError> {
-        Self::with_capacity_and_rate(dir, size_unit, capacity, &config).await
+        config: Config,
+    ) -> Result<StorageEngine<'a, types::Key>, StorageEngineError> {
+        Self::with_capacity_and_rate(dir, size_unit, capacity, config).await
     }
 
     async fn with_capacity_and_rate(
         dir: DirPath,
         size_unit: SizeUnit,
         capacity: usize,
-        config: &Config,
-    ) -> Result<Self, StorageEngineError> {
+        config: Config,
+    ) -> Result<StorageEngine<'a, types::Key>, StorageEngineError> {
         let vlog_path = &dir.clone().val_log;
         let buckets_path = dir.buckets.clone();
         let vlog_exit = vlog_path.exists();
@@ -515,7 +522,7 @@ impl StorageEngine<Vec<u8>> {
                 config.enable_ttl,
                 config.entry_ttl_millis,
             );
-            return Ok(Self {
+            return Ok(StorageEngine {
                 active_memtable,
                 val_log: vlog,
                 bloom_filters: ExRwWrapper::new(Vec::new()),
@@ -533,6 +540,7 @@ impl StorageEngine<Vec<u8>> {
                 tombstone_compaction_rcv: ChanRecv::TombStoneCompactionNoticeRcv(Arc::new(
                     RwLock::new(comp_rec),
                 )),
+                range_iterator: RangeIterator::default(),
                 flush_data_sender: ChanSender::FlushDataSender(ExRwWrapper::new(flush_data_sender)),
                 flush_data_recevier: ChanRecv::FlushDataRecv(ExRwWrapper::new(flush_data_rec)),
             });
@@ -712,7 +720,7 @@ impl StorageEngine<Vec<u8>> {
                     config.entry_ttl_millis,
                 );
 
-                Ok(Self {
+                Ok(StorageEngine {
                     active_memtable,
                     val_log: vlog,
                     dir,
@@ -727,6 +735,7 @@ impl StorageEngine<Vec<u8>> {
                     tombstone_compaction_sender: ChanSender::TombStoneCompactionNoticeSender(
                         tomb_comp_sender,
                     ),
+                    range_iterator: RangeIterator::default(),
                     tombstone_compaction_rcv: ChanRecv::TombStoneCompactionNoticeRcv(Arc::new(
                         RwLock::new(tomb_comp_rec),
                     )),
@@ -747,8 +756,8 @@ impl StorageEngine<Vec<u8>> {
         head_offset: usize,
     ) -> Result<
         (
-            InMemoryTable<Vec<u8>>,
-            IndexMap<Vec<u8>, ExRw<InMemoryTable<Vec<u8>>>>,
+            InMemoryTable<types::Key>,
+            IndexMap<Vec<u8>, ExRw<InMemoryTable<types::Key>>>,
         ),
         StorageEngineError,
     > {
@@ -834,7 +843,7 @@ impl StorageEngine<Vec<u8>> {
 
     async fn flush_memtable(
         &mut self,
-        memtable: &ExRw<InMemoryTable<Vec<u8>>>,
+        memtable: &ExRw<InMemoryTable<types::Key>>,
         hotness: u64,
     ) -> Result<(), StorageEngineError> {
         let sstable_path = self

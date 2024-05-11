@@ -2,7 +2,7 @@ use crossbeam_skiplist::SkipMap;
 use log::{error, info, warn};
 use std::{cmp::Ordering, collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::fs;
-use tokio::sync::{mpsc::Receiver, RwLock};
+use tokio::sync::mpsc::Receiver;
 use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
@@ -524,7 +524,7 @@ impl Compactor {
     ) -> Result<Vec<MergedSSTable>, StorageEngineError> {
         let mut filterd_merged_sstables: Vec<MergedSSTable> = Vec::new();
         for m in merged_sstables.iter() {
-            let new_index: Arc<SkipMap<Vec<u8>, (usize, u64, bool)>> = Arc::new(SkipMap::new());
+            let new_index = Arc::new(SkipMap::new());
             let mut new_sstable = SSTable::new(PathBuf::new(), false).await;
             for entry in m.sstable.index.iter() {
                 if self.tombstones.contains_key(entry.key()) {
