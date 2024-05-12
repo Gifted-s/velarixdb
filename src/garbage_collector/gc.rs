@@ -3,28 +3,22 @@
 
 extern crate libc;
 extern crate nix;
-
-use std::io::Error;
-use std::os::unix::io::AsRawFd;
-
-use nix::libc::{c_int, off_t};
-
+use crate::consts::{GC_CHUNK_SIZE, TAIL_ENTRY_KEY, TOMB_STONE_MARKER};
+use crate::value_log::ValueLogEntry;
+use crate::{err, types};
+use crate::{err::StorageEngineError, storage_engine::*};
 use chrono::Utc;
 use log::{error, info};
+use nix::libc::{c_int, off_t};
+use std::io::Error;
+use std::os::unix::io::AsRawFd;
+use std::str;
+use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::consts::{GC_CHUNK_SIZE, TAIL_ENTRY_KEY, TOMB_STONE_MARKER};
-
-use crate::err;
-use crate::value_log::ValueLogEntry;
-use crate::{err::StorageEngineError, storage_engine::*};
-use std::str;
-
-use std::sync::Arc;
-
-pub(crate) type K = Vec<u8>;
-pub(crate) type V = Vec<u8>;
-pub(crate) type VOffset = usize;
+type K = types::Key;
+type V = types::Value;
+type VOffset = types::ValOffset;
 
 extern "C" {
     fn fallocate(fd: libc::c_int, mode: c_int, offset: off_t, len: off_t) -> c_int;
@@ -34,7 +28,7 @@ const FALLOC_FL_PUNCH_HOLE: c_int = 0x2;
 const FALLOC_FL_KEEP_SIZE: c_int = 0x1;
 
 pub struct GarbageCollector {}
-// will be bringing in tokio library
+
 impl GarbageCollector {
     pub fn new() -> Self {
         Self {}
@@ -42,7 +36,7 @@ impl GarbageCollector {
 
     pub async fn run(
         &self,
-        engine: ExRw<StorageEngine<K>>,
+        engine: ExRw<StorageEngine<'static, K>>,
     ) -> std::result::Result<(), StorageEngineError> {
         let invalid_entries: ExRw<Vec<ValueLogEntry>> = Arc::new(RwLock::new(Vec::new()));
         let valid_entries: ExRw<Vec<(K, V)>> = Arc::new(RwLock::new(Vec::new()));
@@ -62,8 +56,8 @@ impl GarbageCollector {
             let invalid_entries_clone = Arc::clone(&invalid_entries);
             let valid_entries_clone = Arc::clone(&valid_entries);
             tokio::spawn(async move {
-                let value = s_engine.read().await;
-                let most_recent_value = value.get(str::from_utf8(&entry.key).unwrap()).await;
+                let s = s_engine.read().await;
+                let most_recent_value = s.get(str::from_utf8(&entry.key).unwrap()).await;
                 match most_recent_value {
                     Ok((value, creation_time)) => {
                         if entry.created_at != creation_time
@@ -190,7 +184,7 @@ impl GarbageCollector {
 
     pub async fn garbage_collect(
         &self,
-        engine: ExRw<StorageEngine<K>>,
+        engine: ExRw<StorageEngine<'static, K>>,
         invalid_entries: ExRw<Vec<ValueLogEntry>>,
         punch_hole_start_offset: usize,
         punch_hole_length: usize,

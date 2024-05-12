@@ -1,8 +1,6 @@
-mod inmemory;
+mod memtable;
 mod val_option;
-pub use inmemory::Entry;
-pub use inmemory::InMemoryTable;
-pub use inmemory::InsertionTime;
-pub use inmemory::IsDeleted;
-pub use inmemory::SkipMapKey;
-pub use inmemory::ValueOffset;
+pub use memtable::Entry;
+pub use memtable::InMemoryTable;
+pub use memtable::InsertionTime;
+pub use memtable::IsDeleted;

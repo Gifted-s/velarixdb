@@ -2,7 +2,7 @@ use crossbeam_skiplist::SkipMap;
 use log::{error, info, warn};
 use std::{cmp::Ordering, collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::fs;
-use tokio::sync::{mpsc::Receiver, RwLock};
+use tokio::sync::mpsc::Receiver;
 use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
@@ -174,7 +174,7 @@ impl Compactor {
                                 );
                                 // Step 4: Map this bloom filter to its sstable file path
                                 let sstable_data_file_path = sst_file_path.get_data_file_path();
-                                m.bloom_filter.set_sstable_path(sst_file_path);
+                                m.bloom_filter.set_sstable_path(sst_file_path.clone());
 
                                 // Step 5: Store the bloom filter in the bloom filters vector
                                 bloom_filters.write().await.push(m.bloom_filter);
@@ -190,6 +190,7 @@ impl Compactor {
                                     sstable_data_file_path,
                                     smallest_key,
                                     biggest_key,
+                                    sst_file_path,
                                 );
                                 actual_number_of_sstables_written_to_disk += 1;
                             }
@@ -523,7 +524,7 @@ impl Compactor {
     ) -> Result<Vec<MergedSSTable>, StorageEngineError> {
         let mut filterd_merged_sstables: Vec<MergedSSTable> = Vec::new();
         for m in merged_sstables.iter() {
-            let new_index: Arc<SkipMap<Vec<u8>, (usize, u64, bool)>> = Arc::new(SkipMap::new());
+            let new_index = Arc::new(SkipMap::new());
             let mut new_sstable = SSTable::new(PathBuf::new(), false).await;
             for entry in m.sstable.index.iter() {
                 if self.tombstones.contains_key(entry.key()) {

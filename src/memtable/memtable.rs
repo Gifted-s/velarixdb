@@ -6,17 +6,16 @@ use crate::consts::{
 use crate::err::StorageEngineError;
 //use crate::memtable::val_option::ValueOption;
 use crate::storage_engine::SizeUnit;
+use crate::types::{CreationTime, IsTombStone, Key, ValOffset};
 use chrono::{DateTime, Utc};
 use crossbeam_skiplist::SkipMap;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
-use std::cmp;
+use std::cmp::{self, Ordering};
 use StorageEngineError::*;
 
 use std::{hash::Hash, sync::Arc};
 
-pub type SkipMapKey = Vec<u8>;
-pub type ValueOffset = usize;
 pub type InsertionTime = u64;
 pub type IsDeleted = bool;
 
@@ -29,7 +28,7 @@ pub struct Entry<K: Hash + PartialOrd, V> {
 }
 #[derive(Clone, Debug)]
 pub struct InMemoryTable<K: Hash + PartialOrd + cmp::Ord> {
-    pub index: Arc<SkipMap<K, (usize, u64, bool)>>,
+    pub index: Arc<SkipMap<K, (ValOffset, CreationTime, IsTombStone)>>,
     pub bloom_filter: BloomFilter,
     pub false_positive_rate: f64,
     pub size: usize,
@@ -39,24 +38,29 @@ pub struct InMemoryTable<K: Hash + PartialOrd + cmp::Ord> {
     pub read_only: bool,
 }
 
-impl IndexWithSizeInBytes for InMemoryTable<Vec<u8>> {
-    fn get_index(&self) -> Arc<SkipMap<SkipMapKey, (ValueOffset, InsertionTime, IsDeleted)>> {
+impl IndexWithSizeInBytes for InMemoryTable<Key> {
+    fn get_index(&self) -> Arc<SkipMap<Key, (ValOffset, InsertionTime, IsDeleted)>> {
         Arc::clone(&self.index)
     }
     fn size(&self) -> usize {
         self.size
     }
-    fn find_biggest_key_from_table(&self) -> Result<Vec<u8>, StorageEngineError> {
+    fn find_biggest_key_from_table(&self) -> Result<Key, StorageEngineError> {
         self.find_biggest_key()
     }
 
-    fn find_smallest_key_from_table(&self) -> Result<Vec<u8>, StorageEngineError> {
+    fn find_smallest_key_from_table(&self) -> Result<Key, StorageEngineError> {
         self.find_smallest_key()
     }
 }
 
-impl Entry<Vec<u8>, usize> {
-    pub fn new(key: Vec<u8>, val_offset: usize, created_at: u64, is_tombstone: bool) -> Self {
+impl Entry<Key, ValOffset> {
+    pub fn new(
+        key: Key,
+        val_offset: ValOffset,
+        created_at: CreationTime,
+        is_tombstone: IsTombStone,
+    ) -> Self {
         Entry {
             key,
             val_offset,
@@ -73,7 +77,7 @@ impl Entry<Vec<u8>, usize> {
     }
 }
 
-impl InMemoryTable<Vec<u8>> {
+impl InMemoryTable<Key> {
     pub fn new() -> Self {
         Self::with_specified_capacity_and_rate(
             SizeUnit::Bytes,
@@ -111,7 +115,7 @@ impl InMemoryTable<Vec<u8>> {
         }
     }
 
-    pub fn insert(&mut self, entry: &Entry<Vec<u8>, usize>) -> Result<(), StorageEngineError> {
+    pub fn insert(&mut self, entry: &Entry<Key, ValOffset>) -> Result<(), StorageEngineError> {
         if !self.bloom_filter.contains(&entry.key) {
             self.bloom_filter.set(&entry.key.clone());
             self.index.insert(
@@ -125,11 +129,13 @@ impl InMemoryTable<Vec<u8>> {
             self.size += entry_length_byte;
             return Ok(());
         }
+
         // If the key already exist in the bloom filter then just insert into the entry alone
         self.index.insert(
             entry.key.to_owned(),
             (entry.val_offset, entry.created_at, entry.is_tombstone),
         );
+
         // key length + value offset length + date created length
         // it takes 4 bytes to store a 32 bit integer since 8 bits makes 1 byte
         let entry_length_byte = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
@@ -137,7 +143,10 @@ impl InMemoryTable<Vec<u8>> {
         Ok(())
     }
 
-    pub fn get(&self, key: &Vec<u8>) -> Result<Option<(usize, u64, bool)>, StorageEngineError> {
+    pub fn get(
+        &self,
+        key: &Vec<u8>,
+    ) -> Result<Option<(ValOffset, CreationTime, IsTombStone)>, StorageEngineError> {
         if self.bloom_filter.contains(key) {
             if let Some(entry) = self.index.get(key) {
                 return Ok(Some(*entry.value())); // returns value offset
@@ -146,7 +155,7 @@ impl InMemoryTable<Vec<u8>> {
         Ok(None)
     }
 
-    pub fn update(&mut self, entry: &Entry<Vec<u8>, usize>) -> Result<(), StorageEngineError> {
+    pub fn update(&mut self, entry: &Entry<Key, ValOffset>) -> Result<(), StorageEngineError> {
         if !self.bloom_filter.contains(&entry.key) {
             return Err(KeyNotFoundInMemTable);
         }
@@ -172,7 +181,7 @@ impl InMemoryTable<Vec<u8>> {
         id.as_bytes().to_vec()
     }
 
-    pub fn delete(&mut self, entry: &Entry<Vec<u8>, usize>) -> Result<(), StorageEngineError> {
+    pub fn delete(&mut self, entry: &Entry<Key, ValOffset>) -> Result<(), StorageEngineError> {
         if !self.bloom_filter.contains(&entry.key) {
             return Err(KeyNotFoundInMemTable);
         }
@@ -194,7 +203,7 @@ impl InMemoryTable<Vec<u8>> {
     }
 
     // Find the biggest element in the skip list
-    pub fn find_biggest_key(&self) -> Result<Vec<u8>, StorageEngineError> {
+    pub fn find_biggest_key(&self) -> Result<Key, StorageEngineError> {
         let largest_entry = self.index.iter().next_back();
         match largest_entry {
             Some(e) => return Ok(e.key().to_vec()),
@@ -203,13 +212,25 @@ impl InMemoryTable<Vec<u8>> {
     }
 
     // Find the smallest element in the skip list
-    pub fn find_smallest_key(&self) -> Result<Vec<u8>, StorageEngineError> {
+    pub fn find_smallest_key(&self) -> Result<Key, StorageEngineError> {
         let smallest_entry = self.index.iter().next();
         match smallest_entry {
             Some(e) => return Ok(e.key().to_vec()),
             None => Err(LowestKeyIndexError),
         }
     }
+
+    pub fn is_entry_within_range<'a>(
+        e: &crossbeam_skiplist::map::Entry<Key, (ValOffset, CreationTime, IsTombStone)>,
+        start: &'a [u8],
+        end: &'a [u8],
+    ) -> bool {
+        e.key().cmp(&start.to_vec()) == Ordering::Greater
+            || e.key().cmp(&start.to_vec()) == Ordering::Equal
+            || e.key().cmp(&end.to_vec()) == Ordering::Less
+            || e.key().cmp(&end.to_vec()) == Ordering::Equal
+    }
+
     pub fn false_positive_rate(&mut self) -> f64 {
         self.false_positive_rate
     }
@@ -217,7 +238,7 @@ impl InMemoryTable<Vec<u8>> {
         self.size
     }
 
-    pub fn get_index(self) -> Arc<SkipMap<Vec<u8>, (usize, u64, bool)>> {
+    pub fn get_index(self) -> Arc<SkipMap<Vec<u8>, (ValOffset, CreationTime, IsTombStone)>> {
         self.index.clone()
     }
 

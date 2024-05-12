@@ -13,5 +13,6 @@ pub mod range;
 pub mod sparse_index;
 pub mod sstable;
 pub mod storage_engine;
+pub mod types;
 pub mod utils;
 pub mod value_log;
