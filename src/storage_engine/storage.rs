@@ -1,25 +1,26 @@
-use crate::{
-    bloom_filter::BloomFilter,
-    cfg::Config,
-    compaction::{Bucket, BucketID, BucketMap, Compactor},
-    consts::{
-        BUCKETS_DIRECTORY_NAME, HEAD_ENTRY_KEY, META_DIRECTORY_NAME, SIZE_OF_U32, SIZE_OF_U64,
-        SIZE_OF_U8, TAIL_ENTRY_KEY, TOMB_STONE_MARKER, VALUE_LOG_DIRECTORY_NAME, WRITE_BUFFER_SIZE,
-    },
-    err::StorageEngineError,
-    flusher::{FlushDataMemTable, Flusher},
-    key_offseter::KeyRange,
-    memtable::{Entry, InMemoryTable},
-    meta::Meta,
-    range::RangeIterator,
-    sparse_index::SparseIndex,
-    sstable::{SSTable, SSTablePath},
-    types::{self, Key, ValOffset},
-    value_log::ValueLog,
+use crate::bloom_filter::BloomFilter;
+use crate::cfg::Config;
+use crate::compaction::{Bucket, BucketID, BucketMap, Compactor};
+use crate::consts::{
+    BUCKETS_DIRECTORY_NAME, HEAD_ENTRY_KEY, META_DIRECTORY_NAME, SIZE_OF_U32, SIZE_OF_U64,
+    SIZE_OF_U8, TAIL_ENTRY_KEY, TOMB_STONE_MARKER, VALUE_LOG_DIRECTORY_NAME, WRITE_BUFFER_SIZE,
 };
+use crate::err::StorageEngineError;
+use crate::err::StorageEngineError::*;
+use crate::flusher::{FlushDataMemTable, Flusher};
+use crate::key_offseter::KeyRange;
+use crate::memtable::{Entry, InMemoryTable};
+use crate::meta::Meta;
+use crate::range::RangeIterator;
+use crate::sparse_index::SparseIndex;
+use crate::sstable::{SSTable, SSTablePath};
+use crate::types::{self, Key, ValOffset};
+use crate::value_log::ValueLog;
 use chrono::Utc;
 use indexmap::IndexMap;
 use log::error;
+use std::{borrow::Borrow, path::PathBuf};
+use std::{hash::Hash, sync::Arc};
 use tokio::fs::{self, read_dir};
 use tokio::{
     spawn,
@@ -28,11 +29,6 @@ use tokio::{
         RwLock,
     },
 };
-
-use crate::err::StorageEngineError::*;
-use std::{borrow::Borrow, path::PathBuf};
-
-use std::{hash::Hash, sync::Arc};
 
 /// Exclusive write access:
 /// Multiple readers or exactly one writer at a time
@@ -330,7 +326,6 @@ impl<'a> StorageEngine<'a, Key> {
                                 Err(err) => error!("{}", err),
                             }
                         }
-
                         if most_recent_insert_time > 0 && is_deleted {
                             return Err(KeyFoundAsTombstoneInSSTableError);
                         }

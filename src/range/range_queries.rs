@@ -1,24 +1,24 @@
-use std::{cmp::Ordering, collections::HashMap, sync::Arc};
-
 // NOTE: STCS can handle range queries but scans within identified SSTables might be neccessary.
 // Data for your range might be spread across multiple SSTables. Even with a successful bloom filter check,
 // each identified SSTable might still contain data outside your desired range. For heavily range query-focused workloads, LCS or TWSC should be considered
 // Although this stratedy is not available for now, It will be implmented in the future
 
-use crate::{
-    consts::{DEFAULT_ALLOW_PREFETCH, DEFAULT_PREFETCH_SIZE},
-    err::StorageEngineError,
-    memtable::Entry,
-    sparse_index::SparseIndex,
-    sstable::SSTable,
-    storage_engine::StorageEngine,
-    types::{self, Key, ValOffset, Value},
-    value_log::ValueLog,
-};
+use crate::consts::{DEFAULT_ALLOW_PREFETCH, DEFAULT_PREFETCH_SIZE};
+use crate::err::StorageEngineError;
+use crate::memtable::{Entry, InMemoryTable};
+use crate::sparse_index::SparseIndex;
+use crate::sstable::SSTable;
+use crate::storage_engine::StorageEngine;
+use crate::types::{self, CreationTime, IsTombStone, Key, ValOffset, Value};
+use crate::value_log::ValueLog;
+use futures::future::join_all;
 use indexmap::IndexMap;
 use log::{error, info};
 use std::collections::BTreeMap;
-
+use std::path::PathBuf;
+use std::{cmp::Ordering, collections::HashMap, sync::Arc};
+use tokio::sync::broadcast::error;
+use tokio_stream::{self as stream, StreamExt};
 #[derive(Debug, Clone)]
 pub struct FetchedEntry {
     pub key: Key,
@@ -34,6 +34,7 @@ pub struct RangeIterator<'a> {
     pub prefetch_entries_size: usize,
     pub prefetch_entries: Vec<FetchedEntry>,
     pub keys: Vec<Entry<Key, ValOffset>>,
+    pub v_log: ValueLog,
 }
 
 impl<'a> RangeIterator<'a> {
@@ -43,6 +44,7 @@ impl<'a> RangeIterator<'a> {
         allow_prefetch: bool,
         prefetch_entries_size: usize,
         keys: Vec<Entry<Key, ValOffset>>,
+        v_log: ValueLog,
     ) -> Self {
         Self {
             start,
@@ -52,30 +54,31 @@ impl<'a> RangeIterator<'a> {
             prefetch_entries_size,
             prefetch_entries: Vec::new(),
             keys,
+            v_log,
         }
     }
 
-    pub async fn next(&mut self) -> Option<Vec<Entry<Key, ValOffset>>> {
+    // READ -> https://tokio.rs/tokio/tutorial/streams
+    pub async fn next(&mut self) -> impl stream::Stream<Item = FetchedEntry> {
         if self.allow_prefetch {
-            // let mut entries_map: BTreeMap<Key, Val> = BTreeMap::new();
-            let keys_to_be_fetched = {
-                let keys: Vec<Entry<Key, ValOffset>>;
-                if self.current + self.prefetch_entries_size <= self.keys.len() {
-                    keys = (&self.keys[self.current..self.current + self.prefetch_entries_size])
-                        .to_vec();
-                    self.current += self.prefetch_entries_size
-                } else {
-                    keys = (&self.keys[self.current..]).to_vec();
-                    self.current = self.keys.len() - 1
+            if self.current_is_at_end_prefetched_keys() {
+                if self.current_is_at_last_key() {
+                    return stream::iter(vec![]);
                 }
-                keys
-            };
-            if keys_to_be_fetched.is_empty() {
-                return None;
-            };
-            return Some(keys_to_be_fetched);
+                match self.prefetch_entries().await {
+                    Err(err) => {
+                        error!("{}", StorageEngineError::RangeScanError(Box::new(err)));
+                        return stream::iter(vec![]);
+                    }
+                    _ => {}
+                }
+            }
+            let entry = self.current_entry();
+            self.current += 1;
+            return stream::iter(vec![entry]);
         }
-        None
+        // handle not allow prefetch
+        return stream::iter(vec![]);
     }
     pub fn prev(&mut self) -> Option<FetchedEntry> {
         None
@@ -92,20 +95,75 @@ impl<'a> RangeIterator<'a> {
     pub fn end(&mut self) -> Option<FetchedEntry> {
         None
     }
-}
 
-impl<'a> Iterator for RangeIterator<'a> {
-    type Item = FetchedEntry;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        None
+    pub async fn prefetch_entries(&mut self) -> Result<(), StorageEngineError> {
+        let keys: Vec<Entry<Key, ValOffset>>;
+        if self.current + self.prefetch_entries_size <= self.keys.len() {
+            keys = (&self.keys[self.current..self.current + self.prefetch_entries_size]).to_vec();
+            // self.current += self.prefetch_entries_size
+        } else {
+            keys = (&self.keys[self.current..]).to_vec();
+        }
+        let entries = self.fetch_entries_in_parralel(&keys).await;
+        match entries {
+            Ok(e) => Ok(self.prefetch_entries.extend(e)),
+            Err(err) => Err(err),
+        }
     }
-}
+    pub fn current_entry(&self) -> FetchedEntry {
+        self.prefetch_entries[self.current].to_owned()
+    }
+    pub fn current_is_at_end_prefetched_keys(&self) -> bool {
+        self.current >= self.prefetch_entries.len()
+    }
+    pub fn current_is_at_last_key(&self) -> bool {
+        self.current >= self.keys.len()
+    }
+    pub async fn fetch_entries_in_parralel(
+        &self,
+        keys: &'a Vec<Entry<Key, ValOffset>>,
+    ) -> Result<Vec<FetchedEntry>, StorageEngineError> {
+        let mut entries_map: BTreeMap<Key, Value> = BTreeMap::new();
+        let tokio_owned_keys = keys.to_owned();
+        let tokio_owned_v_log = Arc::new(self.v_log.to_owned());
+        let tasks = tokio_owned_keys.into_iter().map(|entry| {
+            let v_log = Arc::clone(&tokio_owned_v_log);
+            tokio::spawn(async move {
+                // We only use the snapshot of vlog to prevent modification while transaction is ongoing
+                let entry_from_vlog = v_log.get(entry.val_offset).await;
+                match entry_from_vlog {
+                    Ok(val_opt) => match val_opt {
+                        Some((val, is_deleted)) => return Ok((entry.key, val, is_deleted)),
+                        None => {
+                            return Err(StorageEngineError::KeyNotFoundInValueLogError);
+                        }
+                    },
+                    Err(err) => return Err(err),
+                };
+            })
+        });
 
-impl<'a> DoubleEndedIterator for RangeIterator<'a> {
-    fn next_back(&mut self) -> Option<Self::Item> {
-        None
-        // ... (implementation to return next element from back)
+        let all_results = join_all(tasks).await;
+        for tokio_response in all_results {
+            match tokio_response {
+                Ok(entry) => match entry {
+                    Ok((key, val, is_deleted)) => {
+                        if !is_deleted {
+                            entries_map.insert(key, val);
+                        }
+                    }
+                    Err(err) => {
+                        error!("{:?}", err)
+                    }
+                },
+                Err(err) => error!("{}", err),
+            }
+        }
+        let mut prefetched_entries = Vec::new();
+        for (key, val) in entries_map {
+            prefetched_entries.push(FetchedEntry { key, val })
+        }
+        Ok(prefetched_entries)
     }
 }
 
@@ -119,80 +177,22 @@ impl Default for RangeIterator<'_> {
             prefetch_entries_size: DEFAULT_PREFETCH_SIZE,
             prefetch_entries: Vec::new(),
             keys: Vec::new(),
+            v_log: ValueLog {
+                file_path: PathBuf::new(),
+                head_offset: 0,
+                tail_offset: 0,
+            },
         }
     }
 }
 
-// let tasks = self.keys.into_iter().map(|entry| {
-//     tokio::spawn(async move {
-//         // We only use the snapshot of vlog to prevent modification while transaction is ongoing
-//         let value_log = self.v_log;
-//         let most_recent_value = value_log
-//             .get(std::str::from_utf8(&entry.key).unwrap())
-//             .await;
-//         match most_recent_value {
-//             Ok((value, creation_time)) => {
-//                 // if entry.created_at != creation_time
-//                 //     || value == TOMB_STONE_MARKER.to_le_bytes().to_vec()
-//                 // {
-//                 //     invalid_entries_clone.write().await.push(entry);
-//                 // } else {
-//                 //     valid_entries_clone.write().await.push((entry.key, value));
-//                 // }
-//             }
-//             Err(err) => match err {
-//                 // StorageEngineError::KeyFoundAsTombstoneInMemtableError => {
-//                 //     invalid_entries_clone.write().await.push(entry);
-//                 // }
-//                 // StorageEngineError::KeyNotFoundInAnySSTableError => {
-//                 //     invalid_entries_clone.write().await.push(entry);
-//                 // }
-//                 // StorageEngineError::KeyNotFoundByAnyBloomFilterError => {
-//                 //     invalid_entries_clone.write().await.push(entry);
-//                 // }
-//                 // StorageEngineError::KeyFoundAsTombstoneInSSTableError => {
-//                 //     invalid_entries_clone.write().await.push(entry);
-//                 // }
-//                 // StorageEngineError::KeyFoundAsTombstoneInValueLogError => {
-//                 //     invalid_entries_clone.write().await.push(entry);
-//                 // }
-//                 // StorageEngineError::KeyNotFoundInValueLogError => {
-//                 //     invalid_entries_clone.write().await.push(entry);
-//                 // }
-//                 // StorageEngineError::NotFoundInDB => {
-//                 //     invalid_entries_clone.write().await.push(entry);
-//                 // }
-//                 _ => {
-//                     // error!(
-//                     //     "Error fetching key {:?} {:?}",
-//                     //     //str::from_utf8(&entry.key).unwrap(),
-//                     //     err
-//                     // )
-//                 }
-//             },
-//         }
-//     })
-// });
-
-// for task in tasks {
-//     tokio::select! {
-//         result = task => {
-//             match result {
-//                 Ok(_) => {
-//                     info!("Valid entries fetch completed")
-//                 }
-//                 Err(err) => {
-//                     error!("Error running task {}", err)
-
-//                 }
-//             }
-//         }
-//     }
-// }
-
 impl<'a> StorageEngine<'a, Key> {
     // Start if the range query
-    pub async fn seek(&mut self, start: &'a [u8], end: &'a [u8]) -> Result<(), StorageEngineError> {
+    pub async fn seek(
+        &'static mut self,
+        start: &'a [u8],
+        end: &'a [u8],
+    ) -> Result<&'a RangeIterator, StorageEngineError> {
         let mut merger = Merger::new();
         // check entries within active memtable
         if !self.active_memtable.index.is_empty() {
@@ -212,12 +212,7 @@ impl<'a> StorageEngine<'a, Key> {
                         .clone()
                         .index
                         .iter()
-                        .filter(|e| {
-                            e.key().cmp(&start.to_vec()) == Ordering::Greater
-                                || e.key().cmp(&start.to_vec()) == Ordering::Equal
-                                || e.key().cmp(&end.to_vec()) == Ordering::Less
-                                || e.key().cmp(&end.to_vec()) == Ordering::Equal
-                        })
+                        .filter(|e| InMemoryTable::is_entry_within_range(e, start, end))
                         .map(|e| {
                             Entry::new(e.key().to_vec(), e.value().0, e.value().1, e.value().2)
                         })
@@ -245,12 +240,7 @@ impl<'a> StorageEngine<'a, Key> {
                             .clone()
                             .index
                             .iter()
-                            .filter(|e| {
-                                e.key().cmp(&start.to_vec()) == Ordering::Greater
-                                    || e.key().cmp(&start.to_vec()) == Ordering::Equal
-                                    || e.key().cmp(&end.to_vec()) == Ordering::Less
-                                    || e.key().cmp(&end.to_vec()) == Ordering::Equal
-                            })
+                            .filter(|e| InMemoryTable::is_entry_within_range(e, start, end))
                             .map(|e| {
                                 Entry::new(e.key().to_vec(), e.value().0, e.value().1, e.value().2)
                             })
@@ -296,7 +286,6 @@ impl<'a> StorageEngine<'a, Key> {
 
         for (_, sst) in sstables_within_range {
             let sparse_index = SparseIndex::new(sst.index_file_path.clone()).await;
-
             match sparse_index.get_block_offset_range(&start, &end).await {
                 Ok(range_offset) => {
                     let sst = SSTable::new_with_exisiting_file_path(
@@ -312,21 +301,16 @@ impl<'a> StorageEngine<'a, Key> {
                 Err(err) => return Err(StorageEngineError::RangeScanError(Box::new(err))),
             }
         }
-
         self.range_iterator = RangeIterator::<'a>::new(
             start,
             end,
             self.config.allow_prefetch,
             self.config.prefetch_size,
             merger.entries,
+            self.val_log.clone(),
         );
-        Ok(())
+        Ok(&self.range_iterator)
     }
-
-    // TO BE CONTINUED :)
-    // pub async fn next(&mut self) -> Option<Vec<FetchedEntry>> {
-    //    let entries_to_be_fetched =
-    // }
 }
 
 pub struct Merger {

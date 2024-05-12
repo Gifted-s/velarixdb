@@ -1,3 +1,4 @@
+use crate::sstable::SSTablePath;
 use bit_vec::BitVec;
 use std::{
     collections::hash_map::DefaultHasher,
@@ -8,8 +9,6 @@ use std::{
         Arc, Mutex,
     },
 };
-
-use crate::sstable::SSTablePath;
 
 #[derive(Debug)]
 pub struct BloomFilter {

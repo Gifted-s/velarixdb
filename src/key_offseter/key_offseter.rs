@@ -1,6 +1,8 @@
+use crate::{
+    sstable::SSTablePath,
+    types::{self, Key},
+};
 use std::{cmp::Ordering, collections::HashMap, path::PathBuf};
-
-use crate::{sstable::SSTablePath, types::{self, Key}};
 
 type LargestKey = types::Key;
 type SmallestKey = types::Key;

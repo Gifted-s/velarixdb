@@ -6,16 +6,15 @@ use crate::consts::{
 use crate::err::StorageEngineError;
 //use crate::memtable::val_option::ValueOption;
 use crate::storage_engine::SizeUnit;
-use crate::types::{ CreationTime, IsTombStone, Key, ValOffset};
+use crate::types::{CreationTime, IsTombStone, Key, ValOffset};
 use chrono::{DateTime, Utc};
 use crossbeam_skiplist::SkipMap;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
-use std::cmp;
+use std::cmp::{self, Ordering};
 use StorageEngineError::*;
 
 use std::{hash::Hash, sync::Arc};
-
 
 pub type InsertionTime = u64;
 pub type IsDeleted = bool;
@@ -220,6 +219,18 @@ impl InMemoryTable<Key> {
             None => Err(LowestKeyIndexError),
         }
     }
+
+    pub fn is_entry_within_range<'a>(
+        e: &crossbeam_skiplist::map::Entry<Key, (ValOffset, CreationTime, IsTombStone)>,
+        start: &'a [u8],
+        end: &'a [u8],
+    ) -> bool {
+        e.key().cmp(&start.to_vec()) == Ordering::Greater
+            || e.key().cmp(&start.to_vec()) == Ordering::Equal
+            || e.key().cmp(&end.to_vec()) == Ordering::Less
+            || e.key().cmp(&end.to_vec()) == Ordering::Equal
+    }
+
     pub fn false_positive_rate(&mut self) -> f64 {
         self.false_positive_rate
     }

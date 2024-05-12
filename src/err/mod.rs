@@ -1,5 +1,4 @@
 use std::{io, path::PathBuf};
-
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -182,7 +181,7 @@ pub enum StorageEngineError {
     #[error("Unsuported OS, err message `{0}`")]
     GCErrorUnsupportedPlatform(String),
 
-     /// Error while trying to perform a range scan
-     #[error("Range scan error `{0}`")]
-     RangeScanError(Box<Self>),
+    /// Error while trying to perform a range scan
+    #[error("Range scan error `{0}`")]
+    RangeScanError(Box<Self>),
 }

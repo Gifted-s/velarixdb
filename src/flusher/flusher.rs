@@ -15,7 +15,6 @@ pub type FlushDataMemTable = (InActiveMemtableID, InActiveMemtable);
 use tokio::spawn;
 use tokio::sync::mpsc::Receiver;
 
-
 #[derive(Debug)]
 pub struct FlushUpdateMsg {
     pub flushed_memtable_id: InActiveMemtableID,

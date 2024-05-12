@@ -1,13 +1,9 @@
+use crate::consts::{EOF, SIZE_OF_U32};
+use crate::err::StorageEngineError;
 use std::path::PathBuf;
-
 use tokio::{
     fs::OpenOptions,
     io::{self, AsyncReadExt, AsyncWriteExt},
-};
-
-use crate::{
-    consts::{EOF, SIZE_OF_U32},
-    err::StorageEngineError,
 };
 use StorageEngineError::*;
 type Offset = u32;
