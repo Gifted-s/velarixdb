@@ -33,10 +33,10 @@ use tokio::{
 /// Exclusive write access:
 /// Multiple readers or exactly one writer at a time
 pub type ExRw<T> = Arc<RwLock<T>>;
-trait ExRwFactory<T> {
+pub trait ExRwFactory<T> {
     fn new(v: T) -> ExRw<T>;
 }
-struct ExRwWrapper<T>(ExRw<T>);
+pub struct ExRwWrapper<T>(ExRw<T>);
 
 impl<T> ExRwFactory<T> for ExRwWrapper<T> {
     fn new(v: T) -> ExRw<T> {
