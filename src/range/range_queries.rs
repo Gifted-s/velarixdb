@@ -331,7 +331,7 @@ impl Merger {
             entries: Vec::new(),
         }
     }
-
+    // merge entries in sorted order
     fn merge_entries(&mut self, entries_to_merge: Vec<Entry<Key, ValOffset>>) {
         let mut merged_indexes = Vec::new();
         let e1 = &self.entries;
