@@ -264,6 +264,7 @@ impl<'a> StorageEngine<'a, Key> {
                 let bf_sstable = bf_inner.sstable_path.to_owned().unwrap();
                 let data_path = bf_sstable.data_file_path.to_str().unwrap();
                 if bf_inner.contains(&start.to_vec()) || bf_inner.contains(&end.to_vec()) {
+                    // add to sstable path
                     sstable_path.insert(data_path.to_owned(), bf_sstable.to_owned());
                 }
             }
@@ -330,7 +331,7 @@ impl Merger {
             entries: Vec::new(),
         }
     }
-
+    // merge entries in sorted order
     fn merge_entries(&mut self, entries_to_merge: Vec<Entry<Key, ValOffset>>) {
         let mut merged_indexes = Vec::new();
         let e1 = &self.entries;
