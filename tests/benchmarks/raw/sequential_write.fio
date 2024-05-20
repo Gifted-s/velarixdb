@@ -1,0 +1,10 @@
+[sequential_write]
+ioengine=sync
+direct=1
+bs=1m
+rw=write
+size=1g
+numjobs=1
+runtime=60
+time_based
+name=seq_write_test

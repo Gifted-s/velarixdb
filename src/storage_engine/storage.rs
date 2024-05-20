@@ -21,7 +21,8 @@ use indexmap::IndexMap;
 use log::error;
 use std::{borrow::Borrow, path::PathBuf};
 use std::{hash::Hash, sync::Arc};
-use tokio::fs::{self, read_dir};
+use tokio::fs::{self, read_dir, OpenOptions};
+use tokio::io::{self, AsyncSeekExt, AsyncWriteExt, SeekFrom};
 use tokio::{
     spawn,
     sync::{
@@ -29,6 +30,9 @@ use tokio::{
         RwLock,
     },
 };
+
+use rand::Rng;
+use std::time::Instant;
 
 /// Exclusive write access:
 /// Multiple readers or exactly one writer at a time
@@ -925,9 +929,15 @@ mod tests {
     use log::info;
     use rand::distributions::Alphanumeric;
     use rand::{thread_rng, Rng};
-    use std::sync::Arc;
 
-    use tokio::fs;
+    fn init() {
+        let res = env_logger::builder().is_test(true).try_init();
+        match res {
+            Ok(_) => {}
+            Err(err) => println!("err {}", err),
+        }
+    }
+
     fn generate_random_string(length: usize) -> String {
         let rng = thread_rng();
         rng.sample_iter(&Alphanumeric)
@@ -935,6 +945,7 @@ mod tests {
             .map(|c| c as char)
             .collect()
     }
+
     // Generate test to find keys after compaction
     #[tokio::test]
     async fn storage_engine_create_asynchronous() {
