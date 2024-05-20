@@ -1,5 +1,5 @@
 [package]
-name = "bump"
+name = "vikingsdb"
 version = "0.1.0"
 edition = "2021"
 
@@ -15,9 +15,10 @@ env_logger = "0.11.2"
 futures = "0.3.30"
 indexmap = "2.2.5"
 libc = "0.2.153"
-log = "0.4.20"
+log = "0.4.21"
 nix = "0.28.0"
 num-traits = "0.2.17"
+pretty_env_logger = "0.5.0"
 rand = "0.8.5"
 regex = "1.10.3"
 serde = { version = "1.0.195", features = ["derive"] }
