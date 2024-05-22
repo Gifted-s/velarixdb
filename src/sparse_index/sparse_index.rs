@@ -1,5 +1,6 @@
 use crate::consts::{EOF, SIZE_OF_U32};
 use crate::err::StorageEngineError;
+use crate::types::Key;
 use std::path::PathBuf;
 use tokio::{
     fs::OpenOptions,
@@ -40,7 +41,7 @@ impl SparseIndex {
         }
     }
 
-    pub fn insert(&mut self, key_prefix: u32, key: Vec<u8>, offset: u32) {
+    pub fn insert(&mut self, key_prefix: u32, key: Key, offset: Offset) {
         self.entries.push(SparseIndexEntry {
             key_prefix,
             key,
