@@ -1,5 +1,6 @@
 use crate::consts::{EOF, SIZE_OF_U32};
 use crate::err::StorageEngineError;
+use crate::types::Key;
 use std::path::PathBuf;
 use tokio::{
     fs::OpenOptions,
@@ -10,7 +11,7 @@ type Offset = u32;
 struct SparseIndexEntry {
     key_prefix: u32,
     key: Vec<u8>,
-    offset: u32,
+    block_handle: u32,
 }
 
 pub struct SparseIndex {
@@ -40,11 +41,11 @@ impl SparseIndex {
         }
     }
 
-    pub fn insert(&mut self, key_prefix: u32, key: Vec<u8>, offset: u32) {
+    pub fn insert(&mut self, key_prefix: u32, key: Key, offset: Offset) {
         self.entries.push(SparseIndexEntry {
             key_prefix,
             key,
-            offset,
+            block_handle:offset,
         })
     }
 
@@ -70,7 +71,7 @@ impl SparseIndex {
             entry_vec.extend_from_slice(&entry.key);
 
             //add value offset
-            entry_vec.extend_from_slice(&(entry.offset as u32).to_le_bytes());
+            entry_vec.extend_from_slice(&(entry.block_handle as u32).to_le_bytes());
             assert!(entry_len == entry_vec.len(), "Incorrect entry size");
 
             file.write_all(&entry_vec)

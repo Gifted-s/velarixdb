@@ -137,7 +137,7 @@ impl<'a> StorageEngine<'a, Key> {
         }
 
         // Start background to constantly check accept flush data in a seperate tokio task and
-        // process them sequetially to prevent interterence
+        // process them sequetially to prevent interference
         if let ChanRecv::FlushDataRecv(rcx) = &self.flush_data_recevier {
             self.flusher.flush_data_collector(
                 Arc::clone(rcx),
