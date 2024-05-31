@@ -1,5 +1,6 @@
 use std::{io, path::PathBuf};
 use thiserror::Error;
+use tokio::task::JoinError;
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -180,6 +181,10 @@ pub enum StorageEngineError {
     /// Error running GC in an unsurpported operating system
     #[error("Unsuported OS, err message `{0}`")]
     GCErrorUnsupportedPlatform(String),
+
+    /// Error joining multiple tokio tasks to run concurrently
+    #[error("Error joining tokio tasks. error: `{error}`, context: `{context}`")]
+    TokioTaskJoinError { error: JoinError, context: String },
 
     /// Error while trying to perform a range scan
     #[error("Range scan error `{0}`")]

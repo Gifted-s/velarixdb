@@ -103,7 +103,6 @@ impl<'a> RangeIterator<'a> {
         let keys: Vec<Entry<Key, ValOffset>>;
         if self.current + self.prefetch_entries_size <= self.keys.len() {
             keys = (&self.keys[self.current..self.current + self.prefetch_entries_size]).to_vec();
-            // self.current += self.prefetch_entries_size
         } else {
             keys = (&self.keys[self.current..]).to_vec();
         }
