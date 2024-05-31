@@ -45,7 +45,7 @@ impl SparseIndex {
         self.entries.push(SparseIndexEntry {
             key_prefix,
             key,
-            block_handle:offset,
+            block_handle: offset,
         })
     }
 

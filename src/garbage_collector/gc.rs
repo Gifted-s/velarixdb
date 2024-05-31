@@ -8,6 +8,8 @@ use crate::value_log::ValueLogEntry;
 use crate::{err, types};
 use crate::{err::StorageEngineError, storage_engine::*};
 use chrono::Utc;
+use err::StorageEngineError::*;
+use futures::future::join_all;
 use log::{error, info};
 use nix::libc::{c_int, off_t};
 use std::io::Error;
@@ -15,7 +17,6 @@ use std::os::unix::io::AsRawFd;
 use std::str;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-
 type K = types::Key;
 type V = types::Value;
 type VOffset = types::ValOffset;
@@ -67,53 +68,54 @@ impl GarbageCollector {
                         } else {
                             valid_entries_clone.write().await.push((entry.key, value));
                         }
+                        Ok(())
                     }
                     Err(err) => match err {
-                        err::StorageEngineError::KeyFoundAsTombstoneInMemtableError => {
+                        KeyFoundAsTombstoneInMemtableError => {
                             invalid_entries_clone.write().await.push(entry);
+                            Ok(())
                         }
-                        err::StorageEngineError::KeyNotFoundInAnySSTableError => {
+                        KeyNotFoundInAnySSTableError => {
                             invalid_entries_clone.write().await.push(entry);
+                            Ok(())
                         }
-                        err::StorageEngineError::KeyNotFoundByAnyBloomFilterError => {
+                        KeyNotFoundByAnyBloomFilterError => {
                             invalid_entries_clone.write().await.push(entry);
+                            Ok(())
                         }
-                        err::StorageEngineError::KeyFoundAsTombstoneInSSTableError => {
+                        KeyFoundAsTombstoneInSSTableError => {
                             invalid_entries_clone.write().await.push(entry);
+                            Ok(())
                         }
-                        err::StorageEngineError::KeyFoundAsTombstoneInValueLogError => {
+                        KeyFoundAsTombstoneInValueLogError => {
                             invalid_entries_clone.write().await.push(entry);
+                            Ok(())
                         }
                         err::StorageEngineError::KeyNotFoundInValueLogError => {
                             invalid_entries_clone.write().await.push(entry);
+                            Ok(())
                         }
-                        err::StorageEngineError::NotFoundInDB => {
+                        NotFoundInDB => {
                             invalid_entries_clone.write().await.push(entry);
+                            Ok(())
                         }
-                        _ => {
-                            error!(
-                                "Error fetching key {:?} {:?}",
-                                str::from_utf8(&entry.key).unwrap(),
-                                err
-                            )
-                        }
+                        _ => return Err(err),
                     },
                 }
             })
         });
-
-        for task in tasks {
-            tokio::select! {
-                result = task => {
-                    match result {
-                        Ok(_) => {
-                            info!("Valid entries fetch completed")
-                        }
-                        Err(err) => {
-                            error!("Error running task {}", err)
-
-                        }
-                    }
+        let all_results = join_all(tasks).await;
+        for tokio_response in all_results {
+            match tokio_response {
+                Ok(entry) => match entry {
+                    Err(err) => return Err(err),
+                    _ => {}
+                },
+                Err(err) => {
+                    return Err(TokioTaskJoinError {
+                        error: err,
+                        context: "GC".to_owned(),
+                    })
                 }
             }
         }
