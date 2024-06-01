@@ -3,6 +3,7 @@ use log::{error, info, warn};
 use std::{cmp::Ordering, collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::fs;
 use tokio::sync::mpsc::Receiver;
+use tokio::sync::RwLock;
 use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
@@ -13,7 +14,7 @@ use super::{
 use crate::consts::{
     DEFAULT_COMPACTION_INTERVAL_MILLI, DEFAULT_TOMBSTONE_COMPACTION_INTERVAL_MILLI,
 };
-use crate::storage_engine::ExRw;
+
 use crate::{
     bloom_filter::BloomFilter,
     consts::TOMB_STONE_TTL,
@@ -61,7 +62,7 @@ impl Compactor {
     /// for now this feature has not been implememnted
     pub fn tombstone_compaction_condition_background_checker(
         &self,
-        rcx: ExRw<Receiver<BucketMap>>,
+        rcx: Arc<RwLock<Receiver<BucketMap>>>,
     ) {
         let receiver = Arc::clone(&rcx);
         tokio::spawn(async move {
@@ -77,9 +78,9 @@ impl Compactor {
 
     pub fn start_periodic_background_compaction(
         &self,
-        bucket_map: ExRw<BucketMap>,
-        bloom_filters: ExRw<Vec<BloomFilter>>,
-        key_range: ExRw<KeyRange>,
+        bucket_map: Arc<RwLock<BucketMap>>,
+        bloom_filters: Arc<RwLock<Vec<BloomFilter>>>,
+        key_range: Arc<RwLock<KeyRange>>,
     ) {
         let use_ttl = self.use_ttl;
         let entry_ttl = self.entry_ttl;
@@ -124,9 +125,9 @@ impl Compactor {
 
     pub async fn run_compaction(
         &mut self,
-        bucket_map: ExRw<BucketMap>,
-        bf: ExRw<Vec<BloomFilter>>,
-        key_range: ExRw<KeyRange>,
+        bucket_map: Arc<RwLock<BucketMap>>,
+        bf: Arc<RwLock<Vec<BloomFilter>>>,
+        key_range: Arc<RwLock<KeyRange>>,
     ) -> Result<bool, StorageEngineError> {
         println!("Compaction started");
         let mut number_of_compactions = 0;
@@ -273,10 +274,10 @@ impl Compactor {
 
     pub async fn clean_up_after_compaction(
         &self,
-        buckets: ExRw<BucketMap>,
+        buckets: Arc<RwLock<BucketMap>>,
         sstables_to_delete: &Vec<(BucketID, Vec<SSTablePath>)>,
-        bloom_filters_with_both_old_and_new_sstables: ExRw<Vec<BloomFilter>>,
-        key_range: ExRw<KeyRange>,
+        bloom_filters_with_both_old_and_new_sstables: Arc<RwLock<Vec<BloomFilter>>>,
+        key_range: Arc<RwLock<KeyRange>>,
     ) -> Result<Option<bool>, StorageEngineError> {
         // Remove obsolete keys from biggest keys index
         sstables_to_delete.iter().for_each(|(_, sstables)| {
@@ -311,7 +312,7 @@ impl Compactor {
 
     pub async fn filter_out_old_bloom_filters(
         &self,
-        bloom_filters_with_both_old_and_new_sstables: ExRw<Vec<BloomFilter>>,
+        bloom_filters_with_both_old_and_new_sstables: Arc<RwLock<Vec<BloomFilter>>>,
         sstables_to_delete: &Vec<(Uuid, Vec<SSTablePath>)>,
     ) -> Option<bool> {
         let mut bloom_filters_map: HashMap<PathBuf, BloomFilter> =

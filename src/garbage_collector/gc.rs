@@ -10,7 +10,6 @@ use crate::{err::StorageEngineError, storage_engine::*};
 use chrono::Utc;
 use err::StorageEngineError::*;
 use futures::future::join_all;
-use log::{error, info};
 use nix::libc::{c_int, off_t};
 use std::io::Error;
 use std::os::unix::io::AsRawFd;
@@ -37,11 +36,11 @@ impl GarbageCollector {
 
     pub async fn run(
         &self,
-        engine: ExRw<StorageEngine<'static, K>>,
+        engine: Arc<RwLock<StorageEngine<'static, K>>>,
     ) -> std::result::Result<(), StorageEngineError> {
-        let invalid_entries: ExRw<Vec<ValueLogEntry>> = Arc::new(RwLock::new(Vec::new()));
-        let valid_entries: ExRw<Vec<(K, V)>> = Arc::new(RwLock::new(Vec::new()));
-        let synced_entries: ExRw<Vec<(K, V, VOffset)>> = Arc::new(RwLock::new(Vec::new()));
+        let invalid_entries: Arc<RwLock<Vec<ValueLogEntry>>> = Arc::new(RwLock::new(Vec::new()));
+        let valid_entries: Arc<RwLock<Vec<(K, V)>>> = Arc::new(RwLock::new(Vec::new()));
+        let synced_entries: Arc<RwLock<Vec<(K, V, VOffset)>>> = Arc::new(RwLock::new(Vec::new()));
         // let valid_entries = Vec::new();
         // Step 1: Read chunks to garbage collect
         // TODO handle errors
@@ -141,10 +140,12 @@ impl GarbageCollector {
 
         for (key, value) in valid_entries.to_owned().read().await.iter() {
             let mut store = engine.write().await;
+
             let v_offset = store
                 .val_log
                 .append(&key, &value, Utc::now().timestamp_millis() as u64, false)
                 .await?;
+
             synced_entries
                 .write()
                 .await
@@ -161,6 +162,7 @@ impl GarbageCollector {
             .await
             .map_err(|err| StorageEngineError::ValueLogFileSyncError { error: err })?;
         engine.write().await.val_log.set_tail(new_tail_offset);
+
         for (key, value, existing_v_offset) in synced_entries.to_owned().read().await.iter() {
             let _ = engine
                 .write()
@@ -186,8 +188,8 @@ impl GarbageCollector {
 
     pub async fn garbage_collect(
         &self,
-        engine: ExRw<StorageEngine<'static, K>>,
-        invalid_entries: ExRw<Vec<ValueLogEntry>>,
+        engine: Arc<RwLock<StorageEngine<'static, K>>>,
+        invalid_entries: Arc<RwLock<Vec<ValueLogEntry>>>,
         punch_hole_start_offset: usize,
         punch_hole_length: usize,
     ) -> std::result::Result<(), StorageEngineError> {

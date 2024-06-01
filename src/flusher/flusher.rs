@@ -1,15 +1,16 @@
 use crate::types;
 use crate::{
     bloom_filter::BloomFilter, cfg::Config, compaction::BucketMap, err::StorageEngineError,
-    key_offseter::KeyRange, memtable::InMemoryTable, storage_engine::ExRw,
+    key_offseter::KeyRange, memtable::InMemoryTable,
 };
 use indexmap::IndexMap;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 type K = types::Key;
 
 pub type InActiveMemtableID = Vec<u8>;
-pub type InActiveMemtable = ExRw<InMemoryTable<K>>;
+pub type InActiveMemtable = Arc<RwLock<InMemoryTable<K>>>;
 pub type FlushDataMemTable = (InActiveMemtableID, InActiveMemtable);
 
 use tokio::spawn;
@@ -38,24 +39,24 @@ pub enum FlushResponse {
 
 #[derive(Debug, Clone)]
 pub struct Flusher {
-    pub(crate) read_only_memtable: ExRw<IndexMap<K, ExRw<InMemoryTable<K>>>>,
-    pub(crate) table_to_flush: ExRw<InMemoryTable<K>>,
+    pub(crate) read_only_memtable: Arc<RwLock<IndexMap<K, Arc<RwLock<InMemoryTable<K>>>>>>,
+    pub(crate) table_to_flush: Arc<RwLock<InMemoryTable<K>>>,
     pub(crate) table_id: Vec<u8>,
-    pub(crate) bucket_map: ExRw<BucketMap>,
-    pub(crate) bloom_filters: ExRw<Vec<BloomFilter>>,
-    pub(crate) key_range: ExRw<KeyRange>,
+    pub(crate) bucket_map: Arc<RwLock<BucketMap>>,
+    pub(crate) bloom_filters: Arc<RwLock<Vec<BloomFilter>>>,
+    pub(crate) key_range: Arc<RwLock<KeyRange>>,
     pub(crate) use_ttl: bool,
     pub(crate) entry_ttl: u64,
 }
 
 impl Flusher {
     pub fn new(
-        read_only_memtable: ExRw<IndexMap<K, ExRw<InMemoryTable<K>>>>,
-        table_to_flush: ExRw<InMemoryTable<K>>,
+        read_only_memtable: Arc<RwLock<IndexMap<K, Arc<RwLock<InMemoryTable<K>>>>>>,
+        table_to_flush: Arc<RwLock<InMemoryTable<K>>>,
         table_id: Vec<u8>,
-        bucket_map: ExRw<BucketMap>,
-        bloom_filters: ExRw<Vec<BloomFilter>>,
-        key_range: ExRw<KeyRange>,
+        bucket_map: Arc<RwLock<BucketMap>>,
+        bloom_filters: Arc<RwLock<Vec<BloomFilter>>>,
+        key_range: Arc<RwLock<KeyRange>>,
         use_ttl: bool,
         entry_ttl: u64,
     ) -> Self {
@@ -121,11 +122,11 @@ impl Flusher {
 
     pub fn flush_data_collector(
         &self,
-        rcx: ExRw<Receiver<FlushDataMemTable>>,
-        buckets: ExRw<BucketMap>,
-        bloom_filters: ExRw<Vec<BloomFilter>>,
-        key_range: ExRw<KeyRange>,
-        read_only_memtable: ExRw<IndexMap<K, ExRw<InMemoryTable<K>>>>,
+        rcx: Arc<RwLock<Receiver<FlushDataMemTable>>>,
+        buckets: Arc<RwLock<BucketMap>>,
+        bloom_filters: Arc<RwLock<Vec<BloomFilter>>>,
+        key_range: Arc<RwLock<KeyRange>>,
+        read_only_memtable: Arc<RwLock<IndexMap<K, Arc<RwLock<InMemoryTable<K>>>>>>,
         config: Config,
     ) {
         let rcx_clone = Arc::clone(&rcx);
