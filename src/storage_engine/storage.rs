@@ -1,7 +1,7 @@
 use crate::bloom_filter::BloomFilter;
 use crate::bucket_coordinator::{Bucket, BucketID, BucketMap};
 use crate::cfg::Config;
-use crate::compaction::Compactor;
+use crate::compactors::Compactor;
 use crate::consts::{
     BUCKETS_DIRECTORY_NAME, HEAD_ENTRY_KEY, META_DIRECTORY_NAME, SIZE_OF_U32, SIZE_OF_U64,
     SIZE_OF_U8, TAIL_ENTRY_KEY, TOMB_STONE_MARKER, VALUE_LOG_DIRECTORY_NAME, WRITE_BUFFER_SIZE,

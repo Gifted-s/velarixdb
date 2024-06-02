@@ -1,7 +1,7 @@
 pub mod block;
 pub mod bloom_filter;
 pub mod cfg;
-pub mod compaction;
+pub mod compactors;
 pub mod consts;
 pub mod err;
 pub mod flusher;
