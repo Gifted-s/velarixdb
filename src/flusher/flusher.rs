@@ -1,6 +1,7 @@
+use crate::bucket_coordinator::BucketMap;
 use crate::types;
 use crate::{
-    bloom_filter::BloomFilter, cfg::Config, compaction::BucketMap, err::StorageEngineError,
+    bloom_filter::BloomFilter, cfg::Config, err::StorageEngineError,
     key_offseter::KeyRange, memtable::InMemoryTable,
 };
 use indexmap::IndexMap;
@@ -76,7 +77,7 @@ impl Flusher {
         let flush_data = self;
         let table = Arc::clone(&flush_data.table_to_flush);
         // let table_id = &flush_data.table_id;
-        if table.read().await.index.is_empty() {
+        if table.read().await.entries.is_empty() {
             println!("Cannot flush an empty table");
             return Err(StorageEngineError::FailedToInsertToBucket(
                 "Cannot flush an empty table".to_string(),

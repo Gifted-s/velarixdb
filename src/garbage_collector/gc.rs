@@ -41,9 +41,7 @@ impl GarbageCollector {
         let invalid_entries: Arc<RwLock<Vec<ValueLogEntry>>> = Arc::new(RwLock::new(Vec::new()));
         let valid_entries: Arc<RwLock<Vec<(K, V)>>> = Arc::new(RwLock::new(Vec::new()));
         let synced_entries: Arc<RwLock<Vec<(K, V, VOffset)>>> = Arc::new(RwLock::new(Vec::new()));
-        // let valid_entries = Vec::new();
         // Step 1: Read chunks to garbage collect
-        // TODO handle errors
         let store = engine.read().await;
         let punch_hole_start_offset = store.val_log.tail_offset;
         let (entries, total_bytes_read) = store

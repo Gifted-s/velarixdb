@@ -1,8 +1,5 @@
-mod bucket_coordinator;
-mod compactor;
-pub use bucket_coordinator::Bucket;
-pub use bucket_coordinator::BucketID;
-pub use bucket_coordinator::BucketMap;
-pub use bucket_coordinator::IndexWithSizeInBytes;
-pub use compactor::Compactor;
-pub use compactor::MergedSSTable;
+
+mod size_tier_compactor;
+
+pub use size_tier_compactor::Compactor;
+pub use size_tier_compactor::MergedSSTable;

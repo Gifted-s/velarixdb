@@ -7,14 +7,12 @@ use tokio::sync::RwLock;
 use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
-use super::{
-    bucket_coordinator::{Bucket, BucketID},
-    BucketMap,
-};
+use crate::bucket_coordinator::{Bucket, BucketID, BucketMap};
 use crate::consts::{
     DEFAULT_COMPACTION_INTERVAL_MILLI, DEFAULT_TOMBSTONE_COMPACTION_INTERVAL_MILLI,
 };
 
+use crate::types::Key;
 use crate::{
     bloom_filter::BloomFilter,
     consts::TOMB_STONE_TTL,
@@ -28,7 +26,7 @@ use StorageEngineError::*;
 pub struct Compactor {
     // tombstones are considered and used to identify
     // and remove deleted data during compaction
-    pub tombstones: HashMap<Vec<u8>, u64>,
+    pub tombstones: HashMap<Key, u64>,
     // should compactor remove entry that has exceeded time to live?
     pub use_ttl: bool,
     // entry expected time to live
@@ -85,9 +83,9 @@ impl Compactor {
         let use_ttl = self.use_ttl;
         let entry_ttl = self.entry_ttl;
         tokio::spawn(async move {
-            let current_buckets = &bucket_map;
-            let current_bloom_filters = &bloom_filters;
-            let current_key_range = &key_range;
+            let current_buckets = bucket_map;
+            let current_bloom_filters = bloom_filters;
+            let current_key_range = key_range;
             loop {
                 let mut should_compact = false;
                 // check for compaction conditions before returning
@@ -100,7 +98,7 @@ impl Compactor {
                 }
 
                 if should_compact {
-                    // compaction will continue to until all the table is balanced
+                    // compaction will continue until all the table is balanced
                     let mut compactor = Compactor::new(use_ttl, entry_ttl);
                     let comp_res = compactor
                         .run_compaction(
@@ -372,7 +370,7 @@ impl Compactor {
             }
 
             // Rebuild the bloom filter since a new sstable has been created
-            let new_bloom_filter = SSTable::build_bloomfilter_from_sstable(&merged_sstable.index);
+            let new_bloom_filter = SSTable::build_bloomfilter_from_sstable(&merged_sstable.entries);
             merged_sstables.push(MergedSSTable {
                 sstable: merged_sstable,
                 hotness,
@@ -398,40 +396,40 @@ impl Compactor {
         let mut new_sstable = SSTable::new(PathBuf::new(), false).await;
         let new_sstable_index = Arc::new(SkipMap::new());
         let mut merged_indexes = Vec::new();
-        let index1 = sst1
-            .get_index()
+        let entries1 = sst1
+            .get_entries()
             .iter()
             .map(|e| Entry::new(e.key().to_vec(), e.value().0, e.value().1, e.value().2))
             .collect::<Vec<Entry<Vec<u8>, usize>>>();
 
-        let index2 = sst2
-            .get_index()
+        let entries2 = sst2
+            .get_entries()
             .iter()
             .map(|e| Entry::new(e.key().to_vec(), e.value().0, e.value().1, e.value().2))
             .collect::<Vec<Entry<Vec<u8>, usize>>>();
 
         let (mut i, mut j) = (0, 0);
         // Compare elements from both arrays and merge them
-        while i < index1.len() && j < index2.len() {
-            match index1[i].key.cmp(&index2[j].key) {
+        while i < entries1.len() && j < entries2.len() {
+            match entries1[i].key.cmp(&entries2[j].key) {
                 Ordering::Less => {
-                    self.tombstone_check(&index1[i], &mut merged_indexes)
+                    self.tombstone_check(&entries1[i], &mut merged_indexes)
                         .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
                     i += 1;
                 }
                 Ordering::Equal => {
-                    if index1[i].created_at > index2[j].created_at {
-                        self.tombstone_check(&index1[i], &mut merged_indexes)
+                    if entries1[i].created_at > entries2[j].created_at {
+                        self.tombstone_check(&entries1[i], &mut merged_indexes)
                             .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
                     } else {
-                        self.tombstone_check(&index2[j], &mut merged_indexes)
+                        self.tombstone_check(&entries2[j], &mut merged_indexes)
                             .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
                     }
                     i += 1;
                     j += 1;
                 }
                 Ordering::Greater => {
-                    self.tombstone_check(&index2[j], &mut merged_indexes)
+                    self.tombstone_check(&entries2[j], &mut merged_indexes)
                         .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
                     j += 1;
                 }
@@ -439,15 +437,15 @@ impl Compactor {
         }
 
         // If there are any remaining elements in arr1, append them
-        while i < index1.len() {
-            self.tombstone_check(&index1[i], &mut merged_indexes)
+        while i < entries1.len() {
+            self.tombstone_check(&entries1[i], &mut merged_indexes)
                 .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
             i += 1;
         }
 
         // If there are any remaining elements in arr2, append them
-        while j < index2.len() {
-            self.tombstone_check(&index2[j], &mut merged_indexes)
+        while j < entries2.len() {
+            self.tombstone_check(&entries2[j], &mut merged_indexes)
                 .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
             j += 1;
         }
@@ -458,7 +456,7 @@ impl Compactor {
                 (e.val_offset, e.created_at, e.is_tombstone),
             );
         });
-        new_sstable.set_index(new_sstable_index);
+        new_sstable.set_entries(new_sstable_index);
         Ok(new_sstable)
     }
 
@@ -527,7 +525,7 @@ impl Compactor {
         for m in merged_sstables.iter() {
             let new_index = Arc::new(SkipMap::new());
             let mut new_sstable = SSTable::new(PathBuf::new(), false).await;
-            for entry in m.sstable.index.iter() {
+            for entry in m.sstable.entries.iter() {
                 if self.tombstones.contains_key(entry.key()) {
                     let tombstone_timestamp = *self.tombstones.get(entry.key()).unwrap();
                     if tombstone_timestamp < entry.value().1 {
@@ -543,7 +541,7 @@ impl Compactor {
                     );
                 }
             }
-            new_sstable.set_index(new_index);
+            new_sstable.set_entries(new_index);
             filterd_merged_sstables.push(MergedSSTable {
                 sstable: new_sstable,
                 hotness: m.hotness,
