@@ -34,8 +34,8 @@ pub struct Bucket {
 
 use StorageEngineError::*;
 
-pub trait IndexWithSizeInBytes {
-    fn get_index(&self) -> Arc<SkipMap<Key, (ValOffset, InsertionTime, IsDeleted)>>; // usize for value offset, u64 to store entry creation date in milliseconds
+pub trait InsertableToBucket {
+    fn get_entries(&self) -> Arc<SkipMap<Key, (ValOffset, InsertionTime, IsDeleted)>>; // usize for value offset, u64 to store entry creation date in milliseconds
     fn size(&self) -> usize;
     fn find_biggest_key_from_table(&self) -> Result<Vec<u8>, StorageEngineError>;
     fn find_smallest_key_from_table(&self) -> Result<Vec<u8>, StorageEngineError>;
@@ -136,7 +136,7 @@ impl BucketMap {
         self.buckets = buckets
     }
 
-    pub async fn insert_to_appropriate_bucket<T: IndexWithSizeInBytes>(
+    pub async fn insert_to_appropriate_bucket<T: InsertableToBucket>(
         &mut self,
         table: &T,
         hotness: u64,
@@ -155,7 +155,7 @@ impl BucketMap {
                     .dir
                     .join(format!("sstable_{}", created_at.timestamp_millis()));
                 let mut sstable = SSTable::new(sstable_directory, true).await;
-                sstable.set_index(table.get_index());
+                sstable.set_entries(table.get_entries());
                 sstable.write_to_file().await?;
                 // add sstable to bucket
                 let sstable_path = SSTablePath {
@@ -182,7 +182,7 @@ impl BucketMap {
                 .dir
                 .join(format!("sstable_{}", created_at.timestamp_millis()));
             let mut sstable = SSTable::new(sstable_directory, true).await;
-            sstable.set_index(table.get_index());
+            sstable.set_entries(table.get_entries());
             sstable.write_to_file().await?;
 
             // add sstable to bucket

@@ -1,5 +1,5 @@
 use crate::bloom_filter::BloomFilter;
-use crate::compaction::IndexWithSizeInBytes;
+use crate::bucket_coordinator::InsertableToBucket;
 use crate::consts::{
     DEFAULT_FALSE_POSITIVE_RATE, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, WRITE_BUFFER_SIZE,
 };
@@ -28,7 +28,7 @@ pub struct Entry<K: Hash + PartialOrd, V> {
 }
 #[derive(Clone, Debug)]
 pub struct InMemoryTable<K: Hash + PartialOrd + cmp::Ord> {
-    pub index: Arc<SkipMap<K, (ValOffset, CreationTime, IsTombStone)>>,
+    pub entries: Arc<SkipMap<K, (ValOffset, CreationTime, IsTombStone)>>,
     pub bloom_filter: BloomFilter,
     pub false_positive_rate: f64,
     pub size: usize,
@@ -38,9 +38,9 @@ pub struct InMemoryTable<K: Hash + PartialOrd + cmp::Ord> {
     pub read_only: bool,
 }
 
-impl IndexWithSizeInBytes for InMemoryTable<Key> {
-    fn get_index(&self) -> Arc<SkipMap<Key, (ValOffset, InsertionTime, IsDeleted)>> {
-        Arc::clone(&self.index)
+impl InsertableToBucket for InMemoryTable<Key> {
+    fn get_entries(&self) -> Arc<SkipMap<Key, (ValOffset, InsertionTime, IsDeleted)>> {
+        Arc::clone(&self.entries)
     }
     fn size(&self) -> usize {
         self.size
@@ -101,10 +101,10 @@ impl InMemoryTable<Key> {
         let avg_entry_size = 100;
         let max_no_of_entries = capacity_to_bytes / avg_entry_size as usize;
         let bf = BloomFilter::new(false_positive_rate, max_no_of_entries);
-        let index = SkipMap::new();
+        let entries = SkipMap::new();
         let now: DateTime<Utc> = Utc::now();
         Self {
-            index: Arc::new(index),
+            entries: Arc::new(entries),
             bloom_filter: bf,
             size: 0,
             size_unit: SizeUnit::Bytes,
@@ -116,29 +116,21 @@ impl InMemoryTable<Key> {
     }
 
     pub fn insert(&mut self, entry: &Entry<Key, ValOffset>) -> Result<(), StorageEngineError> {
+        let entry_length_byte = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
         if !self.bloom_filter.contains(&entry.key) {
             self.bloom_filter.set(&entry.key.clone());
-            self.index.insert(
+            self.entries.insert(
                 entry.key.to_owned(),
                 (entry.val_offset, entry.created_at, entry.is_tombstone),
             );
-
-            // key length + value offset length + date created length
-            // it takes 4 bytes to store a 32 bit integer ande 1 byte for tombstone checker
-            let entry_length_byte = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
             self.size += entry_length_byte;
             return Ok(());
         }
 
-        // If the key already exist in the bloom filter then just insert into the entry alone
-        self.index.insert(
+        self.entries.insert(
             entry.key.to_owned(),
             (entry.val_offset, entry.created_at, entry.is_tombstone),
         );
-
-        // key length + value offset length + date created length
-        // it takes 4 bytes to store a 32 bit integer since 8 bits makes 1 byte
-        let entry_length_byte = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
         self.size += entry_length_byte;
         Ok(())
     }
@@ -148,7 +140,7 @@ impl InMemoryTable<Key> {
         key: &Vec<u8>,
     ) -> Result<Option<(ValOffset, CreationTime, IsTombStone)>, StorageEngineError> {
         if self.bloom_filter.contains(key) {
-            if let Some(entry) = self.index.get(key) {
+            if let Some(entry) = self.entries.get(key) {
                 return Ok(Some(*entry.value())); // returns value offset
             }
         }
@@ -159,8 +151,7 @@ impl InMemoryTable<Key> {
         if !self.bloom_filter.contains(&entry.key) {
             return Err(KeyNotFoundInMemTable);
         }
-        // If the key already exist in the bloom filter then just insert into the entry alone
-        self.index.insert(
+        self.entries.insert(
             entry.key.to_vec(),
             (entry.val_offset, entry.created_at, entry.is_tombstone),
         );
@@ -187,7 +178,7 @@ impl InMemoryTable<Key> {
         }
         let created_at = Utc::now();
         // Insert thumb stone to indicate deletion
-        self.index.insert(
+        self.entries.insert(
             entry.key.to_vec(),
             (
                 entry.val_offset,
@@ -204,7 +195,7 @@ impl InMemoryTable<Key> {
 
     // Find the biggest element in the skip list
     pub fn find_biggest_key(&self) -> Result<Key, StorageEngineError> {
-        let largest_entry = self.index.iter().next_back();
+        let largest_entry = self.entries.iter().next_back();
         match largest_entry {
             Some(e) => return Ok(e.key().to_vec()),
             None => Err(BiggestKeyIndexError),
@@ -213,7 +204,7 @@ impl InMemoryTable<Key> {
 
     // Find the smallest element in the skip list
     pub fn find_smallest_key(&self) -> Result<Key, StorageEngineError> {
-        let smallest_entry = self.index.iter().next();
+        let smallest_entry = self.entries.iter().next();
         match smallest_entry {
             Some(e) => return Ok(e.key().to_vec()),
             None => Err(LowestKeyIndexError),
@@ -239,7 +230,7 @@ impl InMemoryTable<Key> {
     }
 
     pub fn get_index(self) -> Arc<SkipMap<Vec<u8>, (ValOffset, CreationTime, IsTombStone)>> {
-        self.index.clone()
+        self.entries.clone()
     }
 
     pub fn get_bloom_filter(&self) -> BloomFilter {
@@ -262,7 +253,7 @@ impl InMemoryTable<Key> {
         let avg_entry_size = 100;
         let max_no_of_entries = capacity_to_bytes / avg_entry_size as usize;
 
-        self.index.clear();
+        self.entries.clear();
         self.size = 0;
         self.bloom_filter = BloomFilter::new(self.false_positive_rate, max_no_of_entries);
     }

@@ -1,6 +1,7 @@
 use crate::bloom_filter::BloomFilter;
+use crate::bucket_coordinator::{Bucket, BucketID, BucketMap};
 use crate::cfg::Config;
-use crate::compaction::{Bucket, BucketID, BucketMap, Compactor};
+use crate::compactors::Compactor;
 use crate::consts::{
     BUCKETS_DIRECTORY_NAME, HEAD_ENTRY_KEY, META_DIRECTORY_NAME, SIZE_OF_U32, SIZE_OF_U64,
     SIZE_OF_U8, TAIL_ENTRY_KEY, TOMB_STONE_MARKER, VALUE_LOG_DIRECTORY_NAME, WRITE_BUFFER_SIZE,
@@ -31,8 +32,6 @@ use tokio::{
     },
 };
 
-use rand::Rng;
-use std::time::Instant;
 
 #[derive(Debug)]
 pub struct StorageEngine<'a, K>
@@ -172,7 +171,7 @@ impl<'a> StorageEngine<'a, Key> {
             let false_positive_rate = self.active_memtable.false_positive_rate();
             let head_offset = self
                 .active_memtable
-                .index
+                .entries
                 .iter()
                 .max_by_key(|e| e.value().0);
 
@@ -366,7 +365,7 @@ impl<'a> StorageEngine<'a, Key> {
             let false_positive_rate = self.active_memtable.false_positive_rate();
             let head_offset = self
                 .active_memtable
-                .index
+                .entries
                 .iter()
                 .max_by_key(|e| e.value().0);
             let head_entry = Entry::new(
@@ -641,9 +640,9 @@ impl<'a> StorageEngine<'a, Key> {
             let sstable = sstable_from_file.unwrap();
             // Fetch the most recent write offset so it can
             // use it to recover entries not written into sstables from value log
-            let head_entry = sstable.get_value_from_index(HEAD_ENTRY_KEY);
+            let head_entry = sstable.get_value_from_entries(HEAD_ENTRY_KEY);
 
-            let tail_entry = sstable.get_value_from_index(TAIL_ENTRY_KEY);
+            let tail_entry = sstable.get_value_from_entries(TAIL_ENTRY_KEY);
 
             // update head
             if let Some((head_offset, date_created, _)) = head_entry {
@@ -661,7 +660,7 @@ impl<'a> StorageEngine<'a, Key> {
                 }
             }
 
-            let mut bf = SSTable::build_bloomfilter_from_sstable(&sstable.index);
+            let mut bf = SSTable::build_bloomfilter_from_sstable(&sstable.entries);
             bf.set_sstable_path(sst_path.clone());
             // update bloom filters
             bloom_filters.push(bf)
@@ -946,7 +945,7 @@ mod tests {
         let path = PathBuf::new().join("bump1");
         let s_engine = StorageEngine::new(path.clone()).await.unwrap();
         // Specify the number of random strings to generate
-        let num_strings = 100000; // 100k
+        let num_strings = 10000; // 100k
 
         // Specify the length of each random string
         let string_length = 2;

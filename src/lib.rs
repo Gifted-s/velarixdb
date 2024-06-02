@@ -1,7 +1,7 @@
 pub mod block;
 pub mod bloom_filter;
 pub mod cfg;
-pub mod compaction;
+pub mod compactors;
 pub mod consts;
 pub mod err;
 pub mod flusher;
@@ -16,3 +16,4 @@ pub mod storage_engine;
 pub mod types;
 pub mod utils;
 pub mod value_log;
+pub mod bucket_coordinator;

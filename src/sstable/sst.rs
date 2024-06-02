@@ -10,16 +10,9 @@ use tokio::{fs::File, io};
 use tokio::{fs::OpenOptions, io::AsyncSeekExt};
 
 use crate::{
-    block::Block,
-    bloom_filter::BloomFilter,
-    compaction::IndexWithSizeInBytes,
-    consts::{
+    block::Block, bloom_filter::BloomFilter, bucket_coordinator::InsertableToBucket, consts::{
         DEFAULT_FALSE_POSITIVE_RATE, EOF, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, SIZE_OF_USIZE,
-    },
-    err::StorageEngineError,
-    memtable::{Entry, InsertionTime, IsDeleted},
-    sparse_index::{self, RangeOffset, SparseIndex},
-    types::{CreationTime, IsTombStone, Key, ValOffset},
+    }, err::StorageEngineError, memtable::{Entry, InsertionTime, IsDeleted}, sparse_index::{self, RangeOffset, SparseIndex}, types::{CreationTime, IsTombStone, Key, ValOffset}
 };
 
 use StorageEngineError::*;
@@ -29,14 +22,14 @@ pub struct SSTable {
     pub data_file_path: PathBuf,
     pub index_file_path: PathBuf,
     pub sstable_dir: PathBuf,
-    pub index: Arc<SkipMap<Key, (ValOffset, InsertionTime, IsDeleted)>>,
+    pub entries: Arc<SkipMap<Key, (ValOffset, InsertionTime, IsDeleted)>>,
     pub created_at: CreationTime,
     pub size: usize,
 }
 
-impl IndexWithSizeInBytes for SSTable {
-    fn get_index(&self) -> Arc<SkipMap<Key, (ValOffset, InsertionTime, IsDeleted)>> {
-        Arc::clone(&self.index)
+impl InsertableToBucket for SSTable {
+    fn get_entries(&self) -> Arc<SkipMap<Key, (ValOffset, InsertionTime, IsDeleted)>> {
+        Arc::clone(&self.entries)
     }
     fn size(&self) -> usize {
         self.size
@@ -111,11 +104,11 @@ impl SSTable {
                 .expect("error creating file");
         }
 
-        let index = Arc::new(SkipMap::new());
+        let entries = Arc::new(SkipMap::new());
         Self {
             data_file_path,
             index_file_path,
-            index,
+            entries,
             size: 0,
             created_at: created_at.timestamp_millis() as u64,
             sstable_dir: dir,
@@ -128,19 +121,19 @@ impl SSTable {
         index_file_path: PathBuf,
     ) -> Self {
         let created_at = Utc::now();
-        let index = Arc::new(SkipMap::new());
+        let entries = Arc::new(SkipMap::new());
         Self {
             data_file_path,
             index_file_path,
             sstable_dir: dir,
-            index,
+            entries,
             size: 0,
             created_at: created_at.timestamp_millis() as u64,
         }
     }
     // Find the biggest element in the skip list
     pub fn find_biggest_key(&self) -> Result<Vec<u8>, StorageEngineError> {
-        let largest_entry = self.index.iter().next_back();
+        let largest_entry = self.entries.iter().next_back();
         match largest_entry {
             Some(e) => return Ok(e.key().to_vec()),
             None => Err(BiggestKeyIndexError),
@@ -149,7 +142,7 @@ impl SSTable {
 
     // Find the biggest element in the skip list
     pub fn find_smallest_key(&self) -> Result<Vec<u8>, StorageEngineError> {
-        let largest_entry = self.index.iter().next();
+        let largest_entry = self.entries.iter().next();
         match largest_entry {
             Some(e) => return Ok(e.key().to_vec()),
             None => Err(LowestKeyIndexError),
@@ -173,7 +166,7 @@ impl SSTable {
         let mut blocks: Vec<Block> = Vec::new();
         let mut sparse_index = sparse_index::SparseIndex::new(index_file_path.clone()).await;
         let mut current_block = Block::new();
-        for e in self.index.iter() {
+        for e in self.entries.iter() {
             let entry = Entry::new(e.key().clone(), e.value().0, e.value().1, e.value().2);
 
             // mem::size_of function is efficient because the size is known at compile time so
@@ -439,20 +432,20 @@ impl SSTable {
     }
 
     pub(crate) fn build_bloomfilter_from_sstable(
-        index: &Arc<SkipMap<Vec<u8>, (ValOffset, CreationTime, IsTombStone)>>,
+        entries: &Arc<SkipMap<Vec<u8>, (ValOffset, CreationTime, IsTombStone)>>,
     ) -> BloomFilter {
         //TODO: FALSE POSITIVE should be from config
         // Rebuild the bloom filter since a new sstable has been created
-        let mut new_bloom_filter = BloomFilter::new(DEFAULT_FALSE_POSITIVE_RATE, index.len());
-        index.iter().for_each(|e| new_bloom_filter.set(e.key()));
+        let mut new_bloom_filter = BloomFilter::new(DEFAULT_FALSE_POSITIVE_RATE, entries.len());
+        entries.iter().for_each(|e| new_bloom_filter.set(e.key()));
         new_bloom_filter
     }
 
-    pub(crate) fn get_value_from_index(
+    pub(crate) fn get_value_from_entries(
         &self,
         key: &[u8],
     ) -> Option<(ValOffset, CreationTime, IsTombStone)> {
-        self.index.get(key).map(|entry| entry.value().to_owned())
+        self.entries.get(key).map(|entry| entry.value().to_owned())
     }
 
     fn compare_offsets(offset_a: usize, offset_b: usize) -> Ordering {
@@ -469,20 +462,20 @@ impl SSTable {
         self.size
     }
 
-    pub(crate) fn set_index(
+    pub(crate) fn set_entries(
         &mut self,
-        index: Arc<SkipMap<Key, (ValOffset, CreationTime, IsTombStone)>>,
+        entries: Arc<SkipMap<Key, (ValOffset, CreationTime, IsTombStone)>>,
     ) {
-        self.index = index;
-        self.set_sst_size_from_index();
+        self.entries = entries;
+        self.set_sst_size_from_entries();
     }
 
-    pub(crate) fn get_index(&self) -> Arc<SkipMap<Key, (ValOffset, CreationTime, IsTombStone)>> {
-        self.index.clone()
+    pub(crate) fn get_entries(&self) -> Arc<SkipMap<Key, (ValOffset, CreationTime, IsTombStone)>> {
+        self.entries.clone()
     }
-    pub(crate) fn set_sst_size_from_index(&mut self) {
+    pub(crate) fn set_sst_size_from_entries(&mut self) {
         self.size = self
-            .index
+            .entries
             .iter()
             .map(|e| e.key().len() + SIZE_OF_USIZE + SIZE_OF_U64 + SIZE_OF_U8)
             .sum::<usize>();
@@ -504,7 +497,7 @@ impl SSTable {
         data_file_path: PathBuf,
         index_file_path: PathBuf,
     ) -> Result<Option<SSTable>, StorageEngineError> {
-        let index = Arc::new(SkipMap::new());
+        let entries = Arc::new(SkipMap::new());
         // Open the file in read mode
         if !Self::data_file_exists(&data_file_path) {
             return Ok(None);
@@ -596,14 +589,14 @@ impl SSTable {
             let created_at = u64::from_le_bytes(created_at_bytes);
             let value_offset = u32::from_le_bytes(val_offset_bytes);
             let is_tombstone = is_tombstone_byte[0] == 1;
-            index.insert(key, (value_offset as usize, created_at, is_tombstone));
+            entries.insert(key, (value_offset as usize, created_at, is_tombstone));
         }
         let created_at = Utc::now().timestamp_millis() as u64;
         Ok(Some(SSTable {
             data_file_path: data_file_path.clone(),
             index_file_path,
             sstable_dir: dir,
-            index: index.to_owned(),
+            entries,
             created_at,
             size: fs::metadata(data_file_path).await.unwrap().len() as usize,
         }))
