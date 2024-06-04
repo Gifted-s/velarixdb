@@ -189,4 +189,10 @@ pub enum StorageEngineError {
     /// Error while trying to perform a range scan
     #[error("Range scan error `{0}`")]
     RangeScanError(Box<Self>),
+
+    #[error("Flush signal channel was overloaded with signals, please check all signal consumers")]
+    FlushSignalOverflowError,
+
+    #[error("Flush signal channel has been closed")]
+    FlushSignalClosedError,
 }

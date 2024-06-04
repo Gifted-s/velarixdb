@@ -1,8 +1,9 @@
 use crate::bucket_coordinator::BucketMap;
-use crate::types;
+use crate::consts::FLUSH_SIGNAL;
+use crate::types::{self, FlushSignal};
 use crate::{
-    bloom_filter::BloomFilter, cfg::Config, err::StorageEngineError,
-    key_offseter::KeyRange, memtable::InMemoryTable,
+    bloom_filter::BloomFilter, cfg::Config, err::StorageEngineError, key_offseter::KeyRange,
+    memtable::InMemoryTable,
 };
 use indexmap::IndexMap;
 use std::sync::Arc;
@@ -124,6 +125,7 @@ impl Flusher {
     pub fn flush_data_collector(
         &self,
         rcx: Arc<RwLock<Receiver<FlushDataMemTable>>>,
+        flush_signal_sender: &async_broadcast::Sender<FlushSignal>,
         buckets: Arc<RwLock<BucketMap>>,
         bloom_filters: Arc<RwLock<Vec<BloomFilter>>>,
         key_range: Arc<RwLock<KeyRange>>,
@@ -131,7 +133,7 @@ impl Flusher {
         config: Config,
     ) {
         let rcx_clone = Arc::clone(&rcx);
-
+        let flush_signal_sender_clone = flush_signal_sender.clone();
         spawn(async move {
             let current_buckets = &buckets;
             let current_bloom_filters = &bloom_filters;
@@ -155,6 +157,18 @@ impl Flusher {
                             .write()
                             .await
                             .shift_remove(&table_id);
+                        let flush_signal_sender_clone2 = flush_signal_sender_clone.clone();
+
+                        let broadcase_res = flush_signal_sender_clone2.try_broadcast(FLUSH_SIGNAL);
+                        match broadcase_res {
+                            Ok(_) => {}
+                            Err(err) => match err {
+                                async_broadcast::TrySendError::Full(_) => {
+                                    log::error!("{}", StorageEngineError::FlushSignalOverflowError)
+                                }
+                                _ => log::error!("{}", err),
+                            },
+                        }
                     }
                     // Handle failure case here
                     Err(err) => {

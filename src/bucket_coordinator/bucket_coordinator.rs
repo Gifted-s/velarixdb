@@ -35,7 +35,7 @@ pub struct Bucket {
 use StorageEngineError::*;
 
 pub trait InsertableToBucket {
-    fn get_entries(&self) -> Arc<SkipMap<Key, (ValOffset, InsertionTime, IsDeleted)>>; // usize for value offset, u64 to store entry creation date in milliseconds
+    fn get_entries(&self) -> Arc<SkipMap<Key, (ValOffset, InsertionTime, IsDeleted)>>;
     fn size(&self) -> usize;
     fn find_biggest_key_from_table(&self) -> Result<Vec<u8>, StorageEngineError>;
     fn find_smallest_key_from_table(&self) -> Result<Vec<u8>, StorageEngineError>;
@@ -99,9 +99,7 @@ impl Bucket {
         Ok(all_sstable_size / sstables.len() as u64 as usize)
     }
 
-    async fn extract_and_calculate_sstables(
-        &self,
-    ) -> Result<(Vec<SSTablePath>, usize), StorageEngineError> {
+    async fn extract_sstables(&self) -> Result<(Vec<SSTablePath>, usize), StorageEngineError> {
         let extracted_sstables = self
             .sstables
             .get(0..MAX_TRESHOLD)
@@ -211,8 +209,7 @@ impl BucketMap {
         for (level, (bucket_id, bucket)) in self.buckets.iter().enumerate() {
             let target_size = bucket.calculate_target_size(level);
             if Bucket::needs_compaction_by_size(bucket, target_size) {
-                let (extracted_sstables, average) =
-                    Bucket::extract_and_calculate_sstables(bucket).await?;
+                let (extracted_sstables, average) = Bucket::extract_sstables(bucket).await?;
                 sstables_to_delete.push((*bucket_id, extracted_sstables.clone()));
                 buckets_to_compact.push(Bucket {
                     size: average * extracted_sstables.len(),
@@ -222,8 +219,7 @@ impl BucketMap {
                     avarage_size: average,
                 });
             } else if Bucket::needs_compaction_by_count(bucket) {
-                let (extracted_sstables, average) =
-                    Bucket::extract_and_calculate_sstables(bucket).await?;
+                let (extracted_sstables, average) = Bucket::extract_sstables(bucket).await?;
                 sstables_to_delete.push((*bucket_id, extracted_sstables.clone()));
                 buckets_to_compact.push(Bucket {
                     size: average * extracted_sstables.len(),

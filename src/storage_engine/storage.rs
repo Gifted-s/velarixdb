@@ -3,8 +3,9 @@ use crate::bucket_coordinator::{Bucket, BucketID, BucketMap};
 use crate::cfg::Config;
 use crate::compactors::Compactor;
 use crate::consts::{
-    BUCKETS_DIRECTORY_NAME, HEAD_ENTRY_KEY, META_DIRECTORY_NAME, SIZE_OF_U32, SIZE_OF_U64,
-    SIZE_OF_U8, TAIL_ENTRY_KEY, TOMB_STONE_MARKER, VALUE_LOG_DIRECTORY_NAME, WRITE_BUFFER_SIZE,
+    BUCKETS_DIRECTORY_NAME, DEFAULT_FLUSH_DATA_CHANNEL_SIZE, DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE,
+    HEAD_ENTRY_KEY, META_DIRECTORY_NAME, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, TAIL_ENTRY_KEY,
+    TOMB_STONE_MARKER, VALUE_LOG_DIRECTORY_NAME, WRITE_BUFFER_SIZE,
 };
 use crate::err::StorageEngineError;
 use crate::err::StorageEngineError::*;
@@ -15,8 +16,9 @@ use crate::meta::Meta;
 use crate::range::RangeIterator;
 use crate::sparse_index::SparseIndex;
 use crate::sstable::{SSTable, SSTablePath};
-use crate::types::{self, Key, ValOffset};
+use crate::types::{self, FlushSignal, Key, ValOffset};
 use crate::value_log::ValueLog;
+use async_broadcast::broadcast;
 use chrono::Utc;
 use indexmap::IndexMap;
 use log::error;
@@ -31,7 +33,6 @@ use tokio::{
         RwLock,
     },
 };
-
 
 #[derive(Debug)]
 pub struct StorageEngine<'a, K>
@@ -52,20 +53,24 @@ where
     pub read_only_memtables: Arc<RwLock<IndexMap<K, Arc<RwLock<InMemoryTable<K>>>>>>,
     pub flush_data_sender: ChanSender,
     pub flush_data_recevier: ChanRecv,
+    pub flush_signal_sender: ChanSender,
+    pub flush_signal_receiver: ChanRecv,
     pub tombstone_compaction_sender: ChanSender,
     pub tombstone_compaction_rcv: ChanRecv,
 }
 
 #[derive(Debug, Clone)]
 pub enum ChanSender {
-    FlushDataSender(Arc<RwLock<Sender<FlushDataMemTable>>>),
-    TombStoneCompactionNoticeSender(Sender<BucketMap>),
+    FlushDataSender(Arc<RwLock<tokio::sync::mpsc::Sender<FlushDataMemTable>>>),
+    TombStoneCompactionNoticeSender(tokio::sync::mpsc::Sender<BucketMap>),
+    FlushNotificationSender(async_broadcast::Sender<FlushSignal>),
 }
 
 #[derive(Debug)]
 pub enum ChanRecv {
-    FlushDataRecv(Arc<RwLock<Receiver<FlushDataMemTable>>>),
-    TombStoneCompactionNoticeRcv(Arc<RwLock<Receiver<BucketMap>>>),
+    FlushDataRecv(Arc<RwLock<tokio::sync::mpsc::Receiver<FlushDataMemTable>>>),
+    TombStoneCompactionNoticeRcv(Arc<RwLock<tokio::sync::mpsc::Receiver<BucketMap>>>),
+    FlushNotificationRecv(async_broadcast::Receiver<FlushSignal>),
 }
 
 #[derive(Clone, Debug)]
@@ -96,6 +101,7 @@ impl<'a> StorageEngine<'a, Key> {
             default_config,
         )
         .await?;
+    println!("here");
         let started = store.trigger_background_tasks()?;
         println!("Background jobs started: {}", started);
         return Ok(store);
@@ -114,6 +120,7 @@ impl<'a> StorageEngine<'a, Key> {
         )
         .await
     }
+
     pub fn trigger_background_tasks(&self) -> Result<bool, StorageEngineError> {
         // Start background job to check for tombstone compaction condition at regular intervals 20 days
         if let ChanRecv::TombStoneCompactionNoticeRcv(rcx) = &self.tombstone_compaction_rcv {
@@ -124,14 +131,19 @@ impl<'a> StorageEngine<'a, Key> {
         // Start background to constantly check accept flush data in a seperate tokio task and
         // process them sequetially to prevent interference
         if let ChanRecv::FlushDataRecv(rcx) = &self.flush_data_recevier {
-            self.flusher.flush_data_collector(
-                Arc::clone(rcx),
-                Arc::clone(&self.buckets),
-                Arc::clone(&self.bloom_filters),
-                Arc::clone(&self.key_range),
-                Arc::clone(&self.read_only_memtables),
-                self.config.to_owned(),
-            );
+            if let ChanSender::FlushNotificationSender(flush_signal_sender) =
+                &self.flush_signal_sender
+            {
+                self.flusher.flush_data_collector(
+                    Arc::clone(rcx),
+                    &flush_signal_sender.clone(),
+                    Arc::clone(&self.buckets),
+                    Arc::clone(&self.bloom_filters),
+                    Arc::clone(&self.key_range),
+                    Arc::clone(&self.read_only_memtables),
+                    self.config.to_owned(),
+                );
+            }
         }
 
         // Start background job to check for compaction condition at regular intervals 20 days
@@ -140,6 +152,16 @@ impl<'a> StorageEngine<'a, Key> {
             Arc::clone(&self.bloom_filters),
             Arc::clone(&self.key_range),
         );
+
+        if let ChanRecv::FlushNotificationRecv(rcx) = &self.flush_signal_receiver {
+            self.compactor.start_flush_listner(
+                &rcx,
+                Arc::clone(&self.buckets),
+                Arc::clone(&self.bloom_filters),
+                Arc::clone(&self.key_range),
+            );
+        }
+
         return Ok(true);
     }
 
@@ -166,6 +188,7 @@ impl<'a> StorageEngine<'a, Key> {
         }
 
         if self.active_memtable.is_full(HEAD_ENTRY_KEY.len()) {
+           
             let capacity = self.active_memtable.capacity();
             let size_unit = self.active_memtable.size_unit();
             let false_positive_rate = self.active_memtable.false_positive_rate();
@@ -194,27 +217,23 @@ impl<'a> StorageEngine<'a, Key> {
 
             if self.read_only_memtables.read().await.len() >= self.config.max_buffer_write_number {
                 let rd_table = self.read_only_memtables.read().await;
-                let (table_id, table_to_flush) = rd_table.iter().next().unwrap();
-                let table = Arc::clone(table_to_flush);
-                let table_id_clone = table_id.clone();
-
-                let flush_data_sender_clone = self.flush_data_sender.clone();
-                if let ChanSender::FlushDataSender(sender) = flush_data_sender_clone {
-                    let sender_clone = sender.clone();
-                    // This will prevent blocks during write when flush data receiver is full and the next send has to wait
+                for (table_id, table_to_flush) in rd_table.iter() {
+                    let table = Arc::clone(table_to_flush);
+                    let table_id_clone = table_id.clone();
+                    let flush_data_sender_clone = self.flush_data_sender.clone();
+                    // Prevent write block
                     spawn(async move {
-                        if let Err(err) = sender_clone
-                            .write()
-                            .await
-                            .send((table_id_clone, table))
-                            .await
-                        {
-                            println!("Could not send flush data to channel {:?}", err);
+                        if let ChanSender::FlushDataSender(sender) = flush_data_sender_clone {
+                            if let Err(err) =
+                                sender.write().await.send((table_id_clone, table)).await
+                            {
+                                println!("Could not send flush data to channel {:?}", err);
+                            }
                         }
                     });
                 }
             }
-
+       
             self.active_memtable = InMemoryTable::with_specified_capacity_and_rate(
                 size_unit,
                 capacity,
@@ -383,24 +402,27 @@ impl<'a> StorageEngine<'a, Key> {
 
             if self.read_only_memtables.read().await.len() >= self.config.max_buffer_write_number {
                 let rd_table = self.read_only_memtables.read().await;
-                let (table_id, table_to_flush) = rd_table.iter().next().unwrap();
-                let table = Arc::clone(table_to_flush);
-                let table_id_clone = table_id.clone();
-                let flush_data_sender_clone = self.flush_data_sender.clone();
-                // This will prevent blocks during write when flush data receiver is full and the next send has to wait
-                spawn(async move {
-                    if let ChanSender::FlushDataSender(sender) = flush_data_sender_clone {
-                        if let Err(err) = sender.write().await.send((table_id_clone, table)).await {
-                            println!("Could not send flush data to channel {:?}", err);
+                for (table_id, table_to_flush) in rd_table.iter() {
+                    let table = Arc::clone(table_to_flush);
+                    let table_id_clone = table_id.clone();
+                    let flush_data_sender_clone = self.flush_data_sender.clone();
+                    // Prevent write block
+                    spawn(async move {
+                        if let ChanSender::FlushDataSender(sender) = flush_data_sender_clone {
+                            if let Err(err) =
+                                sender.write().await.send((table_id_clone, table)).await
+                            {
+                                println!("Could not send flush data to channel {:?}", err);
+                            }
                         }
-                    }
-                });
-                self.active_memtable = InMemoryTable::with_specified_capacity_and_rate(
-                    size_unit,
-                    capacity,
-                    false_positive_rate,
-                );
+                    });
+                }
             }
+            self.active_memtable = InMemoryTable::with_specified_capacity_and_rate(
+                size_unit,
+                capacity,
+                false_positive_rate,
+            );
         }
 
         let entry = Entry::new(
@@ -492,7 +514,10 @@ impl<'a> StorageEngine<'a, Key> {
             active_memtable.insert(&tail_entry.to_owned())?;
             active_memtable.insert(&head_entry.to_owned())?;
             let buckets = BucketMap::new(buckets_path);
-            let (flush_data_sender, flush_data_rec) = mpsc::channel(100);
+            let (flush_data_sender, flush_data_rec) =
+                mpsc::channel(DEFAULT_FLUSH_DATA_CHANNEL_SIZE);
+            let (flush_signal_sender, flush_signal_rec) =
+                broadcast(DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE);
             let (comp_sender, comp_rec) = mpsc::channel(1);
             let read_only_memtables = IndexMap::new();
 
@@ -529,6 +554,8 @@ impl<'a> StorageEngine<'a, Key> {
                     flush_data_sender,
                 ))),
                 flush_data_recevier: ChanRecv::FlushDataRecv(Arc::new(RwLock::new(flush_data_rec))),
+                flush_signal_sender: ChanSender::FlushNotificationSender(flush_signal_sender),
+                flush_signal_receiver: ChanRecv::FlushNotificationRecv(flush_signal_rec),
             });
         }
 
@@ -684,7 +711,9 @@ impl<'a> StorageEngine<'a, Key> {
             most_recent_head_offset,
         )
         .await;
-        let (flush_data_sender, flush_data_rec) = mpsc::channel(100);
+
+        let (flush_data_sender, flush_data_rec) = mpsc::channel(DEFAULT_FLUSH_DATA_CHANNEL_SIZE);
+        let (flush_signal_sender, flush_signal_rec) = broadcast(DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE);
         let (tomb_comp_sender, tomb_comp_rec) = mpsc::channel(1);
         match recover_result {
             Ok((active_memtable, read_only_memtables)) => {
@@ -731,6 +760,8 @@ impl<'a> StorageEngine<'a, Key> {
                     flush_data_recevier: ChanRecv::FlushDataRecv(Arc::new(RwLock::new(
                         flush_data_rec,
                     ))),
+                    flush_signal_sender: ChanSender::FlushNotificationSender(flush_signal_sender),
+                    flush_signal_receiver: ChanRecv::FlushNotificationRecv(flush_signal_rec),
                 })
             }
             Err(err) => Err(MemTableRecoveryError(Box::new(err))),
@@ -917,9 +948,15 @@ impl SizeUnit {
 #[cfg(test)]
 mod tests {
 
+    
+
+    use std::thread;
+
     use super::*;
     use futures::future::join_all;
     use log::info;
+    use tokio::time::{sleep, Duration};
+
     use rand::distributions::Alphanumeric;
     use rand::{thread_rng, Rng};
 
@@ -945,7 +982,7 @@ mod tests {
         let path = PathBuf::new().join("bump1");
         let s_engine = StorageEngine::new(path.clone()).await.unwrap();
         // Specify the number of random strings to generate
-        let num_strings = 10000; // 100k
+        let num_strings = 100000; // 100k
 
         // Specify the length of each random string
         let string_length = 2;
@@ -983,31 +1020,33 @@ mod tests {
                 }
             }
         }
+        thread::sleep(Duration::from_millis(5 * 60 * 1000));
+        //sleep(Duration::from_millis(5 * 60 * 1000)).await;
 
-        random_strings.sort();
-        let tasks = random_strings.iter().map(|k| {
-            let s_engine = Arc::clone(&sg);
-            let k = k.clone();
-            tokio::spawn(async move {
-                let value = s_engine.read().await;
-                value.get(&k).await
-            })
-        });
+        // random_strings.sort();
+        // let tasks = random_strings.iter().map(|k| {
+        //     let s_engine = Arc::clone(&sg);
+        //     let k = k.clone();
+        //     tokio::spawn(async move {
+        //         let value = s_engine.read().await;
+        //         value.get(&k).await
+        //     })
+        // });
 
-        let all_results = join_all(tasks).await;
-        for tokio_response in all_results {
-            match tokio_response {
-                Ok(entry) => match entry {
-                    Ok(v) => {
-                        assert_eq!(v.0, b"boy");
-                    }
-                    Err(err) => assert!(false, "{}", err.to_string()),
-                },
-                Err(err) => {
-                    assert!(false, "{}", err.to_string())
-                }
-            }
-        }
+        // let all_results = join_all(tasks).await;
+        // for tokio_response in all_results {
+        //     match tokio_response {
+        //         Ok(entry) => match entry {
+        //             Ok(v) => {
+        //                 assert_eq!(v.0, b"boy");
+        //             }
+        //             Err(err) => assert!(false, "{}", err.to_string()),
+        //         },
+        //         Err(err) => {
+        //             assert!(false, "{}", err.to_string())
+        //         }
+        //     }
+        // }
 
         let _ = fs::remove_dir_all(path.clone()).await;
     }

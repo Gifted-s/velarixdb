@@ -10,9 +10,16 @@ use tokio::{fs::File, io};
 use tokio::{fs::OpenOptions, io::AsyncSeekExt};
 
 use crate::{
-    block::Block, bloom_filter::BloomFilter, bucket_coordinator::InsertableToBucket, consts::{
+    block::Block,
+    bloom_filter::BloomFilter,
+    bucket_coordinator::InsertableToBucket,
+    consts::{
         DEFAULT_FALSE_POSITIVE_RATE, EOF, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, SIZE_OF_USIZE,
-    }, err::StorageEngineError, memtable::{Entry, InsertionTime, IsDeleted}, sparse_index::{self, RangeOffset, SparseIndex}, types::{CreationTime, IsTombStone, Key, ValOffset}
+    },
+    err::StorageEngineError,
+    memtable::{Entry, InsertionTime, IsDeleted},
+    sparse_index::{self, RangeOffset, SparseIndex},
+    types::{CreationTime, IsTombStone, Key, ValOffset},
 };
 
 use StorageEngineError::*;

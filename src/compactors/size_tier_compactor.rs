@@ -1,7 +1,13 @@
+use crossbeam_epoch::Atomic;
 // TODO: Manage concurent comapction and flushing
+use core::sync;
 use crossbeam_skiplist::SkipMap;
+use futures::lock::Mutex;
 use log::{error, info, warn};
-use std::{cmp::Ordering, collections::HashMap, path::PathBuf, sync::Arc};
+use std::borrow::Borrow;
+use std::cmp::Ordering;
+use std::sync::atomic::AtomicBool;
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::fs;
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::RwLock;
@@ -10,10 +16,11 @@ use uuid::Uuid;
 
 use crate::bucket_coordinator::{Bucket, BucketID, BucketMap};
 use crate::consts::{
-    DEFAULT_COMPACTION_INTERVAL_MILLI, DEFAULT_TOMBSTONE_COMPACTION_INTERVAL_MILLI,
+    DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI, DEFAULT_COMPACTION_INTERVAL_MILLI,
+    DEFAULT_TOMBSTONE_COMPACTION_INTERVAL_MILLI,
 };
 
-use crate::types::Key;
+use crate::types::{FlushSignal, Key};
 use crate::{
     bloom_filter::BloomFilter,
     consts::TOMB_STONE_TTL,
@@ -23,8 +30,9 @@ use crate::{
     sstable::{SSTable, SSTablePath},
 };
 use StorageEngineError::*;
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Compactor {
+    pub state: Arc<RwLock<CompactionState>>,
     // tombstones are considered and used to identify
     // and remove deleted data during compaction
     pub tombstones: HashMap<Key, u64>,
@@ -33,6 +41,13 @@ pub struct Compactor {
     // entry expected time to live
     pub entry_ttl: u64,
 }
+
+#[derive(Debug)]
+pub enum CompactionState {
+    Sleep,
+    Active,
+}
+
 pub struct MergedSSTable {
     pub sstable: SSTable,
     pub hotness: u64,
@@ -55,6 +70,7 @@ impl Compactor {
             tombstones: HashMap::new(),
             use_ttl,
             entry_ttl,
+            state: Arc::new(RwLock::new(CompactionState::Sleep)),
         }
     }
     /// TODO: This method will be used to check for the condition to trigger tombstone compaction
@@ -83,43 +99,145 @@ impl Compactor {
     ) {
         let use_ttl = self.use_ttl;
         let entry_ttl = self.entry_ttl;
+        let curr_state = self.state.clone();
         tokio::spawn(async move {
             let current_buckets = bucket_map;
             let current_bloom_filters = bloom_filters;
             let current_key_range = key_range;
             loop {
-                let mut should_compact = false;
-                // check for compaction conditions before returning
-                for (level, (_, bucket)) in current_buckets.read().await.buckets.iter().enumerate()
-                {
-                    if bucket.should_trigger_compaction(level) {
-                        should_compact = true;
-                        break;
-                    }
-                }
-
-                if should_compact {
-                    // compaction will continue until all the table is balanced
-                    let mut compactor = Compactor::new(use_ttl, entry_ttl);
-                    let comp_res = compactor
-                        .run_compaction(
-                            Arc::clone(&current_buckets),
-                            Arc::clone(&current_bloom_filters),
-                            Arc::clone(&current_key_range),
+                let compaction_state = curr_state.read().await;
+                match *compaction_state {
+                    CompactionState::Sleep => {
+                        let mut modifiable_state = curr_state.write().await;
+                        *modifiable_state = CompactionState::Active;
+                        let compaction_result = Compactor::handle_compaction(
+                            use_ttl,
+                            entry_ttl,
+                            current_buckets.clone(),
+                            current_bloom_filters.clone(),
+                            current_key_range.clone(),
                         )
                         .await;
-                    match comp_res {
-                        Ok(done) => {
-                            println!("Compactoin complete : {}", done);
+                        match compaction_result {
+                            Ok(done) => {
+                                log::info!("Compaction complete : {}", done);
+                            }
+                            Err(err) => {
+                                log::info!(
+                                    "{}",
+                                    StorageEngineError::CompactionFailed(err.to_string())
+                                )
+                            }
                         }
-                        Err(err) => {
-                            println!("Error during compaction : {}", err)
-                        }
+                        *modifiable_state = CompactionState::Sleep;
                     }
+                    CompactionState::Active => {}
                 }
+
                 sleep(Duration::from_millis(DEFAULT_COMPACTION_INTERVAL_MILLI)).await;
             }
         });
+    }
+
+    pub fn start_flush_listner(
+        &self,
+        signal_receiver: &async_broadcast::Receiver<FlushSignal>,
+        bucket_map: Arc<RwLock<BucketMap>>,
+        bloom_filters: Arc<RwLock<Vec<BloomFilter>>>,
+        key_range: Arc<RwLock<KeyRange>>,
+    ) {
+        let use_ttl = self.use_ttl;
+        let entry_ttl = self.entry_ttl;
+        let mut signal_receiver_clone = signal_receiver.clone();
+        let curr_state = self.state.clone();
+        println!("Listening to event");
+        tokio::spawn(async move {
+            let current_buckets = bucket_map;
+            let current_bloom_filters = bloom_filters;
+            let current_key_range = key_range;
+            loop {
+                
+                let signal = signal_receiver_clone.try_recv();
+                let compaction_state = curr_state.read().await;
+                match *compaction_state {
+                    CompactionState::Sleep => {
+                        let mut modifiable_state = curr_state.write().await;
+                        match signal {
+                            Ok(_) => {
+                                *modifiable_state = CompactionState::Active;
+                                let compaction_result = Compactor::handle_compaction(
+                                    use_ttl,
+                                    entry_ttl,
+                                    current_buckets.clone(),
+                                    current_bloom_filters.clone(),
+                                    current_key_range.clone(),
+                                )
+                                .await;
+                                match compaction_result {
+                                    Ok(done) => {
+                                        log::info!("Compaction complete : {}", done);
+                                    }
+                                    Err(err) => {
+                                        log::info!(
+                                            "{}",
+                                            StorageEngineError::CompactionFailed(err.to_string())
+                                        )
+                                    }
+                                }
+                            }
+                            Err(err) => match err {
+                                async_broadcast::TryRecvError::Overflowed(_) => {
+                                    log::error!("{}", FlushSignalOverflowError)
+                                }
+                                async_broadcast::TryRecvError::Closed => {
+                                    log::error!("{}", FlushSignalClosedError)
+                                }
+                                async_broadcast::TryRecvError::Empty => {}
+                            },
+                        }
+                    }
+                    CompactionState::Active => {}
+                }
+                sleep(Duration::from_millis(
+                    DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI,
+                ))
+                .await;
+            }
+        });
+    }
+
+    pub async fn handle_compaction(
+        use_ttl: bool,
+        entry_ttl: u64,
+        current_buckets: Arc<RwLock<BucketMap>>,
+        current_bloom_filters: Arc<RwLock<Vec<BloomFilter>>>,
+        current_key_range: Arc<RwLock<KeyRange>>,
+    ) -> Result<bool, StorageEngineError> {
+        let mut should_compact = false;
+        // check for compaction conditions before returning
+        for (level, (_, bucket)) in current_buckets.read().await.buckets.iter().enumerate() {
+            if bucket.should_trigger_compaction(level) {
+                should_compact = true;
+                break;
+            }
+        }
+
+        if should_compact {
+            // compaction will continue until all the table is balanced
+            let mut compactor = Compactor::new(use_ttl, entry_ttl);
+            let comp_res = compactor
+                .run_compaction(
+                    Arc::clone(&current_buckets),
+                    Arc::clone(&current_bloom_filters),
+                    Arc::clone(&current_key_range),
+                )
+                .await;
+            match comp_res {
+                Ok(done) => return Ok(done),
+                Err(err) => return Err(err),
+            }
+        }
+        return Ok(true);
     }
 
     pub async fn run_compaction(
