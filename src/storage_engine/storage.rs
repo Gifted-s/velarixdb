@@ -3,9 +3,10 @@ use crate::bucket_coordinator::{Bucket, BucketID, BucketMap};
 use crate::cfg::Config;
 use crate::compactors::Compactor;
 use crate::consts::{
-    BUCKETS_DIRECTORY_NAME, DEFAULT_FLUSH_DATA_CHANNEL_SIZE, DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE,
-    HEAD_ENTRY_KEY, META_DIRECTORY_NAME, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, TAIL_ENTRY_KEY,
-    TOMB_STONE_MARKER, VALUE_LOG_DIRECTORY_NAME, WRITE_BUFFER_SIZE,
+    BUCKETS_DIRECTORY_NAME, DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI,
+    DEFAULT_FLUSH_DATA_CHANNEL_SIZE, DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE, HEAD_ENTRY_KEY,
+    META_DIRECTORY_NAME, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, TAIL_ENTRY_KEY, TOMB_STONE_MARKER,
+    VALUE_LOG_DIRECTORY_NAME, WRITE_BUFFER_SIZE,
 };
 use crate::err::StorageEngineError;
 use crate::err::StorageEngineError::*;
@@ -22,10 +23,12 @@ use async_broadcast::broadcast;
 use chrono::Utc;
 use indexmap::IndexMap;
 use log::error;
+use std::time::Duration;
 use std::{borrow::Borrow, path::PathBuf};
 use std::{hash::Hash, sync::Arc};
 use tokio::fs::{self, read_dir, OpenOptions};
 use tokio::io::{self, AsyncSeekExt, AsyncWriteExt, SeekFrom};
+use tokio::time::sleep;
 use tokio::{
     spawn,
     sync::{
@@ -101,7 +104,6 @@ impl<'a> StorageEngine<'a, Key> {
             default_config,
         )
         .await?;
-    println!("here");
         let started = store.trigger_background_tasks()?;
         println!("Background jobs started: {}", started);
         return Ok(store);
@@ -126,24 +128,6 @@ impl<'a> StorageEngine<'a, Key> {
         if let ChanRecv::TombStoneCompactionNoticeRcv(rcx) = &self.tombstone_compaction_rcv {
             self.compactor
                 .tombstone_compaction_condition_background_checker(Arc::clone(rcx));
-        }
-
-        // Start background to constantly check accept flush data in a seperate tokio task and
-        // process them sequetially to prevent interference
-        if let ChanRecv::FlushDataRecv(rcx) = &self.flush_data_recevier {
-            if let ChanSender::FlushNotificationSender(flush_signal_sender) =
-                &self.flush_signal_sender
-            {
-                self.flusher.flush_data_collector(
-                    Arc::clone(rcx),
-                    &flush_signal_sender.clone(),
-                    Arc::clone(&self.buckets),
-                    Arc::clone(&self.bloom_filters),
-                    Arc::clone(&self.key_range),
-                    Arc::clone(&self.read_only_memtables),
-                    self.config.to_owned(),
-                );
-            }
         }
 
         // Start background job to check for compaction condition at regular intervals 20 days
@@ -188,7 +172,6 @@ impl<'a> StorageEngine<'a, Key> {
         }
 
         if self.active_memtable.is_full(HEAD_ENTRY_KEY.len()) {
-           
             let capacity = self.active_memtable.capacity();
             let size_unit = self.active_memtable.size_unit();
             let false_positive_rate = self.active_memtable.false_positive_rate();
@@ -220,20 +203,25 @@ impl<'a> StorageEngine<'a, Key> {
                 for (table_id, table_to_flush) in rd_table.iter() {
                     let table = Arc::clone(table_to_flush);
                     let table_id_clone = table_id.clone();
-                    let flush_data_sender_clone = self.flush_data_sender.clone();
+                    //let flush_data_sender_clone = self.flush_data_sender.clone();
+                    let mut flusher = self.flusher.clone();
+
+                    let flush_signal_clone = self.flush_signal_sender.clone();
                     // Prevent write block
                     spawn(async move {
-                        if let ChanSender::FlushDataSender(sender) = flush_data_sender_clone {
-                            if let Err(err) =
-                                sender.write().await.send((table_id_clone, table)).await
-                            {
-                                println!("Could not send flush data to channel {:?}", err);
-                            }
+                        if let ChanSender::FlushNotificationSender(signal_sender) =
+                            flush_signal_clone
+                        {
+                            flusher.flush_handler(
+                                table_id_clone.to_owned(),
+                                table.to_owned(),
+                                signal_sender.clone(),
+                            );
                         }
                     });
                 }
             }
-       
+
             self.active_memtable = InMemoryTable::with_specified_capacity_and_rate(
                 size_unit,
                 capacity,
@@ -299,6 +287,11 @@ impl<'a> StorageEngine<'a, Key> {
                 match sstable_paths {
                     Some(sstables_within_key_range) => {
                         for sstable in sstables_within_key_range.iter() {
+                            println!(
+                                "Path of the SSTable path {:?}, key {}",
+                                sstable.data_file_path.clone(),
+                                String::from_utf8_lossy(&key)
+                            );
                             let sparse_index =
                                 SparseIndex::new(sstable.index_file_path.clone()).await;
 
@@ -311,6 +304,7 @@ impl<'a> StorageEngine<'a, Key> {
                                             sstable.data_file_path.to_owned(),
                                             sstable.index_file_path.to_owned(),
                                         );
+
                                         match sst.get(block_offset, &key).await {
                                             Ok(None) => continue,
                                             Ok(result) => {
@@ -521,28 +515,33 @@ impl<'a> StorageEngine<'a, Key> {
             let (comp_sender, comp_rec) = mpsc::channel(1);
             let read_only_memtables = IndexMap::new();
 
+            let bloom_filters_ref: Arc<RwLock<Vec<BloomFilter>>> =
+                Arc::new(RwLock::new(Vec::new()));
+            let buckets_ref = Arc::new(RwLock::new(buckets.to_owned()));
+            let key_range_ref = Arc::new(RwLock::new(key_range));
+            let read_only_memtables_ref = Arc::new(RwLock::new(read_only_memtables));
+
             let flusher = Flusher::new(
-                Arc::new(RwLock::new(read_only_memtables.to_owned())),
-                Arc::new(RwLock::new(active_memtable.to_owned())),
-                Vec::new(),
-                Arc::new(RwLock::new(buckets.to_owned())),
-                Arc::new(RwLock::new(Vec::new())),
-                Arc::new(RwLock::new(key_range.to_owned())),
+                read_only_memtables_ref.clone(),
+                buckets_ref.clone(),
+                bloom_filters_ref.clone(),
+                key_range_ref.clone(),
                 config.enable_ttl,
                 config.entry_ttl_millis,
             );
+
             return Ok(StorageEngine {
                 active_memtable,
                 val_log: vlog,
-                bloom_filters: Arc::new(RwLock::new(Vec::new())),
-                buckets: Arc::new(RwLock::new(buckets.to_owned())),
+                bloom_filters: bloom_filters_ref,
+                buckets: buckets_ref,
                 dir,
-                key_range: Arc::new(RwLock::new(key_range)),
+                key_range: key_range_ref,
                 compactor: Compactor::new(config.enable_ttl, config.entry_ttl_millis),
                 config: config.clone(),
                 meta,
                 flusher,
-                read_only_memtables: Arc::new(RwLock::new(read_only_memtables)),
+                read_only_memtables: read_only_memtables_ref,
                 tombstone_compaction_sender: ChanSender::TombStoneCompactionNoticeSender(
                     comp_sender,
                 ),
@@ -717,20 +716,17 @@ impl<'a> StorageEngine<'a, Key> {
         let (tomb_comp_sender, tomb_comp_rec) = mpsc::channel(1);
         match recover_result {
             Ok((active_memtable, read_only_memtables)) => {
-                let (table_id, table_to_flush) = read_only_memtables.iter().next().unwrap();
-
-                let buckets_map_arc = Arc::new(RwLock::new(buckets_map.to_owned()));
-                let bloom_filter_arc = Arc::new(RwLock::new(bloom_filters));
+                let buckets_map_ref = Arc::new(RwLock::new(buckets_map.to_owned()));
+                let bloom_filter_ref = Arc::new(RwLock::new(bloom_filters));
                 //TODO:  we also need to recover this from sstable
-                let key_range_arc = Arc::new(RwLock::new(key_range.to_owned()));
+                let key_range_ref = Arc::new(RwLock::new(key_range.to_owned()));
+                let read_only_memtables_ref = Arc::new(RwLock::new(read_only_memtables));
 
                 let flusher = Flusher::new(
-                    Arc::new(RwLock::new(read_only_memtables.to_owned())),
-                    Arc::clone(table_to_flush),
-                    table_id.to_owned(),
-                    buckets_map_arc.to_owned(),
-                    bloom_filter_arc.to_owned(),
-                    key_range_arc.to_owned(),
+                    read_only_memtables_ref.clone(),
+                    buckets_map_ref.clone(),
+                    bloom_filter_ref.clone(),
+                    key_range_ref.clone(),
                     config.enable_ttl,
                     config.entry_ttl_millis,
                 );
@@ -739,14 +735,14 @@ impl<'a> StorageEngine<'a, Key> {
                     active_memtable,
                     val_log: vlog,
                     dir,
-                    buckets: buckets_map_arc.to_owned(),
-                    bloom_filters: bloom_filter_arc,
-                    key_range: key_range_arc,
+                    buckets: buckets_map_ref,
+                    bloom_filters: bloom_filter_ref,
+                    key_range: key_range_ref,
                     meta,
                     flusher,
                     compactor: Compactor::new(config.enable_ttl, config.entry_ttl_millis),
                     config: config.clone(),
-                    read_only_memtables: Arc::new(RwLock::new(read_only_memtables)),
+                    read_only_memtables: read_only_memtables_ref,
                     tombstone_compaction_sender: ChanSender::TombStoneCompactionNoticeSender(
                         tomb_comp_sender,
                     ),
@@ -948,9 +944,10 @@ impl SizeUnit {
 #[cfg(test)]
 mod tests {
 
-    
-
     use std::thread;
+
+    use crate::compactors::CompactionState;
+    use crate::consts::DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI;
 
     use super::*;
     use futures::future::join_all;
@@ -959,7 +956,8 @@ mod tests {
 
     use rand::distributions::Alphanumeric;
     use rand::{thread_rng, Rng};
-
+    use std::io::{self, Write};
+    use tokio::test;
     fn init() {
         let res = env_logger::builder().is_test(true).try_init();
         match res {
@@ -981,11 +979,12 @@ mod tests {
     async fn storage_engine_create_asynchronous() {
         let path = PathBuf::new().join("bump1");
         let s_engine = StorageEngine::new(path.clone()).await.unwrap();
-        // Specify the number of random strings to generate
-        let num_strings = 100000; // 100k
+
+        // // Specify the number of random strings to generate
+        let num_strings = 20000; // 100k
 
         // Specify the length of each random string
-        let string_length = 2;
+        let string_length = 5;
         // Generate random strings and store them in a vector
         let mut random_strings: Vec<String> = Vec::with_capacity(num_strings);
         for _ in 0..num_strings {
@@ -993,7 +992,7 @@ mod tests {
             random_strings.push(random_string);
         }
         // for k in random_strings.clone() {
-        //     s_engine.put(&k, "boyode").await.unwrap();
+        //    s_engine.put(&k, "boyode", None).await.unwrap();
         // }
         let sg = Arc::new(RwLock::new(s_engine));
 
@@ -1005,7 +1004,7 @@ mod tests {
                 value.put(&k, "boy", None).await
             })
         });
-
+        println!("Started Test");
         let all_results = join_all(tasks).await;
         for tokio_response in all_results {
             match tokio_response {
@@ -1020,33 +1019,54 @@ mod tests {
                 }
             }
         }
-        thread::sleep(Duration::from_millis(5 * 60 * 1000));
-        //sleep(Duration::from_millis(5 * 60 * 1000)).await;
+        println!("got here");
+        loop {
+            let sg_locked = sg.read().await;
+            if !sg_locked.buckets.read().await.is_balanced() {
+                println!("Compaction is still running");
+                sleep(Duration::from_millis(
+                    DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI * 2,
+                ))
+                .await;
+            } else {
+                break;
+            }
+        }
 
-        // random_strings.sort();
-        // let tasks = random_strings.iter().map(|k| {
-        //     let s_engine = Arc::clone(&sg);
-        //     let k = k.clone();
-        //     tokio::spawn(async move {
-        //         let value = s_engine.read().await;
-        //         value.get(&k).await
-        //     })
-        // });
+        println!("Compaction completed !");
+        random_strings.sort();
+        let tasks = random_strings
+            .get(0..num_strings / 2)
+            .unwrap_or_default()
+            .iter()
+            .map(|k| {
+                let s_engine = Arc::clone(&sg);
+                let key = k.clone();
+                tokio::spawn(async move {
+                    let value = s_engine.read().await;
+                    let res = value.get(&key).await;
+                    match res {
+                        Ok(_) => return Ok(key),
+                        Err(err) => return Err(err),
+                    }
+                })
+            });
 
-        // let all_results = join_all(tasks).await;
-        // for tokio_response in all_results {
-        //     match tokio_response {
-        //         Ok(entry) => match entry {
-        //             Ok(v) => {
-        //                 assert_eq!(v.0, b"boy");
-        //             }
-        //             Err(err) => assert!(false, "{}", err.to_string()),
-        //         },
-        //         Err(err) => {
-        //             assert!(false, "{}", err.to_string())
-        //         }
-        //     }
-        // }
+        let all_results = join_all(tasks).await;
+        for tokio_response in all_results {
+            match tokio_response {
+                Ok(entry) => match entry {
+                    Ok(v) => {
+                        println!("Found {:?}", v)
+                        //assert_eq!(v.0, b"boy");
+                    }
+                    Err(err) => assert!(false, "Error: {}", err.to_string()),
+                },
+                Err(err) => {
+                    assert!(false, "{}", err.to_string())
+                }
+            }
+        }
 
         let _ = fs::remove_dir_all(path.clone()).await;
     }

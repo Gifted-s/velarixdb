@@ -21,8 +21,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{cmp::Ordering, collections::HashMap};
-use tokio_stream::{self as stream, Stream};
-
 #[derive(Debug, Clone)]
 pub struct FetchedEntry {
     pub key: Key,

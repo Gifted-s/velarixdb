@@ -34,12 +34,13 @@ pub const DEFAULT_TOMBSTONE_COMPACTION_INTERVAL_MILLI: u64 = 10 * 86400000;
 pub const DEFAULT_COMPACTION_INTERVAL_MILLI: u64 = 3600000;
 
 // 1 Min
-pub const DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI: u64 = 60000;
+//pub const DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI: u64 = 60000;
+pub const DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI: u64 = 1000 * 10;
 
 pub const DEFAULT_FLUSH_DATA_CHANNEL_SIZE: usize = 10;
 
 /// Only the compactor listens to flush events for now
-/// This should be greater than or equal to the writter buffer size since 
+/// This should be greater than or equal to the writter buffer size since
 /// all be buffer can be flushed in parallel leading to multiple signals sent at once
 pub const DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE: usize = 2;
 // tombstone should only be removed after 120 days to guarantee that obsolete data don't

@@ -126,7 +126,7 @@ pub enum StorageEngineError {
     KeyNotFound(#[source] Box<Self>),
 
     /// Key not found in db
-    #[error("Key not found ")]
+    #[error("Key not found")]
     NotFoundInDB,
 
     /// There was an error while atttempting to read from value log file

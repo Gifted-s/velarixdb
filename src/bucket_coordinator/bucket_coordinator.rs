@@ -77,14 +77,12 @@ impl Bucket {
         })
     }
 
-    pub fn should_trigger_compaction(&self, level: usize) -> bool {
-        self.needs_compaction_by_count()
-            || self.needs_compaction_by_size(self.calculate_target_size(level))
-    }
-
     async fn calculate_buckets_avg_size(
         sstables: &Vec<SSTablePath>,
     ) -> Result<usize, StorageEngineError> {
+        if sstables.is_empty() {
+            return Ok(0);
+        }
         let mut all_sstable_size = 0;
         let fetch_files_meta = sstables
             .iter()
@@ -100,6 +98,9 @@ impl Bucket {
     }
 
     async fn extract_sstables(&self) -> Result<(Vec<SSTablePath>, usize), StorageEngineError> {
+        if self.sstables.len() < MIN_TRESHOLD {
+            return Ok((vec![], 0));
+        }
         let extracted_sstables = self
             .sstables
             .get(0..MAX_TRESHOLD)
@@ -109,16 +110,7 @@ impl Bucket {
         Ok((extracted_sstables, average))
     }
 
-    fn calculate_target_size(&self, level: usize) -> usize {
-        (DEFAULT_TARGET_FILE_SIZE_BASE as i32
-            * DEFAULT_TARGET_FILE_SIZE_MULTIPLIER.pow(level as u32)) as usize
-    }
-
-    fn needs_compaction_by_size(&self, target_size: usize) -> bool {
-        self.size > target_size
-    }
-
-    fn needs_compaction_by_count(&self) -> bool {
+    fn sstable_count_exceeds_threshhold(&self) -> bool {
         self.sstables.len() >= MIN_TRESHOLD
     }
 }
@@ -206,20 +198,9 @@ impl BucketMap {
         let mut sstables_to_delete: Vec<(BucketID, Vec<SSTablePath>)> = Vec::new();
         let mut buckets_to_compact: Vec<Bucket> = Vec::new();
 
-        for (level, (bucket_id, bucket)) in self.buckets.iter().enumerate() {
-            let target_size = bucket.calculate_target_size(level);
-            if Bucket::needs_compaction_by_size(bucket, target_size) {
-                let (extracted_sstables, average) = Bucket::extract_sstables(bucket).await?;
-                sstables_to_delete.push((*bucket_id, extracted_sstables.clone()));
-                buckets_to_compact.push(Bucket {
-                    size: average * extracted_sstables.len(),
-                    sstables: extracted_sstables,
-                    id: *bucket_id,
-                    dir: bucket.dir.to_owned(),
-                    avarage_size: average,
-                });
-            } else if Bucket::needs_compaction_by_count(bucket) {
-                let (extracted_sstables, average) = Bucket::extract_sstables(bucket).await?;
+        for (_, (bucket_id, bucket)) in self.buckets.iter().enumerate() {
+            let (extracted_sstables, average) = Bucket::extract_sstables(bucket).await?;
+            if !extracted_sstables.is_empty() {
                 sstables_to_delete.push((*bucket_id, extracted_sstables.clone()));
                 buckets_to_compact.push(Bucket {
                     size: average * extracted_sstables.len(),
@@ -232,7 +213,14 @@ impl BucketMap {
         }
         Ok((buckets_to_compact, sstables_to_delete))
     }
-
+    pub fn is_balanced(&self) -> bool {
+        for (_, (_, bucket)) in self.buckets.iter().enumerate() {
+            if bucket.sstable_count_exceeds_threshhold() {
+                return false;
+            }
+        }
+        return true;
+    }
     // NOTE: This should be called only after compaction is complete
     pub async fn delete_sstables(
         &mut self,
