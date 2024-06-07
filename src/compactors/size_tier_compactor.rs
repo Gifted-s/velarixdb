@@ -510,8 +510,8 @@ impl Compactor {
         sst2: &SSTable,
     ) -> Result<SSTable, StorageEngineError> {
         let mut new_sstable = SSTable::new(PathBuf::new(), false).await;
-        let new_sstable_index = Arc::new(SkipMap::new());
-        let mut merged_indexes = Vec::new();
+        let new_sstable_map = Arc::new(SkipMap::new());
+        let mut merged_entries = Vec::new();
         let entries1 = sst1
             .get_entries()
             .iter()
@@ -529,23 +529,23 @@ impl Compactor {
         while i < entries1.len() && j < entries2.len() {
             match entries1[i].key.cmp(&entries2[j].key) {
                 Ordering::Less => {
-                    self.tombstone_check(&entries1[i], &mut merged_indexes)
+                    self.tombstone_check(&entries1[i], &mut merged_entries)
                         .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
                     i += 1;
                 }
                 Ordering::Equal => {
                     if entries1[i].created_at > entries2[j].created_at {
-                        self.tombstone_check(&entries1[i], &mut merged_indexes)
+                        self.tombstone_check(&entries1[i], &mut merged_entries)
                             .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
                     } else {
-                        self.tombstone_check(&entries2[j], &mut merged_indexes)
+                        self.tombstone_check(&entries2[j], &mut merged_entries)
                             .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
                     }
                     i += 1;
                     j += 1;
                 }
                 Ordering::Greater => {
-                    self.tombstone_check(&entries2[j], &mut merged_indexes)
+                    self.tombstone_check(&entries2[j], &mut merged_entries)
                         .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
                     j += 1;
                 }
@@ -554,32 +554,32 @@ impl Compactor {
 
         // If there are any remaining elements in arr1, append them
         while i < entries1.len() {
-            self.tombstone_check(&entries1[i], &mut merged_indexes)
+            self.tombstone_check(&entries1[i], &mut merged_entries)
                 .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
             i += 1;
         }
 
         // If there are any remaining elements in arr2, append them
         while j < entries2.len() {
-            self.tombstone_check(&entries2[j], &mut merged_indexes)
+            self.tombstone_check(&entries2[j], &mut merged_entries)
                 .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
             j += 1;
         }
 
-        merged_indexes.iter().for_each(|e| {
-            new_sstable_index.insert(
+        merged_entries.iter().for_each(|e| {
+            new_sstable_map.insert(
                 e.key.to_owned(),
                 (e.val_offset, e.created_at, e.is_tombstone),
             );
         });
-        new_sstable.set_entries(new_sstable_index);
+        new_sstable.set_entries(new_sstable_map);
         Ok(new_sstable)
     }
 
     fn tombstone_check(
         &mut self,
         entry: &Entry<Vec<u8>, usize>,
-        merged_indexes: &mut Vec<Entry<Vec<u8>, usize>>,
+        merged_entries: &mut Vec<Entry<Vec<u8>, usize>>,
     ) -> Result<bool, StorageEngineError> {
         let mut insert_entry = false;
         // If key has been mapped to any tombstone
@@ -628,7 +628,7 @@ impl Compactor {
         }
 
         if insert_entry {
-            merged_indexes.push(entry.clone())
+            merged_entries.push(entry.clone())
         }
         Ok(true)
     }

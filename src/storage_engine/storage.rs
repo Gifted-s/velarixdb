@@ -40,7 +40,7 @@ use tokio::{
 #[derive(Debug)]
 pub struct StorageEngine<'a, K>
 where
-    K: Hash + Ord + Send + Sync + Borrow<Vec<u8>>,
+    K: Hash + Ord + Send + Sync,
 {
     pub dir: DirPath,
     pub active_memtable: InMemoryTable<K>,
@@ -52,7 +52,7 @@ where
     pub meta: Meta,
     pub flusher: Flusher,
     pub config: Config,
-    pub range_iterator: RangeIterator<'a>,
+    pub range_iterator: Option<RangeIterator<'a>>,
     pub read_only_memtables: Arc<RwLock<IndexMap<K, Arc<RwLock<InMemoryTable<K>>>>>>,
     pub flush_data_sender: ChanSender,
     pub flush_data_recevier: ChanRecv,
@@ -229,7 +229,6 @@ impl<'a> StorageEngine<'a, Key> {
             );
         }
         let entry = Entry::new(key.to_vec(), v_offset, created_at, is_tombstone);
-
         self.active_memtable.insert(&entry)?;
         Ok(true)
     }
@@ -287,11 +286,6 @@ impl<'a> StorageEngine<'a, Key> {
                 match sstable_paths {
                     Some(sstables_within_key_range) => {
                         for sstable in sstables_within_key_range.iter() {
-                            println!(
-                                "Path of the SSTable path {:?}, key {}",
-                                sstable.data_file_path.clone(),
-                                String::from_utf8_lossy(&key)
-                            );
                             let sparse_index =
                                 SparseIndex::new(sstable.index_file_path.clone()).await;
 
@@ -304,7 +298,6 @@ impl<'a> StorageEngine<'a, Key> {
                                             sstable.data_file_path.to_owned(),
                                             sstable.index_file_path.to_owned(),
                                         );
-
                                         match sst.get(block_offset, &key).await {
                                             Ok(None) => continue,
                                             Ok(result) => {
@@ -321,8 +314,8 @@ impl<'a> StorageEngine<'a, Key> {
                                                     }
                                                 }
                                             }
-                                            Err(err) => error!("{}", err),
-                                        }
+                                            Err(err) => println!("============================== {} Key {} ==============================================", err, String::from_utf8_lossy(&key)),
+                                        } 
                                     }
                                 }
                                 Err(err) => error!("{}", err),
@@ -338,11 +331,10 @@ impl<'a> StorageEngine<'a, Key> {
                 }
             }
         }
-
         // most_recent_insert_time cannot be zero unless did not find this key in any sstable
         if most_recent_insert_time > 0 {
             // Step 5: Read value from value log based on offset
-            let value: Option<(Vec<u8>, bool)> = self.val_log.get(offset).await?;
+            let value = self.val_log.get(offset).await?;
             match value {
                 Some((v, is_tombstone)) => {
                     if is_tombstone {
@@ -355,7 +347,6 @@ impl<'a> StorageEngine<'a, Key> {
         }
         Err(NotFoundInDB)
     }
-
     pub async fn delete(&mut self, key: &str) -> Result<bool, StorageEngineError> {
         // Return error if not
         self.get(key).await?;
@@ -548,7 +539,7 @@ impl<'a> StorageEngine<'a, Key> {
                 tombstone_compaction_rcv: ChanRecv::TombStoneCompactionNoticeRcv(Arc::new(
                     RwLock::new(comp_rec),
                 )),
-                range_iterator: RangeIterator::default(),
+                range_iterator: None,
                 flush_data_sender: ChanSender::FlushDataSender(Arc::new(RwLock::new(
                     flush_data_sender,
                 ))),
@@ -746,7 +737,7 @@ impl<'a> StorageEngine<'a, Key> {
                     tombstone_compaction_sender: ChanSender::TombStoneCompactionNoticeSender(
                         tomb_comp_sender,
                     ),
-                    range_iterator: RangeIterator::default(),
+                    range_iterator: None,
                     tombstone_compaction_rcv: ChanRecv::TombStoneCompactionNoticeRcv(Arc::new(
                         RwLock::new(tomb_comp_rec),
                     )),
@@ -994,6 +985,7 @@ mod tests {
         // for k in random_strings.clone() {
         //    s_engine.put(&k, "boyode", None).await.unwrap();
         // }
+
         let sg = Arc::new(RwLock::new(s_engine));
 
         let tasks = random_strings.iter().map(|k| {
@@ -1019,24 +1011,23 @@ mod tests {
                 }
             }
         }
-        println!("got here");
-        loop {
-            let sg_locked = sg.read().await;
-            if !sg_locked.buckets.read().await.is_balanced() {
-                println!("Compaction is still running");
-                sleep(Duration::from_millis(
-                    DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI * 2,
-                ))
-                .await;
-            } else {
-                break;
-            }
-        }
+        // loop {
+        //     let sg_locked = sg.read().await;
+        //     if !sg_locked.buckets.read().await.is_balanced() {
+        //         println!("Compaction is still running");
+        //         sleep(Duration::from_millis(
+        //             DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI,
+        //         ))
+        //         .await;
+        //     } else {
+        //         break;
+        //     }
+        // }
 
         println!("Compaction completed !");
-        random_strings.sort();
+        //random_strings.sort();
         let tasks = random_strings
-            .get(0..num_strings / 2)
+            .get(0..(num_strings / 2))
             .unwrap_or_default()
             .iter()
             .map(|k| {
@@ -1047,7 +1038,7 @@ mod tests {
                     let res = value.get(&key).await;
                     match res {
                         Ok(_) => return Ok(key),
-                        Err(err) => return Err(err),
+                        Err(err) => return Err(io::Error::new(io::ErrorKind::NotFound, key)),
                     }
                 })
             });
@@ -1057,7 +1048,7 @@ mod tests {
             match tokio_response {
                 Ok(entry) => match entry {
                     Ok(v) => {
-                        println!("Found {:?}", v)
+                        println!("Found  {}", v)
                         //assert_eq!(v.0, b"boy");
                     }
                     Err(err) => assert!(false, "Error: {}", err.to_string()),

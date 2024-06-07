@@ -3,18 +3,22 @@ use crate::{
     err::StorageEngineError,
 };
 use log::error;
-use std::{mem, path::PathBuf};
-use tokio::fs::OpenOptions;
+use std::{mem, path::PathBuf, sync::Arc};
 use tokio::io::{self, AsyncSeekExt, SeekFrom};
 use tokio::{
     fs,
     io::{AsyncReadExt, AsyncWriteExt},
+};
+use tokio::{
+    fs::{File, OpenOptions},
+    sync::RwLock,
 };
 use StorageEngineError::*;
 type TotalBytesRead = usize;
 #[derive(Debug, Clone)]
 pub struct ValueLog {
     pub file_path: PathBuf,
+    pub file: Arc<RwLock<File>>,
     pub head_offset: usize,
     pub tail_offset: usize,
 }
@@ -43,21 +47,24 @@ impl ValueLog {
         }
 
         let file_path = dir_path.join(VLOG_FILE_NAME);
-        OpenOptions::new()
-            .read(true)
-            .append(true)
-            .create(true)
-            .open(file_path.clone())
-            .await
-            .map_err(|err| VLogFileCreationError {
-                path: dir_path,
-                error: err,
-            })?;
 
+        let file = Arc::new(RwLock::new(
+            OpenOptions::new()
+                .read(true)
+                .append(true)
+                .create(true)
+                .open(file_path.clone())
+                .await
+                .map_err(|err| VLogFileCreationError {
+                    path: dir_path,
+                    error: err,
+                })?,
+        ));
         Ok(Self {
             file_path,
             head_offset: 0,
             tail_offset: 0,
+            file,
         })
     }
 
@@ -86,15 +93,7 @@ impl ValueLog {
         );
         let serialized_data = v_log_entry.serialize();
         // Open the file in write mode with the append flag.
-        let file_path = PathBuf::from(&self.file_path);
-        let mut file = OpenOptions::new()
-            .append(true)
-            .open(file_path.clone())
-            .await
-            .map_err(|err| SSTableFileOpenError {
-                path: file_path.clone(),
-                error: err,
-            })?;
+        let mut file = self.file.write().await;
 
         // Get the current offset before writing(this will be the offset of the value stored in the memtable)
         let last_offset = file
@@ -117,16 +116,7 @@ impl ValueLog {
         &self,
         start_offset: usize,
     ) -> Result<Option<(Vec<u8>, bool)>, StorageEngineError> {
-        let file_path = PathBuf::from(&self.file_path);
-        let mut file = OpenOptions::new()
-            .read(true)
-            .open(file_path.clone())
-            .await
-            .map_err(|err| SSTableFileOpenError {
-                path: file_path.clone(),
-                error: err,
-            })?;
-
+        let mut file = self.file.write().await;
         file.seek(SeekFrom::Start(start_offset as u64))
             .await
             .map_err(|err| ValueLogFileReadError {
@@ -214,15 +204,7 @@ impl ValueLog {
         &mut self,
         start_offset: usize,
     ) -> Result<Vec<ValueLogEntry>, StorageEngineError> {
-        let file_path = PathBuf::from(&self.file_path);
-        let mut file = OpenOptions::new()
-            .read(true)
-            .open(file_path.clone())
-            .await
-            .map_err(|err| SSTableFileOpenError {
-                path: file_path.clone(),
-                error: err,
-            })?;
+        let mut file = self.file.write().await;
         file.seek(SeekFrom::Start(start_offset as u64))
             .await
             .map_err(|err| FileSeekError(err))?;
@@ -334,15 +316,7 @@ impl ValueLog {
         &self,
         bytes_to_collect: usize,
     ) -> Result<(Vec<ValueLogEntry>, TotalBytesRead), StorageEngineError> {
-        let file_path = PathBuf::from(&self.file_path);
-        let mut file = OpenOptions::new()
-            .read(true)
-            .open(file_path.clone())
-            .await
-            .map_err(|err| SSTableFileOpenError {
-                path: file_path.clone(),
-                error: err,
-            })?;
+        let mut file = self.file.write().await;
         file.seek(SeekFrom::Start(self.tail_offset as u64))
             .await
             .map_err(|err| FileSeekError(err))?;

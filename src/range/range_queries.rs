@@ -12,9 +12,11 @@ use crate::storage_engine::StorageEngine;
 use crate::types::{Key, ValOffset, Value};
 use crate::value_log::ValueLog;
 use futures::future::join_all;
-
+use async_trait::async_trait;
 use futures::stream::StreamExt;
 use log::error;
+use tokio::fs::{File, OpenOptions};
+use tokio::sync::RwLock;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -78,7 +80,7 @@ impl<'a> RangeIterator<'a> {
             self.current += 1;
             return Some(entry);
         }
-        // handle not allow prefetch
+        //TODO: handle not allow prefetch option
         return None;
     }
     pub fn prev(&mut self) -> Option<FetchedEntry> {
@@ -170,24 +172,7 @@ impl<'a> RangeIterator<'a> {
     }
 }
 
-impl Default for RangeIterator<'_> {
-    fn default() -> Self {
-        RangeIterator {
-            start: &[0],
-            current: 0,
-            end: &[0],
-            allow_prefetch: DEFAULT_ALLOW_PREFETCH,
-            prefetch_entries_size: DEFAULT_PREFETCH_SIZE,
-            prefetch_entries: Vec::new(),
-            keys: Vec::new(),
-            v_log: ValueLog {
-                file_path: PathBuf::new(),
-                head_offset: 0,
-                tail_offset: 0,
-            },
-        }
-    }
-}
+
 
 impl<'a> StorageEngine<'a, Key> {
     // Start if the range query

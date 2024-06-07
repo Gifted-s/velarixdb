@@ -140,22 +140,26 @@ impl Flusher {
                 use_ttl,
                 entry_ttl,
             );
-
+            let ttt = table_to_flush.clone();
+            println!(
+                "Number of entries before flush {}",
+                ttt.read().await.clone().get_index().len()
+            );
             match flusher.flush(table_to_flush).await {
                 Ok(_) => {
                     read_only_memtable_ref.write().await.shift_remove(&table_id);
-                    let flush_signal_sender_clone2 = flush_signal_sender_clone.clone();
+                    //let flush_signal_sender_clone2 = flush_signal_sender_clone.clone();
 
-                    let broadcase_res = flush_signal_sender_clone2.try_broadcast(FLUSH_SIGNAL);
-                    match broadcase_res {
-                        Ok(_) => {}
-                        Err(err) => match err {
-                            async_broadcast::TrySendError::Full(_) => {
-                                log::error!("{}", StorageEngineError::FlushSignalOverflowError)
-                            }
-                            _ => log::error!("{}", err),
-                        },
-                    }
+                    // let broadcase_res = flush_signal_sender_clone2.try_broadcast(FLUSH_SIGNAL);
+                    // match broadcase_res {
+                    //     Ok(_) => {}
+                    //     Err(err) => match err {
+                    //         async_broadcast::TrySendError::Full(_) => {
+                    //             log::error!("{}", StorageEngineError::FlushSignalOverflowError)
+                    //         }
+                    //         _ => log::error!("{}", err),
+                    //     },
+                    // }
                 }
                 // Handle failure case here
                 Err(err) => {

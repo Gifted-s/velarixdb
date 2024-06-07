@@ -134,20 +134,20 @@ impl BucketMap {
         let added_to_bucket = false;
         let created_at = Utc::now();
         for (_, bucket) in &mut self.buckets {
-            // if (bucket low * bucket avg) is less than sstable size
             if (bucket.avarage_size as f64 * BUCKET_LOW  < table.size() as f64)
-                    // and sstable size is less than (bucket avg * bucket high)
                     && (table.size() < (bucket.avarage_size as f64 * BUCKET_HIGH) as usize)
-                    // or the (sstable size is less than min sstabke size) and (bucket avg is less than the min sstable size )
                     || (table.size() < MIN_SSTABLE_SIZE && bucket.avarage_size  < MIN_SSTABLE_SIZE)
             {
                 let sstable_directory = bucket
                     .dir
                     .join(format!("sstable_{}", created_at.timestamp_millis()));
+
                 let mut sstable = SSTable::new(sstable_directory, true).await;
+               
                 sstable.set_entries(table.get_entries());
+                println!("Entries length moved to sstable {}", sstable.entries.len());
                 sstable.write_to_file().await?;
-                // add sstable to bucket
+
                 let sstable_path = SSTablePath {
                     data_file_path: sstable.data_file_path,
                     index_file_path: sstable.index_file_path,
@@ -227,7 +227,8 @@ impl BucketMap {
         sstables_to_delete: &Vec<(BucketID, Vec<SSTablePath>)>,
     ) -> Result<bool, StorageEngineError> {
         let mut all_sstables_deleted = true;
-        let mut buckets_to_delete: Vec<&BucketID> = Vec::new();
+        //REMOVE
+         let mut buckets_to_delete: Vec<&BucketID> = Vec::new();
 
         for (bucket_id, sst_paths) in sstables_to_delete {
             if let Some(bucket) = self.buckets.get_mut(bucket_id) {
@@ -244,8 +245,17 @@ impl BucketMap {
                         sstables: sstables_remaining.to_vec(),
                     };
                 } else {
-                    buckets_to_delete.push(bucket_id);
 
+                    *bucket = Bucket {
+                        id: bucket.id,
+                        size: 0,
+                        dir: bucket.dir.clone(),
+                        avarage_size: 0,
+                        sstables: vec![],
+                    };
+                    //REMOVE
+                     buckets_to_delete.push(bucket_id);
+//REMOVE
                     if let Err(err) = fs::remove_dir_all(&bucket.dir).await {
                         error!(
                             "Bucket directory deletion error: bucket id={}, path={:?}, err={:?} ",
@@ -271,7 +281,7 @@ impl BucketMap {
                 }
             }
         }
-
+        //REMOVE
         if !buckets_to_delete.is_empty() {
             buckets_to_delete.iter().for_each(|&bucket_id| {
                 self.buckets.shift_remove(bucket_id);
