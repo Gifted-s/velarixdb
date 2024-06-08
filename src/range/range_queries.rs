@@ -281,7 +281,7 @@ impl<'a> StorageEngine<'a, Key> {
                         sst.dir.to_owned(),
                         sst.data_file_path.to_owned(),
                         sst.index_file_path.to_owned(),
-                    );
+                    ).await;
                     match sst.range(range_offset).await {
                         Ok(sstable_entries) => merger.merge_entries(sstable_entries),
                         Err(err) => return Err(err),

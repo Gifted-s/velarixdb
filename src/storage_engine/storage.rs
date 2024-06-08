@@ -297,7 +297,8 @@ impl<'a> StorageEngine<'a, Key> {
                                             sstable.dir.to_owned(),
                                             sstable.data_file_path.to_owned(),
                                             sstable.index_file_path.to_owned(),
-                                        );
+                                        )
+                                        .await;
                                         match sst.get(block_offset, &key).await {
                                             Ok(None) => continue,
                                             Ok(result) => {
@@ -315,7 +316,7 @@ impl<'a> StorageEngine<'a, Key> {
                                                 }
                                             }
                                             Err(err) => println!("============================== {} Key {} ==============================================", err, String::from_utf8_lossy(&key)),
-                                        } 
+                                        }
                                     }
                                 }
                                 Err(err) => error!("{}", err),

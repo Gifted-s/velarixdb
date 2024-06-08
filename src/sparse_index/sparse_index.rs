@@ -2,6 +2,7 @@ use crate::consts::{EOF, SIZE_OF_U32};
 use crate::err::StorageEngineError;
 use crate::types::Key;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::{
     fs::OpenOptions,
     io::{self, AsyncReadExt, AsyncWriteExt},
@@ -17,6 +18,7 @@ struct SparseIndexEntry {
 pub struct SparseIndex {
     entries: Vec<SparseIndexEntry>,
     file_path: PathBuf,
+    file: Arc<tokio::sync::RwLock<tokio::fs::File> >
 }
 
 pub struct RangeOffset {
@@ -35,9 +37,19 @@ impl RangeOffset {
 
 impl SparseIndex {
     pub async fn new(file_path: PathBuf) -> Self {
+        let file = Arc::new(tokio::sync::RwLock::new(
+            OpenOptions::new()
+                .read(true)
+                .append(true)
+                .create(false)
+                .open(file_path.clone())
+                .await
+                .expect("error opening file"),
+        ));
         Self {
             file_path,
             entries: Vec::new(),
+            file
         }
     }
 
@@ -50,15 +62,7 @@ impl SparseIndex {
     }
 
     pub async fn write_to_file(&self) -> Result<(), StorageEngineError> {
-        let file_path = PathBuf::from(&self.file_path);
-        let mut file = OpenOptions::new()
-            .append(true)
-            .open(file_path.clone())
-            .await
-            .map_err(|err| SSTableFileOpenError {
-                path: file_path.clone(),
-                error: err,
-            })?;
+        let mut file = self.file.write().await;
         for entry in &self.entries {
             let entry_len = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U32;
 
@@ -86,16 +90,7 @@ impl SparseIndex {
     pub(crate) async fn get(&self, searched_key: &[u8]) -> Result<Option<u32>, StorageEngineError> {
         let mut block_offset = -1;
         // Open the file in read mode
-        let file_path = PathBuf::from(&self.file_path);
-        let mut file = OpenOptions::new()
-            .read(true)
-            .open(file_path.clone())
-            .await
-            .map_err(|err| SSTableFileOpenError {
-                path: file_path.clone(),
-                error: err,
-            })?;
-
+        let mut file = self.file.write().await;
         // read bloom filter to check if the key possbly exists in the sstable
         // search sstable for key
         loop {
@@ -104,7 +99,7 @@ impl SparseIndex {
                 file.read(&mut key_len_bytes)
                     .await
                     .map_err(|err| SSTableFileReadError {
-                        path: file_path.clone(),
+                        path: self.file_path.clone(),
                         error: err,
                     })?;
             // If the end of the file is reached and no match is found, return non
@@ -131,7 +126,7 @@ impl SparseIndex {
                 file.read(&mut key_offset_bytes)
                     .await
                     .map_err(|err| SSTableFileReadError {
-                        path: file_path.clone(),
+                        path: self.file_path.clone(),
                         error: err,
                     })?;
             if bytes_read == 0 {
@@ -166,15 +161,7 @@ impl SparseIndex {
         let mut range_offset = RangeOffset::new(0, 0);
         // Open the file in read mode
         let file_path = PathBuf::from(&self.file_path);
-        let mut file = OpenOptions::new()
-            .read(true)
-            .open(file_path.clone())
-            .await
-            .map_err(|err| SSTableFileOpenError {
-                path: file_path.clone(),
-                error: err,
-            })?;
-
+        let mut file = self.file.write().await;
         // read bloom filter to check if the key possbly exists in the sstable
         // search sstable for key
         loop {

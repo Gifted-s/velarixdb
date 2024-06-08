@@ -5,8 +5,8 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-use tokio::{fs, io::AsyncReadExt, sync::RwLock};
 use tokio::io;
+use tokio::{fs, io::AsyncReadExt, sync::RwLock};
 use tokio::{fs::OpenOptions, io::AsyncSeekExt};
 
 use crate::{
@@ -33,7 +33,7 @@ pub struct SSTable {
     pub created_at: CreationTime,
     pub size: usize,
     pub data_file: Option<Arc<tokio::sync::RwLock<tokio::fs::File>>>,
-    pub index_file: Option<Arc<tokio::sync::Mutex<tokio::fs::File>>>,
+    pub index_file: Option<Arc<tokio::sync::RwLock<tokio::fs::File>>>,
 }
 
 impl InsertableToBucket for SSTable {
@@ -189,18 +189,10 @@ impl SSTable {
 
     pub(crate) async fn write_to_file(&self) -> Result<(), StorageEngineError> {
         // Open the file in write mode with the append flag.
-        let data_file_path = &self.data_file_path;
         let index_file_path = &self.index_file_path;
-
-        let mut file = OpenOptions::new()
-            .append(true)
-            .open(data_file_path.clone())
-            .await
-            .map_err(|err| SSTableFileOpenError {
-                path: data_file_path.clone(),
-                error: err,
-            })?;
-
+        let data_file = self.data_file.clone().unwrap();
+        let mut file = data_file.write().await;
+      
         let mut blocks: Vec<Block> = Vec::new();
         let mut sparse_index = sparse_index::SparseIndex::new(index_file_path.clone()).await;
         let mut current_block = Block::new();
@@ -243,7 +235,7 @@ impl SSTable {
 
     async fn write_block(
         &self,
-        file: &mut File,
+        file: &mut tokio::fs::File,
         block: &Block,
         sparse_index: &mut SparseIndex,
     ) -> Result<(), StorageEngineError> {
@@ -266,15 +258,8 @@ impl SSTable {
         searched_key: &[u8],
     ) -> Result<Option<(ValOffset, CreationTime, IsTombStone)>, StorageEngineError> {
         // Open the file in read mode
-        let file_path = PathBuf::from(&self.data_file_path);
-        let mut file = OpenOptions::new()
-            .read(true)
-            .open(file_path.clone())
-            .await
-            .map_err(|err| SSTableFileOpenError {
-                path: file_path.clone(),
-                error: err,
-            })?;
+        let data_file =  self.data_file.clone().unwrap();
+       let mut file = data_file.write().await;
 
         file.seek(tokio::io::SeekFrom::Start(start_offset.into()))
             .await
@@ -287,7 +272,7 @@ impl SSTable {
                 file.read(&mut key_len_bytes)
                     .await
                     .map_err(|err| SSTableFileReadError {
-                        path: file_path.clone(),
+                        path: self.data_file_path.clone(),
                         error: err,
                     })?;
             if bytes_read == 0 {
@@ -299,7 +284,7 @@ impl SSTable {
                 .read(&mut key)
                 .await
                 .map_err(|err| SSTableFileReadError {
-                    path: file_path.clone(),
+                    path: self.data_file_path.clone(),
                     error: err,
                 })?;
             if bytes_read == 0 {
@@ -313,7 +298,7 @@ impl SSTable {
                 file.read(&mut val_offset_bytes)
                     .await
                     .map_err(|err| SSTableFileReadError {
-                        path: file_path.clone(),
+                        path: self.data_file_path.clone(),
                         error: err,
                     })?;
             if bytes_read == 0 {
@@ -327,7 +312,7 @@ impl SSTable {
                 file.read(&mut created_at_bytes)
                     .await
                     .map_err(|err| SSTableFileReadError {
-                        path: file_path.clone(),
+                        path: self.data_file_path.clone(),
                         error: err,
                     })?;
             if bytes_read == 0 {
@@ -342,7 +327,7 @@ impl SSTable {
                 file.read(&mut is_tombstone_byte)
                     .await
                     .map_err(|err| SSTableFileReadError {
-                        path: file_path.clone(),
+                        path: self.data_file_path.clone(),
                         error: err,
                     })?;
             if bytes_read == 0 {
@@ -367,15 +352,8 @@ impl SSTable {
     ) -> Result<Vec<Entry<Vec<u8>, usize>>, StorageEngineError> {
         let mut entries = Vec::new();
         // Open the file in read mode
-        let file_path = PathBuf::from(&self.data_file_path);
-        let mut file = OpenOptions::new()
-            .read(true)
-            .open(file_path.clone())
-            .await
-            .map_err(|err| SSTableFileOpenError {
-                path: file_path.clone(),
-                error: err,
-            })?;
+        let data_file =  self.data_file.clone().unwrap();
+       let mut file = data_file.write().await;
         let mut total_bytes_read = range_offset.start_offset as usize;
         file.seek(tokio::io::SeekFrom::Start(range_offset.start_offset.into()))
             .await
@@ -388,7 +366,7 @@ impl SSTable {
                 file.read(&mut key_len_bytes)
                     .await
                     .map_err(|err| SSTableFileReadError {
-                        path: file_path.clone(),
+                        path: self.data_file_path.clone(),
                         error: err,
                     })?;
             if bytes_read == 0 {
@@ -401,7 +379,7 @@ impl SSTable {
                 .read(&mut key)
                 .await
                 .map_err(|err| SSTableFileReadError {
-                    path: file_path.clone(),
+                    path: self.data_file_path.clone(),
                     error: err,
                 })?;
             if bytes_read == 0 {
@@ -416,7 +394,7 @@ impl SSTable {
                 file.read(&mut val_offset_bytes)
                     .await
                     .map_err(|err| SSTableFileReadError {
-                        path: file_path.clone(),
+                        path: self.data_file_path.clone(),
                         error: err,
                     })?;
             if bytes_read == 0 {
@@ -431,7 +409,7 @@ impl SSTable {
                 file.read(&mut created_at_bytes)
                     .await
                     .map_err(|err| SSTableFileReadError {
-                        path: file_path.clone(),
+                        path: self.data_file_path.clone(),
                         error: err,
                     })?;
             if bytes_read == 0 {
@@ -447,7 +425,7 @@ impl SSTable {
                 file.read(&mut is_tombstone_byte)
                     .await
                     .map_err(|err| SSTableFileReadError {
-                        path: file_path.clone(),
+                        path: self.data_file_path.clone(),
                         error: err,
                     })?;
             if bytes_read == 0 {
@@ -563,7 +541,7 @@ impl SSTable {
                 })?,
         )));
         let data_file_clone = data_file.clone().unwrap();
-        let mut data_file_lock = data_file_clone.read().await;
+        let mut data_file_lock = data_file_clone.write().await;
 
         loop {
             let mut key_len_bytes = [0; SIZE_OF_U32];
