@@ -152,9 +152,7 @@ impl GarbageCollector {
 
         // call fsync on vLog
         let engine_r_lock = engine.read().await;
-        let v_log = tokio::fs::File::open(engine_r_lock.val_log.file_path.to_owned())
-            .await
-            .map_err(|err| StorageEngineError::ValueLogFileReadError { error: err })?;
+        let v_log = engine_r_lock.val_log.file.write().await;
         v_log
             .sync_all()
             .await

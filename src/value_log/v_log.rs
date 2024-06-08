@@ -18,7 +18,7 @@ type TotalBytesRead = usize;
 #[derive(Debug, Clone)]
 pub struct ValueLog {
     pub file_path: PathBuf,
-    pub file: Arc<RwLock<File>>,
+    pub file: Arc<tokio::sync::Mutex<tokio::fs::File>>,
     pub head_offset: usize,
     pub tail_offset: usize,
 }
