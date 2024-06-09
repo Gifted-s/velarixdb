@@ -10,7 +10,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
 };
 use tokio::{
-    fs::{File, OpenOptions},
+    fs::OpenOptions,
     sync::RwLock,
 };
 use StorageEngineError::*;

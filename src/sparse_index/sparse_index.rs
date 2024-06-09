@@ -18,7 +18,7 @@ struct SparseIndexEntry {
 pub struct SparseIndex {
     entries: Vec<SparseIndexEntry>,
     file_path: PathBuf,
-    file: Arc<tokio::sync::RwLock<tokio::fs::File> >
+    file: Arc<tokio::sync::RwLock<tokio::fs::File>>,
 }
 
 pub struct RangeOffset {
@@ -36,20 +36,11 @@ impl RangeOffset {
 }
 
 impl SparseIndex {
-    pub async fn new(file_path: PathBuf) -> Self {
-        let file = Arc::new(tokio::sync::RwLock::new(
-            OpenOptions::new()
-                .read(true)
-                .append(true)
-                .create(false)
-                .open(file_path.clone())
-                .await
-                .expect("error opening file"),
-        ));
+    pub async fn new(file_path: PathBuf, file: Arc<tokio::sync::RwLock<tokio::fs::File>>) -> Self {
         Self {
             file_path,
             entries: Vec::new(),
-            file
+            file,
         }
     }
 
@@ -84,6 +75,7 @@ impl SparseIndex {
 
             file.flush().await.map_err(|err| IndexFileFlushError(err))?;
         }
+
         Ok(())
     }
 

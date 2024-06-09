@@ -1,3 +1,3 @@
 mod sst;
 pub(crate) use sst::SSTable;
-pub(crate) use sst::SSTablePath;
+pub(crate) use sst::SSTFile;

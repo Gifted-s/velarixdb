@@ -4,7 +4,7 @@ pub const GC_THREAD_COUNT: u32 = 5;
 
 pub const GC_CHUNK_SIZE: usize = SizeUnit::Kilobytes.to_bytes(1);
 
-pub const WRITE_BUFFER_SIZE: usize = SizeUnit::Kilobytes.to_bytes(10);
+pub const WRITE_BUFFER_SIZE: usize = SizeUnit::Kilobytes.to_bytes(50);
 
 pub const DEFAULT_MAX_WRITE_BUFFER_NUMBER: usize = 2;
 
@@ -12,7 +12,7 @@ pub const DEFAULT_TARGET_FILE_SIZE_MULTIPLIER: i32 = 1;
 
 pub const DEFAULT_TARGET_FILE_SIZE_BASE: usize = SizeUnit::Kilobytes.to_bytes(64);
 
-pub const DEFAULT_FALSE_POSITIVE_RATE: f64 = 1e-200;
+pub const DEFAULT_FALSE_POSITIVE_RATE: f64 = 1e-300;
 
 pub const VALUE_LOG_DIRECTORY_NAME: &str = "v_log";
 
@@ -35,7 +35,7 @@ pub const DEFAULT_COMPACTION_INTERVAL_MILLI: u64 = 3600000;
 
 // 1 Min
 //pub const DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI: u64 = 60000;
-pub const DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI: u64 = 1000 * 10;
+pub const DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI: u64 = 1000 * 20;
 
 pub const DEFAULT_FLUSH_DATA_CHANNEL_SIZE: usize = 10;
 

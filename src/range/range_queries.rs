@@ -273,23 +273,23 @@ impl<'a> StorageEngine<'a, Key> {
             sstable_path
         };
 
-        for (_, sst) in sstables_within_range {
-            let sparse_index = SparseIndex::new(sst.index_file_path.clone()).await;
-            match sparse_index.get_block_offset_range(&start, &end).await {
-                Ok(range_offset) => {
-                    let sst = SSTable::new_with_exisiting_file_path(
-                        sst.dir.to_owned(),
-                        sst.data_file_path.to_owned(),
-                        sst.index_file_path.to_owned(),
-                    ).await;
-                    match sst.range(range_offset).await {
-                        Ok(sstable_entries) => merger.merge_entries(sstable_entries),
-                        Err(err) => return Err(err),
-                    }
-                }
-                Err(err) => return Err(StorageEngineError::RangeScanError(Box::new(err))),
-            }
-        }
+        // for (_, sst) in sstables_within_range {
+        //     let sparse_index = SparseIndex::new(sst.index_file_path.clone(), sst).await;
+        //     match sparse_index.get_block_offset_range(&start, &end).await {
+        //         Ok(range_offset) => {
+        //             let sst = SSTable::new_with_exisiting_file_path(
+        //                 sst.dir.to_owned(),
+        //                 sst.data_file_path.to_owned(),
+        //                 sst.index_file_path.to_owned(),
+        //             ).await;
+        //             match sst.range(range_offset).await {
+        //                 Ok(sstable_entries) => merger.merge_entries(sstable_entries),
+        //                 Err(err) => return Err(err),
+        //             }
+        //         }
+        //         Err(err) => return Err(StorageEngineError::RangeScanError(Box::new(err))),
+        //     }
+        // }
 
         let range_iterator = RangeIterator::<'a>::new(
             start,

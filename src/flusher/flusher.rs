@@ -148,18 +148,21 @@ impl Flusher {
             match flusher.flush(table_to_flush).await {
                 Ok(_) => {
                     read_only_memtable_ref.write().await.shift_remove(&table_id);
-                    //let flush_signal_sender_clone2 = flush_signal_sender_clone.clone();
-
-                    // let broadcase_res = flush_signal_sender_clone2.try_broadcast(FLUSH_SIGNAL);
-                    // match broadcase_res {
-                    //     Ok(_) => {}
-                    //     Err(err) => match err {
-                    //         async_broadcast::TrySendError::Full(_) => {
-                    //             log::error!("{}", StorageEngineError::FlushSignalOverflowError)
-                    //         }
-                    //         _ => log::error!("{}", err),
-                    //     },
-                    // }
+                    let flush_signal_sender_clone2 = flush_signal_sender_clone.clone();
+                    println!("Notgification sent=============================================================1");
+                    tokio::spawn( async move {
+                        let broadcase_res = flush_signal_sender_clone2.try_broadcast(FLUSH_SIGNAL);
+                        match broadcase_res {
+                            Ok(_) => {println!("Notgification sent=============================================================2")}
+                            Err(err) => match err {
+                                async_broadcast::TrySendError::Full(_) => {
+                                    log::error!("{}", StorageEngineError::FlushSignalOverflowError)
+                                }
+                                _ => log::error!("{}", err),
+                            },
+                        }
+                    });
+                    
                 }
                 // Handle failure case here
                 Err(err) => {

@@ -48,6 +48,8 @@
 //! The index hashmap (`index`) maintains references to the keys and their corresponding offsets within the data vector.
 //!
 
+use std::sync::Arc;
+
 use tokio::{
     fs::File,
     io::{self, AsyncWriteExt},
@@ -127,7 +129,10 @@ impl Block {
         Ok(())
     }
 
-    pub async fn write_to_file(&self, file: &mut File) -> Result<(), StorageEngineError> {
+    pub async fn write_to_file(
+        &self,
+        file: Arc<tokio::sync::RwLock<tokio::fs::File>>,
+    ) -> Result<(), StorageEngineError> {
         for entry in &self.data {
             let entry_len = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
             let mut entry_vec = Vec::with_capacity(entry_len);
@@ -151,7 +156,9 @@ impl Block {
                     error: io::Error::new(io::ErrorKind::InvalidInput, "Invalid Input"),
                 });
             }
-            file.write_all(&entry_vec)
+            let mut file_lock = file.write().await;
+            file_lock
+                .write_all(&entry_vec)
                 .await
                 .map_err(|err| SSTableWriteError { error: err })?;
         }

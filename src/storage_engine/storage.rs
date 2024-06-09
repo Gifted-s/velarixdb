@@ -16,7 +16,7 @@ use crate::memtable::{Entry, InMemoryTable};
 use crate::meta::Meta;
 use crate::range::RangeIterator;
 use crate::sparse_index::SparseIndex;
-use crate::sstable::{SSTable, SSTablePath};
+use crate::sstable::{SSTFile, SSTable};
 use crate::types::{self, FlushSignal, Key, ValOffset};
 use crate::value_log::ValueLog;
 use async_broadcast::broadcast;
@@ -286,20 +286,18 @@ impl<'a> StorageEngine<'a, Key> {
                 match sstable_paths {
                     Some(sstables_within_key_range) => {
                         for sstable in sstables_within_key_range.iter() {
-                            let sparse_index =
-                                SparseIndex::new(sstable.index_file_path.clone()).await;
-
-                            match sparse_index.get(&key).await {
+                            let sparse_index = SparseIndex::new(
+                                sstable.index_file_path.clone(),
+                                sstable.index_file.clone(),
+                            )
+                            .await;
+                            let block_offset_res = sparse_index.get(&key).await;
+                            match block_offset_res {
                                 Ok(None) => continue,
                                 Ok(result) => {
                                     if let Some(block_offset) = result {
-                                        let sst = SSTable::new_with_exisiting_file_path(
-                                            sstable.dir.to_owned(),
-                                            sstable.data_file_path.to_owned(),
-                                            sstable.index_file_path.to_owned(),
-                                        )
-                                        .await;
-                                        match sst.get(block_offset, &key).await {
+                                        let sst_res = sstable.get(block_offset, &key).await;
+                                        match sst_res {
                                             Ok(None) => continue,
                                             Ok(result) => {
                                                 if let Some((
@@ -614,11 +612,37 @@ impl<'a> StorageEngine<'a, Key> {
             }
             let data_file_path = sst_files[1].to_owned();
             let index_file_path = sst_files[0].to_owned();
-            let sst_path = SSTablePath::new(
-                sstable_path.as_path().to_owned(),
-                data_file_path.clone(),
-                index_file_path.clone(),
-            );
+
+            let data_file = Arc::new(RwLock::new(
+                OpenOptions::new()
+                    .read(true)
+                    .append(true)
+                    .create(false)
+                    .open(data_file_path.clone())
+                    .await
+                    .expect("error opening file"),
+            ));
+            let index_file = Arc::new(RwLock::new(
+                OpenOptions::new()
+                    .read(true)
+                    .append(true)
+                    .create(false)
+                    .open(index_file_path.clone())
+                    .await
+                    .expect("error opening file"),
+            ));
+            // TODO: extract from file path
+            let created_at = Utc::now();
+
+            let sst_file = SSTFile {
+                dir: sstable_path.as_path().to_owned(),
+                data_file_path,
+                index_file_path,
+                hotness: 1,
+                created_at: created_at.timestamp_millis() as u64,
+                data_file,
+                index_file,
+            };
 
             let bucket_uuid =
                 uuid::Uuid::parse_str(&bucket_id).map_err(|err| InvaidUUIDParseString {
@@ -628,7 +652,7 @@ impl<'a> StorageEngine<'a, Key> {
             // If bucket already exist in recovered bucket then just append sstable to its sstables vector
             if let Some(b) = recovered_buckets.get(&bucket_uuid) {
                 let mut temp_sstables = b.sstables.clone();
-                temp_sstables.push(sst_path.clone());
+                temp_sstables.push(sst_file.clone());
                 let updated_bucket = Bucket::new_with_id_dir_average_and_sstables(
                     buckets_dir.path(),
                     bucket_uuid,
@@ -642,19 +666,14 @@ impl<'a> StorageEngine<'a, Key> {
                 let updated_bucket = Bucket::new_with_id_dir_average_and_sstables(
                     buckets_dir.path(),
                     bucket_uuid,
-                    vec![sst_path.clone()],
+                    vec![sst_file.clone()],
                     0,
                 )
                 .await?;
                 recovered_buckets.insert(bucket_uuid, updated_bucket);
             }
 
-            let sstable_from_file = SSTable::from_file(
-                sstable_path.as_path().to_owned(),
-                data_file_path,
-                index_file_path,
-            )
-            .await?;
+            let sstable_from_file = SSTable::from_file(sst_file.clone()).await?;
             let sstable = sstable_from_file.unwrap();
             // Fetch the most recent write offset so it can
             // use it to recover entries not written into sstables from value log
@@ -679,7 +698,7 @@ impl<'a> StorageEngine<'a, Key> {
             }
 
             let mut bf = SSTable::build_bloomfilter_from_sstable(&sstable.entries);
-            bf.set_sstable_path(sst_path.clone());
+            bf.set_sstable_path(sst_file.clone());
             // update bloom filters
             bloom_filters.push(bf)
 
@@ -1012,18 +1031,18 @@ mod tests {
                 }
             }
         }
-        // loop {
-        //     let sg_locked = sg.read().await;
-        //     if !sg_locked.buckets.read().await.is_balanced() {
-        //         println!("Compaction is still running");
-        //         sleep(Duration::from_millis(
-        //             DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI,
-        //         ))
-        //         .await;
-        //     } else {
-        //         break;
-        //     }
-        // }
+        loop {
+            let sg_locked = sg.read().await;
+            if !sg_locked.buckets.read().await.is_balanced() {
+                println!("Compaction is still running");
+                sleep(Duration::from_millis(
+                    DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI,
+                ))
+                .await;
+            } else {
+                break;
+            }
+        }
 
         println!("Compaction completed !");
         //random_strings.sort();
@@ -1036,20 +1055,16 @@ mod tests {
                 let key = k.clone();
                 tokio::spawn(async move {
                     let value = s_engine.read().await;
-                    let res = value.get(&key).await;
-                    match res {
-                        Ok(_) => return Ok(key),
-                        Err(err) => return Err(io::Error::new(io::ErrorKind::NotFound, key)),
-                    }
+                    let nn = value.get(&key).await;
+                    return nn;
                 })
             });
-
         let all_results = join_all(tasks).await;
         for tokio_response in all_results {
             match tokio_response {
                 Ok(entry) => match entry {
                     Ok(v) => {
-                        println!("Found  {}", v)
+                        println!("Found  {}", String::from_utf8_lossy(&v.0))
                         //assert_eq!(v.0, b"boy");
                     }
                     Err(err) => assert!(false, "Error: {}", err.to_string()),
