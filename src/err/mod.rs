@@ -13,13 +13,13 @@ pub enum StorageEngineError {
         error: io::Error,
     },
 
-        /// There while opening v_log file
-        #[error("Failed to open v_lof file")]
-        VlogFileOpenError {
-            path: PathBuf,
-            #[source]
-            error: io::Error,
-        },
+    /// There while opening v_log file
+    #[error("Failed to open v_lof file")]
+    VlogFileOpenError {
+        path: PathBuf,
+        #[source]
+        error: io::Error,
+    },
 
     /// There was an error while atttempting to read from sstbale file
     #[error("Failed to read sstsable file `{path}`: {error}")]

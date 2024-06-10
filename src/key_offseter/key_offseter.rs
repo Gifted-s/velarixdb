@@ -18,11 +18,7 @@ pub struct Range {
     pub full_sst_path: SSTFile,
 }
 impl Range {
-    pub fn new(
-        smallest_key: SmallestKey,
-        biggest_key: LargestKey,
-        full_sst_path: SSTFile,
-    ) -> Self {
+    pub fn new(smallest_key: SmallestKey, biggest_key: LargestKey, full_sst_path: SSTFile) -> Self {
         Self {
             smallest_key,
             biggest_key,

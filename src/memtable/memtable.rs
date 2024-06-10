@@ -117,11 +117,6 @@ impl InMemoryTable<Key> {
 
     pub fn insert(&mut self, entry: &Entry<Key, ValOffset>) -> Result<(), StorageEngineError> {
         let entry_length_byte = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
-        println!(
-            "Number of writes {} Key {}",
-            self.entries.len(),
-            String::from_utf8_lossy(&entry.key)
-        );
         if !self.bloom_filter.contains(&entry.key) {
             self.bloom_filter.set(&entry.key.clone());
             self.entries.insert(
@@ -129,27 +124,12 @@ impl InMemoryTable<Key> {
                 (entry.val_offset, entry.created_at, entry.is_tombstone),
             );
             self.size += entry_length_byte;
-            let bf = self.bloom_filter.contains(&entry.key);
-            let bbc = self.entries.get(&entry.key).unwrap();
-            println!(
-                "Found after fetch BF {} Entries {:?}",
-                bf,
-                String::from_utf8_lossy(&entry.key)
-            );
             return Ok(());
         }
 
-     
         self.entries.insert(
             entry.key.to_owned(),
             (entry.val_offset, entry.created_at, entry.is_tombstone),
-        );
-        let bf = self.bloom_filter.contains(&entry.key);
-        let bbc = self.entries.get(&entry.key).unwrap();
-        println!(
-            "Found after fetch BF {} Entries {:?}",
-            bf,
-            String::from_utf8_lossy(&entry.key)
         );
         self.size += entry_length_byte;
         Ok(())

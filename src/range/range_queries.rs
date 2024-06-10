@@ -11,18 +11,18 @@ use crate::sstable::SSTable;
 use crate::storage_engine::StorageEngine;
 use crate::types::{Key, ValOffset, Value};
 use crate::value_log::ValueLog;
-use futures::future::join_all;
 use async_trait::async_trait;
+use futures::future::join_all;
 use futures::stream::StreamExt;
 use log::error;
-use tokio::fs::{File, OpenOptions};
-use tokio::sync::RwLock;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{cmp::Ordering, collections::HashMap};
+use tokio::fs::{File, OpenOptions};
+use tokio::sync::RwLock;
 #[derive(Debug, Clone)]
 pub struct FetchedEntry {
     pub key: Key,
@@ -171,8 +171,6 @@ impl<'a> RangeIterator<'a> {
         Ok(prefetched_entries)
     }
 }
-
-
 
 impl<'a> StorageEngine<'a, Key> {
     // Start if the range query

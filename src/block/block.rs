@@ -162,7 +162,6 @@ impl Block {
                 .await
                 .map_err(|err| SSTableWriteError { error: err })?;
         }
-
         Ok(())
     }
 

@@ -74,26 +74,23 @@ impl Flusher {
         table: Arc<RwLock<InMemoryTable<K>>>,
     ) -> Result<(), StorageEngineError> {
         let flush_data = self;
-        if table.read().await.entries.is_empty() {
+        let table_lock = table.read().await;
+        if table_lock.entries.is_empty() {
             println!("Cannot flush an empty table");
             return Err(StorageEngineError::FailedToInsertToBucket(
                 "Cannot flush an empty table".to_string(),
             ));
         }
 
-        let table_bloom_filter = &mut table.read().await.bloom_filter.to_owned();
-        let table_biggest_key = table.read().await.find_biggest_key()?;
-        let table_smallest_key = table.read().await.find_smallest_key()?;
+        let table_bloom_filter = &mut table_lock.bloom_filter.to_owned();
+        let table_biggest_key = table_lock.find_biggest_key()?;
+        let table_smallest_key = table_lock.find_smallest_key()?;
         let hotness = 1;
-        let sstable_path = flush_data
-            .bucket_map
-            .write()
-            .await
-            .insert_to_appropriate_bucket(&table.read().await.to_owned(), hotness)
+        let mut bucket_lock = flush_data.bucket_map.write().await;
+        let sstable_path = bucket_lock
+            .insert_to_appropriate_bucket(table.clone(), hotness)
             .await?;
-
         let data_file_path = sstable_path.get_data_file_path().clone();
-
         flush_data.key_range.write().await.set(
             data_file_path,
             table_smallest_key,
@@ -131,7 +128,7 @@ impl Flusher {
         let read_only_memtable_ref = self.read_only_memtable.clone();
         let use_ttl = self.use_ttl;
         let entry_ttl = self.entry_ttl;
-        spawn(async move {
+        tokio::spawn(async move {
             let mut flusher = Flusher::new(
                 read_only_memtable_ref.clone(),
                 buckets_ref,
@@ -140,29 +137,21 @@ impl Flusher {
                 use_ttl,
                 entry_ttl,
             );
-            let ttt = table_to_flush.clone();
-            println!(
-                "Number of entries before flush {}",
-                ttt.read().await.clone().get_index().len()
-            );
+
             match flusher.flush(table_to_flush).await {
                 Ok(_) => {
-                    read_only_memtable_ref.write().await.shift_remove(&table_id);
-                    let flush_signal_sender_clone2 = flush_signal_sender_clone.clone();
-                    println!("Notgification sent=============================================================1");
-                    tokio::spawn( async move {
-                        let broadcase_res = flush_signal_sender_clone2.try_broadcast(FLUSH_SIGNAL);
-                        match broadcase_res {
-                            Ok(_) => {println!("Notgification sent=============================================================2")}
-                            Err(err) => match err {
-                                async_broadcast::TrySendError::Full(_) => {
-                                    log::error!("{}", StorageEngineError::FlushSignalOverflowError)
-                                }
-                                _ => log::error!("{}", err),
-                            },
-                        }
-                    });
-                    
+                    let mut memtable_ref_lock = read_only_memtable_ref.write().await;
+                    memtable_ref_lock.shift_remove(&table_id);
+                    let broadcase_res = flush_signal_sender_clone.try_broadcast(FLUSH_SIGNAL);
+                    match broadcase_res {
+                        Err(err) => match err {
+                            async_broadcast::TrySendError::Full(_) => {
+                                log::error!("{}", StorageEngineError::FlushSignalOverflowError)
+                            }
+                            _ => log::error!("{}", err),
+                        },
+                        _ => {}
+                    }
                 }
                 // Handle failure case here
                 Err(err) => {
