@@ -1,9 +1,11 @@
 use crate::bucket_coordinator::BucketMap;
-use crate::types;
+use crate::consts::FLUSH_SIGNAL;
+use crate::types::{self, FlushSignal};
 use crate::{
-    bloom_filter::BloomFilter, cfg::Config, err::StorageEngineError,
-    key_offseter::KeyRange, memtable::InMemoryTable,
+    bloom_filter::BloomFilter, cfg::Config, err::StorageEngineError, key_offseter::KeyRange,
+    memtable::InMemoryTable,
 };
+use futures::lock::Mutex;
 use indexmap::IndexMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -41,8 +43,6 @@ pub enum FlushResponse {
 #[derive(Debug, Clone)]
 pub struct Flusher {
     pub(crate) read_only_memtable: Arc<RwLock<IndexMap<K, Arc<RwLock<InMemoryTable<K>>>>>>,
-    pub(crate) table_to_flush: Arc<RwLock<InMemoryTable<K>>>,
-    pub(crate) table_id: Vec<u8>,
     pub(crate) bucket_map: Arc<RwLock<BucketMap>>,
     pub(crate) bloom_filters: Arc<RwLock<Vec<BloomFilter>>>,
     pub(crate) key_range: Arc<RwLock<KeyRange>>,
@@ -53,8 +53,6 @@ pub struct Flusher {
 impl Flusher {
     pub fn new(
         read_only_memtable: Arc<RwLock<IndexMap<K, Arc<RwLock<InMemoryTable<K>>>>>>,
-        table_to_flush: Arc<RwLock<InMemoryTable<K>>>,
-        table_id: Vec<u8>,
         bucket_map: Arc<RwLock<BucketMap>>,
         bloom_filters: Arc<RwLock<Vec<BloomFilter>>>,
         key_range: Arc<RwLock<KeyRange>>,
@@ -63,8 +61,6 @@ impl Flusher {
     ) -> Self {
         Self {
             read_only_memtable,
-            table_to_flush,
-            table_id,
             bucket_map,
             bloom_filters,
             key_range,
@@ -73,30 +69,28 @@ impl Flusher {
         }
     }
 
-    pub async fn flush(&mut self) -> Result<(), StorageEngineError> {
+    pub async fn flush(
+        &mut self,
+        table: Arc<RwLock<InMemoryTable<K>>>,
+    ) -> Result<(), StorageEngineError> {
         let flush_data = self;
-        let table = Arc::clone(&flush_data.table_to_flush);
-        // let table_id = &flush_data.table_id;
-        if table.read().await.entries.is_empty() {
+        let table_lock = table.read().await;
+        if table_lock.entries.is_empty() {
             println!("Cannot flush an empty table");
             return Err(StorageEngineError::FailedToInsertToBucket(
                 "Cannot flush an empty table".to_string(),
             ));
         }
 
-        let table_bloom_filter = &mut table.read().await.bloom_filter.to_owned();
-        let table_biggest_key = table.read().await.find_biggest_key()?;
-        let table_smallest_key = table.read().await.find_smallest_key()?;
+        let table_bloom_filter = &mut table_lock.bloom_filter.to_owned();
+        let table_biggest_key = table_lock.find_biggest_key()?;
+        let table_smallest_key = table_lock.find_smallest_key()?;
         let hotness = 1;
-        let sstable_path = flush_data
-            .bucket_map
-            .write()
-            .await
-            .insert_to_appropriate_bucket(&table.read().await.to_owned(), hotness)
+        let mut bucket_lock = flush_data.bucket_map.write().await;
+        let sstable_path = bucket_lock
+            .insert_to_appropriate_bucket(table.clone(), hotness)
             .await?;
-
         let data_file_path = sstable_path.get_data_file_path().clone();
-
         flush_data.key_range.write().await.set(
             data_file_path,
             table_smallest_key,
@@ -121,45 +115,47 @@ impl Flusher {
         Ok(())
     }
 
-    pub fn flush_data_collector(
-        &self,
-        rcx: Arc<RwLock<Receiver<FlushDataMemTable>>>,
-        buckets: Arc<RwLock<BucketMap>>,
-        bloom_filters: Arc<RwLock<Vec<BloomFilter>>>,
-        key_range: Arc<RwLock<KeyRange>>,
-        read_only_memtable: Arc<RwLock<IndexMap<K, Arc<RwLock<InMemoryTable<K>>>>>>,
-        config: Config,
+    pub fn flush_handler(
+        &mut self,
+        table_id: Vec<u8>,
+        table_to_flush: Arc<RwLock<InMemoryTable<K>>>,
+        flush_signal_sender: async_broadcast::Sender<FlushSignal>,
     ) {
-        let rcx_clone = Arc::clone(&rcx);
+        let flush_signal_sender_clone = flush_signal_sender.clone();
+        let buckets_ref = self.bucket_map.clone();
+        let bloomfilter_ref = self.bloom_filters.clone();
+        let key_range_ref = self.key_range.clone();
+        let read_only_memtable_ref = self.read_only_memtable.clone();
+        let use_ttl = self.use_ttl;
+        let entry_ttl = self.entry_ttl;
+        tokio::spawn(async move {
+            let mut flusher = Flusher::new(
+                read_only_memtable_ref.clone(),
+                buckets_ref,
+                bloomfilter_ref,
+                key_range_ref,
+                use_ttl,
+                entry_ttl,
+            );
 
-        spawn(async move {
-            let current_buckets = &buckets;
-            let current_bloom_filters = &bloom_filters;
-            let current_key_range = &key_range;
-            let current_read_only_memtables = &read_only_memtable;
-            while let Some((table_id, table_to_flush)) = rcx_clone.write().await.recv().await {
-                let mut flusher = Flusher::new(
-                    Arc::clone(&read_only_memtable),
-                    table_to_flush,
-                    table_id.to_owned(),
-                    Arc::clone(&current_buckets),
-                    Arc::clone(&current_bloom_filters),
-                    Arc::clone(&current_key_range),
-                    config.enable_ttl,
-                    config.entry_ttl_millis,
-                );
-
-                match flusher.flush().await {
-                    Ok(_) => {
-                        current_read_only_memtables
-                            .write()
-                            .await
-                            .shift_remove(&table_id);
+            match flusher.flush(table_to_flush).await {
+                Ok(_) => {
+                    let mut memtable_ref_lock = read_only_memtable_ref.write().await;
+                    memtable_ref_lock.shift_remove(&table_id);
+                    let broadcase_res = flush_signal_sender_clone.try_broadcast(FLUSH_SIGNAL);
+                    match broadcase_res {
+                        Err(err) => match err {
+                            async_broadcast::TrySendError::Full(_) => {
+                                log::error!("{}", StorageEngineError::FlushSignalOverflowError)
+                            }
+                            _ => log::error!("{}", err),
+                        },
+                        _ => {}
                     }
-                    // Handle failure case here
-                    Err(err) => {
-                        println!("Flush error: {}", err);
-                    }
+                }
+                // Handle failure case here
+                Err(err) => {
+                    println!("Flush error: {}", err);
                 }
             }
         });

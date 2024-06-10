@@ -6,8 +6,16 @@ use tokio::task::JoinError;
 #[non_exhaustive]
 pub enum StorageEngineError {
     /// There was an error while writing to sstbale file
-    #[error("Failed to open file")]
+    #[error("Failed to open sstable file")]
     SSTableFileOpenError {
+        path: PathBuf,
+        #[source]
+        error: io::Error,
+    },
+
+    /// There while opening v_log file
+    #[error("Failed to open v_lof file")]
+    VlogFileOpenError {
         path: PathBuf,
         #[source]
         error: io::Error,
@@ -126,7 +134,7 @@ pub enum StorageEngineError {
     KeyNotFound(#[source] Box<Self>),
 
     /// Key not found in db
-    #[error("Key not found ")]
+    #[error("Key not found")]
     NotFoundInDB,
 
     /// There was an error while atttempting to read from value log file
@@ -189,4 +197,10 @@ pub enum StorageEngineError {
     /// Error while trying to perform a range scan
     #[error("Range scan error `{0}`")]
     RangeScanError(Box<Self>),
+
+    #[error("Flush signal channel was overloaded with signals, please check all signal consumers")]
+    FlushSignalOverflowError,
+
+    #[error("Flush signal channel has been closed")]
+    FlushSignalClosedError,
 }

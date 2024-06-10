@@ -11,8 +11,8 @@ use crate::sstable::SSTable;
 use crate::storage_engine::StorageEngine;
 use crate::types::{Key, ValOffset, Value};
 use crate::value_log::ValueLog;
+use async_trait::async_trait;
 use futures::future::join_all;
-
 use futures::stream::StreamExt;
 use log::error;
 use std::collections::BTreeMap;
@@ -21,8 +21,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{cmp::Ordering, collections::HashMap};
-use tokio_stream::{self as stream, Stream};
-
+use tokio::fs::{File, OpenOptions};
+use tokio::sync::RwLock;
 #[derive(Debug, Clone)]
 pub struct FetchedEntry {
     pub key: Key,
@@ -80,7 +80,7 @@ impl<'a> RangeIterator<'a> {
             self.current += 1;
             return Some(entry);
         }
-        // handle not allow prefetch
+        //TODO: handle not allow prefetch option
         return None;
     }
     pub fn prev(&mut self) -> Option<FetchedEntry> {
@@ -169,25 +169,6 @@ impl<'a> RangeIterator<'a> {
             prefetched_entries.push(FetchedEntry { key, val })
         }
         Ok(prefetched_entries)
-    }
-}
-
-impl Default for RangeIterator<'_> {
-    fn default() -> Self {
-        RangeIterator {
-            start: &[0],
-            current: 0,
-            end: &[0],
-            allow_prefetch: DEFAULT_ALLOW_PREFETCH,
-            prefetch_entries_size: DEFAULT_PREFETCH_SIZE,
-            prefetch_entries: Vec::new(),
-            keys: Vec::new(),
-            v_log: ValueLog {
-                file_path: PathBuf::new(),
-                head_offset: 0,
-                tail_offset: 0,
-            },
-        }
     }
 }
 
@@ -290,23 +271,23 @@ impl<'a> StorageEngine<'a, Key> {
             sstable_path
         };
 
-        for (_, sst) in sstables_within_range {
-            let sparse_index = SparseIndex::new(sst.index_file_path.clone()).await;
-            match sparse_index.get_block_offset_range(&start, &end).await {
-                Ok(range_offset) => {
-                    let sst = SSTable::new_with_exisiting_file_path(
-                        sst.dir.to_owned(),
-                        sst.data_file_path.to_owned(),
-                        sst.index_file_path.to_owned(),
-                    );
-                    match sst.range(range_offset).await {
-                        Ok(sstable_entries) => merger.merge_entries(sstable_entries),
-                        Err(err) => return Err(err),
-                    }
-                }
-                Err(err) => return Err(StorageEngineError::RangeScanError(Box::new(err))),
-            }
-        }
+        // for (_, sst) in sstables_within_range {
+        //     let sparse_index = SparseIndex::new(sst.index_file_path.clone(), sst).await;
+        //     match sparse_index.get_block_offset_range(&start, &end).await {
+        //         Ok(range_offset) => {
+        //             let sst = SSTable::new_with_exisiting_file_path(
+        //                 sst.dir.to_owned(),
+        //                 sst.data_file_path.to_owned(),
+        //                 sst.index_file_path.to_owned(),
+        //             ).await;
+        //             match sst.range(range_offset).await {
+        //                 Ok(sstable_entries) => merger.merge_entries(sstable_entries),
+        //                 Err(err) => return Err(err),
+        //             }
+        //         }
+        //         Err(err) => return Err(StorageEngineError::RangeScanError(Box::new(err))),
+        //     }
+        // }
 
         let range_iterator = RangeIterator::<'a>::new(
             start,
