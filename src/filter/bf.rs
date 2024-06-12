@@ -1,4 +1,4 @@
-use crate::sstable::SSTFile;
+use crate::sstable::Table;
 use bit_vec::BitVec;
 use std::{
     collections::hash_map::DefaultHasher,
@@ -12,7 +12,7 @@ use std::{
 
 #[derive(Debug)]
 pub struct BloomFilter {
-    pub sstable_path: Option<SSTFile>,
+    pub sstable_path: Option<Table>,
     pub no_of_hash_func: usize,
     pub no_of_elements: AtomicU32,
     pub bit_vec: Arc<Mutex<BitVec>>,
@@ -63,7 +63,7 @@ impl BloomFilter {
         true
     }
 
-    pub fn set_sstable_path(&mut self, sstable_path: SSTFile) {
+    pub fn set_sstable_path(&mut self, sstable_path: Table) {
         self.sstable_path = Some(sstable_path);
     }
 
@@ -85,8 +85,8 @@ impl BloomFilter {
     pub fn sstables_within_key_range<T: Hash>(
         bloom_filters: Vec<&BloomFilter>,
         key: &T,
-    ) -> Option<Vec<SSTFile>> {
-        let mut sstables: Vec<SSTFile> = Vec::new();
+    ) -> Option<Vec<Table>> {
+        let mut sstables: Vec<Table> = Vec::new();
         for bloom_filter in bloom_filters {
             if bloom_filter.contains(key) {
                 if let Some(path) = &bloom_filter.sstable_path {
@@ -134,7 +134,7 @@ impl BloomFilter {
     }
 
     /// Get SSTable path
-    pub fn get_sstable_path(&self) -> &SSTFile {
+    pub fn get_sstable_path(&self) -> &Table {
         // Retrieve the element count atomically.
         self.sstable_path.as_ref().unwrap()
     }

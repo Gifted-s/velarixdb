@@ -1,3 +1,3 @@
 mod storage;
+pub use storage::DataStore;
 pub use storage::SizeUnit;
-pub use storage::StorageEngine;

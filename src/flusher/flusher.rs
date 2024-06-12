@@ -1,9 +1,8 @@
-use crate::bucket_coordinator::BucketMap;
+use crate::bucket::BucketMap;
 use crate::consts::FLUSH_SIGNAL;
 use crate::types::{self, FlushSignal};
 use crate::{
-    bloom_filter::BloomFilter, cfg::Config, err::StorageEngineError, key_offseter::KeyRange,
-    memtable::InMemoryTable,
+    cfg::Config, err::Error, filter::BloomFilter, key_range::KeyRange, memtable::InMemoryTable,
 };
 use futures::lock::Mutex;
 use indexmap::IndexMap;
@@ -36,7 +35,7 @@ pub enum FlushResponse {
         key_range: KeyRange,
     },
     Failed {
-        reason: StorageEngineError,
+        reason: Error,
     },
 }
 
@@ -69,15 +68,12 @@ impl Flusher {
         }
     }
 
-    pub async fn flush(
-        &mut self,
-        table: Arc<RwLock<InMemoryTable<K>>>,
-    ) -> Result<(), StorageEngineError> {
+    pub async fn flush(&mut self, table: Arc<RwLock<InMemoryTable<K>>>) -> Result<(), Error> {
         let flush_data = self;
         let table_lock = table.read().await;
         if table_lock.entries.is_empty() {
             println!("Cannot flush an empty table");
-            return Err(StorageEngineError::FailedToInsertToBucket(
+            return Err(Error::FailedToInsertToBucket(
                 "Cannot flush an empty table".to_string(),
             ));
         }
@@ -88,7 +84,7 @@ impl Flusher {
         let hotness = 1;
         let mut bucket_lock = flush_data.bucket_map.write().await;
         let sstable_path = bucket_lock
-            .insert_to_appropriate_bucket(table.clone(), hotness)
+            .insert_to_appropriate_bucket(Arc::new(Box::new(table_lock.to_owned())), hotness)
             .await?;
         let data_file_path = sstable_path.get_data_file_path().clone();
         flush_data.key_range.write().await.set(
@@ -146,7 +142,7 @@ impl Flusher {
                     match broadcase_res {
                         Err(err) => match err {
                             async_broadcast::TrySendError::Full(_) => {
-                                log::error!("{}", StorageEngineError::FlushSignalOverflowError)
+                                log::error!("{}", Error::FlushSignalOverflowError)
                             }
                             _ => log::error!("{}", err),
                         },

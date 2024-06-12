@@ -1,22 +1,23 @@
 use crate::consts::{EOF, SIZE_OF_U32};
-use crate::err::StorageEngineError;
+use crate::err::Error;
 use crate::types::Key;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use tokio::{
     fs::OpenOptions,
     io::{self, AsyncReadExt, AsyncWriteExt},
 };
-use StorageEngineError::*;
+use Error::*;
 type Offset = u32;
-struct SparseIndexEntry {
+struct IndexEntry {
     key_prefix: u32,
     key: Vec<u8>,
     block_handle: u32,
 }
 
-pub struct SparseIndex {
-    entries: Vec<SparseIndexEntry>,
+pub struct Index {
+    entries: Vec<IndexEntry>,
     file_path: PathBuf,
     file: Arc<tokio::sync::RwLock<tokio::fs::File>>,
 }
@@ -35,8 +36,8 @@ impl RangeOffset {
     }
 }
 
-impl SparseIndex {
-    pub async fn new(file_path: PathBuf, file: Arc<tokio::sync::RwLock<tokio::fs::File>>) -> Self {
+impl Index {
+    pub fn new(file_path: PathBuf, file: Arc<RwLock<tokio::fs::File>>) -> Self {
         Self {
             file_path,
             entries: Vec::new(),
@@ -45,14 +46,14 @@ impl SparseIndex {
     }
 
     pub fn insert(&mut self, key_prefix: u32, key: Key, offset: Offset) {
-        self.entries.push(SparseIndexEntry {
+        self.entries.push(IndexEntry {
             key_prefix,
             key,
             block_handle: offset,
         })
     }
 
-    pub async fn write_to_file(&self) -> Result<(), StorageEngineError> {
+    pub async fn write_to_file(&self) -> Result<(), Error> {
         let mut file = self.file.write().await;
         for entry in &self.entries {
             let entry_len = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U32;
@@ -79,7 +80,7 @@ impl SparseIndex {
         Ok(())
     }
 
-    pub(crate) async fn get(&self, searched_key: &[u8]) -> Result<Option<u32>, StorageEngineError> {
+    pub(crate) async fn get(&self, searched_key: &[u8]) -> Result<Option<u32>, Error> {
         let mut block_offset = -1;
         // Open the file in read mode
         let mut file = self.file.write().await;
@@ -96,6 +97,7 @@ impl SparseIndex {
                     })?;
             // If the end of the file is reached and no match is found, return non
             if bytes_read == 0 {
+                println!("0 bytes read");
                 if block_offset == -1 {
                     return Ok(None);
                 }
@@ -149,7 +151,7 @@ impl SparseIndex {
         &self,
         start_key: &[u8],
         end_key: &[u8],
-    ) -> Result<RangeOffset, StorageEngineError> {
+    ) -> Result<RangeOffset, Error> {
         let mut range_offset = RangeOffset::new(0, 0);
         // Open the file in read mode
         let file_path = PathBuf::from(&self.file_path);

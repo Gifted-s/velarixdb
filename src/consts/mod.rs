@@ -1,4 +1,4 @@
-use crate::storage_engine::SizeUnit;
+use crate::storage::SizeUnit;
 
 pub const GC_THREAD_COUNT: u32 = 5;
 
