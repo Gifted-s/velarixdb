@@ -1,18 +1,18 @@
-use crate::bloom_filter::BloomFilter;
-use crate::bucket_coordinator::InsertableToBucket;
+use crate::bucket::InsertableToBucket;
 use crate::consts::{
     DEFAULT_FALSE_POSITIVE_RATE, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, WRITE_BUFFER_SIZE,
 };
-use crate::err::StorageEngineError;
+use crate::err::Error;
+use crate::filter::BloomFilter;
 //use crate::memtable::val_option::ValueOption;
-use crate::storage_engine::SizeUnit;
+use crate::storage::SizeUnit;
 use crate::types::{CreationTime, IsTombStone, Key, ValOffset};
 use chrono::{DateTime, Utc};
 use crossbeam_skiplist::SkipMap;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 use std::cmp::{self, Ordering};
-use StorageEngineError::*;
+use Error::*;
 
 use std::{hash::Hash, sync::Arc};
 
@@ -45,11 +45,11 @@ impl InsertableToBucket for InMemoryTable<Key> {
     fn size(&self) -> usize {
         self.size
     }
-    fn find_biggest_key_from_table(&self) -> Result<Key, StorageEngineError> {
+    fn find_biggest_key_from_table(&self) -> Result<Key, Error> {
         self.find_biggest_key()
     }
 
-    fn find_smallest_key_from_table(&self) -> Result<Key, StorageEngineError> {
+    fn find_smallest_key_from_table(&self) -> Result<Key, Error> {
         self.find_smallest_key()
     }
 }
@@ -115,7 +115,7 @@ impl InMemoryTable<Key> {
         }
     }
 
-    pub fn insert(&mut self, entry: &Entry<Key, ValOffset>) -> Result<(), StorageEngineError> {
+    pub fn insert(&mut self, entry: &Entry<Key, ValOffset>) -> Result<(), Error> {
         let entry_length_byte = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
         if !self.bloom_filter.contains(&entry.key) {
             self.bloom_filter.set(&entry.key.clone());
@@ -138,7 +138,7 @@ impl InMemoryTable<Key> {
     pub fn get(
         &self,
         key: &Vec<u8>,
-    ) -> Result<Option<(ValOffset, CreationTime, IsTombStone)>, StorageEngineError> {
+    ) -> Result<Option<(ValOffset, CreationTime, IsTombStone)>, Error> {
         if self.bloom_filter.contains(key) {
             if let Some(entry) = self.entries.get(key) {
                 return Ok(Some(*entry.value())); // returns value offset
@@ -147,7 +147,7 @@ impl InMemoryTable<Key> {
         Ok(None)
     }
 
-    pub fn update(&mut self, entry: &Entry<Key, ValOffset>) -> Result<(), StorageEngineError> {
+    pub fn update(&mut self, entry: &Entry<Key, ValOffset>) -> Result<(), Error> {
         if !self.bloom_filter.contains(&entry.key) {
             return Err(KeyNotFoundInMemTable);
         }
@@ -158,7 +158,7 @@ impl InMemoryTable<Key> {
         Ok(())
     }
 
-    pub fn upsert(&mut self, entry: &Entry<Vec<u8>, usize>) -> Result<(), StorageEngineError> {
+    pub fn upsert(&mut self, entry: &Entry<Vec<u8>, usize>) -> Result<(), Error> {
         self.insert(&entry)
     }
 
@@ -172,7 +172,7 @@ impl InMemoryTable<Key> {
         id.as_bytes().to_vec()
     }
 
-    pub fn delete(&mut self, entry: &Entry<Key, ValOffset>) -> Result<(), StorageEngineError> {
+    pub fn delete(&mut self, entry: &Entry<Key, ValOffset>) -> Result<(), Error> {
         if !self.bloom_filter.contains(&entry.key) {
             return Err(KeyNotFoundInMemTable);
         }
@@ -194,7 +194,7 @@ impl InMemoryTable<Key> {
     }
 
     // Find the biggest element in the skip list
-    pub fn find_biggest_key(&self) -> Result<Key, StorageEngineError> {
+    pub fn find_biggest_key(&self) -> Result<Key, Error> {
         let largest_entry = self.entries.iter().next_back();
         match largest_entry {
             Some(e) => return Ok(e.key().to_vec()),
@@ -203,7 +203,7 @@ impl InMemoryTable<Key> {
     }
 
     // Find the smallest element in the skip list
-    pub fn find_smallest_key(&self) -> Result<Key, StorageEngineError> {
+    pub fn find_smallest_key(&self) -> Result<Key, Error> {
         let smallest_entry = self.entries.iter().next();
         match smallest_entry {
             Some(e) => return Ok(e.key().to_vec()),

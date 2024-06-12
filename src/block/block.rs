@@ -55,11 +55,11 @@ use tokio::{
     io::{self, AsyncWriteExt},
 };
 
-use err::StorageEngineError::*;
+use err::Error::*;
 
 use crate::{
     consts::{SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8},
-    err::{self, StorageEngineError},
+    err::{self, Error},
 };
 const BLOCK_SIZE: usize = 4 * 1024; // 4KB
 
@@ -103,14 +103,14 @@ impl Block {
         value_offset: u32,
         creation_date: u64,
         is_tombstone: bool,
-    ) -> Result<(), StorageEngineError> {
+    ) -> Result<(), Error> {
         // Calculate the total size of the entry, including the key, value, and the size of the length prefix.
         // Key + Key Prefix + Value Offset +  Creation Date + Tombstone Marker
         let entry_size = key.len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
 
         // Check if the Block is already full and cannot accommodate the new entry.
         if self.is_full(entry_size) {
-            return Err(StorageEngineError::BlockIsFullError);
+            return Err(Error::BlockIsFullError);
         }
 
         // Get the current offset in the data vector and extend it with the new entry.
@@ -132,7 +132,7 @@ impl Block {
     pub async fn write_to_file(
         &self,
         file: Arc<tokio::sync::RwLock<tokio::fs::File>>,
-    ) -> Result<(), StorageEngineError> {
+    ) -> Result<(), Error> {
         for entry in &self.data {
             let entry_len = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
             let mut entry_vec = Vec::with_capacity(entry_len);
@@ -161,6 +161,10 @@ impl Block {
                 .write_all(&entry_vec)
                 .await
                 .map_err(|err| SSTableWriteError { error: err })?;
+            file_lock
+                .flush()
+                .await
+                .map_err(|err| SSTableFlushError { error: err })?;
         }
         Ok(())
     }

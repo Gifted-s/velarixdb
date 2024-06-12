@@ -1,5 +1,4 @@
-use crate::bloom_filter::BloomFilter;
-use crate::bucket_coordinator::{Bucket, BucketID, BucketMap};
+use crate::bucket::{Bucket, BucketID, BucketMap};
 use crate::cfg::Config;
 use crate::compactors::Compactor;
 use crate::consts::{
@@ -8,19 +7,21 @@ use crate::consts::{
     META_DIRECTORY_NAME, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, TAIL_ENTRY_KEY, TOMB_STONE_MARKER,
     VALUE_LOG_DIRECTORY_NAME, WRITE_BUFFER_SIZE,
 };
-use crate::err::StorageEngineError;
-use crate::err::StorageEngineError::*;
+use crate::err::Error;
+use crate::err::Error::*;
+use crate::filter::BloomFilter;
 use crate::flusher::{FlushDataMemTable, Flusher};
-use crate::key_offseter::KeyRange;
+use crate::index::Index;
+use crate::key_range::KeyRange;
 use crate::memtable::{Entry, InMemoryTable};
 use crate::meta::Meta;
 use crate::range::RangeIterator;
-use crate::sparse_index::SparseIndex;
-use crate::sstable::{SSTFile, SSTable};
+use crate::sstable::Table;
 use crate::types::{self, FlushSignal, Key, ValOffset};
 use crate::value_log::ValueLog;
 use async_broadcast::broadcast;
 use chrono::Utc;
+use crossbeam_skiplist::SkipMap;
 use indexmap::IndexMap;
 use log::error;
 use std::time::Duration;
@@ -38,7 +39,7 @@ use tokio::{
 };
 
 #[derive(Debug)]
-pub struct StorageEngine<'a, K>
+pub struct DataStore<'a, K>
 where
     K: Hash + Ord + Send + Sync,
 {
@@ -94,12 +95,12 @@ pub enum SizeUnit {
     Gigabytes,
 }
 
-impl<'a> StorageEngine<'a, Key> {
-    pub async fn new(dir: PathBuf) -> Result<StorageEngine<'a, Key>, StorageEngineError> {
+impl<'a> DataStore<'a, Key> {
+    pub async fn new(dir: PathBuf) -> Result<DataStore<'a, Key>, Error> {
         let dir = DirPath::build(dir);
         let default_config = Config::default();
 
-        let store = StorageEngine::with_default_capacity_and_config(
+        let store = DataStore::with_default_capacity_and_config(
             dir.clone(),
             SizeUnit::Bytes,
             WRITE_BUFFER_SIZE,
@@ -114,9 +115,9 @@ impl<'a> StorageEngine<'a, Key> {
     pub async fn new_with_custom_config(
         dir: PathBuf,
         config: Config,
-    ) -> Result<StorageEngine<'a, Key>, StorageEngineError> {
+    ) -> Result<DataStore<'a, Key>, Error> {
         let dir = DirPath::build(dir);
-        StorageEngine::with_default_capacity_and_config(
+        DataStore::with_default_capacity_and_config(
             dir.clone(),
             SizeUnit::Bytes,
             WRITE_BUFFER_SIZE,
@@ -125,7 +126,7 @@ impl<'a> StorageEngine<'a, Key> {
         .await
     }
 
-    pub fn trigger_background_tasks(&self) -> Result<bool, StorageEngineError> {
+    pub fn trigger_background_tasks(&self) -> Result<bool, Error> {
         // Start background job to check for tombstone compaction condition at regular intervals 20 days
         if let ChanRecv::TombStoneCompactionNoticeRcv(rcx) = &self.tombstone_compaction_rcv {
             self.compactor
@@ -151,13 +152,13 @@ impl<'a> StorageEngine<'a, Key> {
         return Ok(true);
     }
 
-    /// A Result indicating success or an `StorageEngineError` if an error occurred.
+    /// A Result indicating success or an `Error` if an error occurred.
     pub async fn put(
         &mut self,
         key: &str,
         value: &str,
         existing_v_offset: Option<ValOffset>,
-    ) -> Result<bool, StorageEngineError> {
+    ) -> Result<bool, Error> {
         // Convert the key and value into Vec<u8> from given &str.
         let key = &key.as_bytes().to_vec();
         let value = &value.as_bytes().to_vec();
@@ -236,7 +237,7 @@ impl<'a> StorageEngine<'a, Key> {
     }
 
     // A Result indicating success or an `io::Error` if an error occurred.
-    pub async fn get(&self, key: &str) -> Result<(Vec<u8>, u64), StorageEngineError> {
+    pub async fn get(&self, key: &str) -> Result<(Vec<u8>, u64), Error> {
         let key = key.as_bytes().to_vec();
         let mut offset = 0;
         let mut most_recent_insert_time = 0;
@@ -288,11 +289,10 @@ impl<'a> StorageEngine<'a, Key> {
                 match sstable_paths {
                     Some(sstables_within_key_range) => {
                         for sstable in sstables_within_key_range.iter() {
-                            let sparse_index = SparseIndex::new(
+                            let sparse_index = Index::new(
                                 sstable.index_file_path.clone(),
                                 sstable.index_file.clone(),
-                            )
-                            .await;
+                            );
                             let block_offset_res = sparse_index.get(&key).await;
                             match block_offset_res {
                                 Ok(None) => continue,
@@ -348,7 +348,7 @@ impl<'a> StorageEngine<'a, Key> {
         }
         Err(NotFoundInDB)
     }
-    pub async fn delete(&mut self, key: &str) -> Result<bool, StorageEngineError> {
+    pub async fn delete(&mut self, key: &str) -> Result<bool, Error> {
         // Return error if not
         self.get(key).await?;
 
@@ -421,12 +421,12 @@ impl<'a> StorageEngine<'a, Key> {
         Ok(true)
     }
 
-    pub async fn update(&mut self, key: &str, value: &str) -> Result<bool, StorageEngineError> {
-        // Call set method defined in StorageEngine.
+    pub async fn update(&mut self, key: &str, value: &str) -> Result<bool, Error> {
+        // Call set method defined in DataStore.
         self.put(key, value, None).await
     }
 
-    pub async fn clear(&'a mut self) -> Result<StorageEngine<'a, types::Key>, StorageEngineError> {
+    pub async fn clear(&'a mut self) -> Result<DataStore<'a, types::Key>, Error> {
         let capacity = self.active_memtable.capacity();
 
         let size_unit = self.active_memtable.size_unit();
@@ -437,7 +437,7 @@ impl<'a> StorageEngine<'a, Key> {
 
         self.val_log.clear_all().await;
 
-        StorageEngine::with_capacity_and_rate(
+        DataStore::with_capacity_and_rate(
             self.dir.clone(),
             size_unit,
             capacity,
@@ -451,7 +451,7 @@ impl<'a> StorageEngine<'a, Key> {
         size_unit: SizeUnit,
         capacity: usize,
         config: Config,
-    ) -> Result<StorageEngine<'a, types::Key>, StorageEngineError> {
+    ) -> Result<DataStore<'a, types::Key>, Error> {
         Self::with_capacity_and_rate(dir, size_unit, capacity, config).await
     }
 
@@ -460,7 +460,7 @@ impl<'a> StorageEngine<'a, Key> {
         size_unit: SizeUnit,
         capacity: usize,
         config: Config,
-    ) -> Result<StorageEngine<'a, types::Key>, StorageEngineError> {
+    ) -> Result<DataStore<'a, types::Key>, Error> {
         let vlog_path = &dir.clone().val_log;
         let buckets_path = dir.buckets.clone();
         let vlog_exit = vlog_path.exists();
@@ -522,7 +522,7 @@ impl<'a> StorageEngine<'a, Key> {
                 config.entry_ttl_millis,
             );
 
-            return Ok(StorageEngine {
+            return Ok(DataStore {
                 active_memtable,
                 val_log: vlog,
                 bloom_filters: bloom_filters_ref,
@@ -636,7 +636,7 @@ impl<'a> StorageEngine<'a, Key> {
             // TODO: extract from file path
             let created_at = Utc::now();
 
-            let sst_file = SSTFile {
+            let sst_file = Table {
                 dir: sstable_path.as_path().to_owned(),
                 data_file_path,
                 index_file_path,
@@ -644,6 +644,8 @@ impl<'a> StorageEngine<'a, Key> {
                 created_at: created_at.timestamp_millis() as u64,
                 data_file,
                 index_file,
+                size: 0, // TODO
+                entries: Arc::new(SkipMap::new()),
             };
 
             let bucket_uuid =
@@ -654,11 +656,11 @@ impl<'a> StorageEngine<'a, Key> {
             // If bucket already exist in recovered bucket then just append sstable to its sstables vector
             if let Some(b) = recovered_buckets.get(&bucket_uuid) {
                 let mut temp_sstables = b.sstables.clone();
-                temp_sstables.push(sst_file.clone());
+                temp_sstables.write().await.push(sst_file.clone());
                 let updated_bucket = Bucket::new_with_id_dir_average_and_sstables(
                     buckets_dir.path(),
                     bucket_uuid,
-                    temp_sstables.to_owned(),
+                    temp_sstables.read().await.clone(),
                     0,
                 )
                 .await?;
@@ -675,7 +677,7 @@ impl<'a> StorageEngine<'a, Key> {
                 recovered_buckets.insert(bucket_uuid, updated_bucket);
             }
 
-            let sstable_from_file = SSTable::from_file(sst_file.clone()).await?;
+            let sstable_from_file = sst_file.from_file().await?;
             let sstable = sstable_from_file.unwrap();
             // Fetch the most recent write offset so it can
             // use it to recover entries not written into sstables from value log
@@ -699,7 +701,7 @@ impl<'a> StorageEngine<'a, Key> {
                 }
             }
 
-            let mut bf = SSTable::build_bloomfilter_from_sstable(&sstable.entries);
+            let mut bf = Table::build_bloomfilter_from_sstable(&sstable.entries);
             bf.set_sstable_path(sst_file.clone());
             // update bloom filters
             bloom_filters.push(bf)
@@ -709,12 +711,8 @@ impl<'a> StorageEngine<'a, Key> {
 
         let mut buckets_map = BucketMap::new(buckets_path.clone());
         for (bucket_id, b) in recovered_buckets.iter() {
-            let mut bucket_map_with_reference: IndexMap<
-                BucketID,
-                Arc<tokio::sync::RwLock<Bucket>>,
-            > = IndexMap::new();
-            bucket_map_with_reference
-                .insert(*bucket_id, Arc::new(tokio::sync::RwLock::new(b.clone())));
+            let mut bucket_map_with_reference: IndexMap<BucketID, Bucket> = IndexMap::new();
+            bucket_map_with_reference.insert(*bucket_id, b.clone());
             buckets_map.set_buckets(bucket_map_with_reference);
         }
 
@@ -723,7 +721,7 @@ impl<'a> StorageEngine<'a, Key> {
         vlog.set_tail(most_recent_tail_offset);
 
         // recover memtable
-        let recover_result = StorageEngine::recover_memtable(
+        let recover_result = DataStore::recover_memtable(
             size_unit,
             capacity,
             config.false_positive_rate,
@@ -752,7 +750,7 @@ impl<'a> StorageEngine<'a, Key> {
                     config.entry_ttl_millis,
                 );
 
-                Ok(StorageEngine {
+                Ok(DataStore {
                     active_memtable,
                     val_log: vlog,
                     dir,
@@ -795,7 +793,7 @@ impl<'a> StorageEngine<'a, Key> {
             InMemoryTable<types::Key>,
             IndexMap<Vec<u8>, Arc<RwLock<InMemoryTable<types::Key>>>>,
         ),
-        StorageEngineError,
+        Error,
     > {
         let mut read_only_memtables: IndexMap<Vec<u8>, Arc<RwLock<InMemoryTable<Vec<u8>>>>> =
             IndexMap::new();
@@ -846,11 +844,11 @@ impl<'a> StorageEngine<'a, Key> {
         Ok((active_memtable, read_only_memtables))
     }
     // Flush all memtables
-    pub async fn flush_all_memtables(&mut self) -> Result<(), StorageEngineError> {
+    pub async fn flush_all_memtables(&mut self) -> Result<(), Error> {
         // Flush active memtable
         let hotness = 1;
         self.flush_memtable(
-            &Arc::new(RwLock::new(self.active_memtable.to_owned())),
+            Arc::new(RwLock::new(self.active_memtable.to_owned())),
             hotness,
         )
         .await?;
@@ -864,7 +862,7 @@ impl<'a> StorageEngine<'a, Key> {
         }
         drop(memtable_lock);
         for memtable in read_only_memtables {
-            self.flush_memtable(&memtable, hotness).await?;
+            self.flush_memtable(memtable, hotness).await?;
         }
 
         // Sort bloom filter by hotness after flushing read-only memtables
@@ -882,14 +880,17 @@ impl<'a> StorageEngine<'a, Key> {
 
     async fn flush_memtable(
         &mut self,
-        memtable: &Arc<RwLock<InMemoryTable<Key>>>,
+        memtable: Arc<RwLock<InMemoryTable<Key>>>,
         hotness: u64,
-    ) -> Result<(), StorageEngineError> {
+    ) -> Result<(), Error> {
         let sstable_path = self
             .buckets
             .write()
             .await
-            .insert_to_appropriate_bucket(memtable.clone(), hotness)
+            .insert_to_appropriate_bucket(
+                Arc::new(Box::new(memtable.read().await.to_owned())),
+                hotness,
+            )
             .await?;
 
         // Write the memtable to disk as SSTables
@@ -910,7 +911,7 @@ impl<'a> StorageEngine<'a, Key> {
         Ok(())
     }
 
-    pub async fn run_compaction(&mut self) -> Result<bool, StorageEngineError> {
+    pub async fn run_compaction(&mut self) -> Result<bool, Error> {
         self.compactor
             .run_compaction(
                 Arc::clone(&self.buckets),
@@ -997,9 +998,9 @@ mod tests {
 
     // Generate test to find keys after compaction
     #[tokio::test]
-    async fn storage_engine_create_asynchronous() {
+    async fn datastore_create_asynchronous() {
         let path = PathBuf::new().join("bump1");
-        let s_engine = StorageEngine::new(path.clone()).await.unwrap();
+        let s_engine = DataStore::new(path.clone()).await.unwrap();
 
         // // Specify the number of random strings to generate
         let num_strings = 20000; // 100k
@@ -1043,7 +1044,7 @@ mod tests {
         }
         println!("Write completed ");
         sleep(Duration::from_millis(
-            DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI * 3
+            DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI * 14,
         ))
         .await;
 
@@ -1082,9 +1083,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn storage_engine_create_synchronous() {
+    async fn datastore_create_synchronous() {
         let path = PathBuf::new().join("bump2");
-        let mut s_engine = StorageEngine::new(path.clone()).await.unwrap();
+        let mut s_engine = DataStore::new(path.clone()).await.unwrap();
 
         // Specify the number of random strings to generate
         let num_strings = 1000000;
@@ -1140,9 +1141,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn storage_engine_compaction_asynchronous() {
+    async fn datastore_compaction_asynchronous() {
         let path = PathBuf::new().join("bump3");
-        let s_engine = StorageEngine::new(path.clone()).await.unwrap();
+        let s_engine = DataStore::new(path.clone()).await.unwrap();
 
         // Specify the number of random strings to generate
         let num_strings = 50000;
@@ -1248,7 +1249,7 @@ mod tests {
             }
             Err(err) => {
                 assert_eq!(
-                    StorageEngineError::KeyFoundAsTombstoneInMemtableError.to_string(),
+                    Error::KeyFoundAsTombstoneInMemtableError.to_string(),
                     err.to_string()
                 )
             }
@@ -1265,7 +1266,7 @@ mod tests {
             }
             Err(err) => {
                 assert_eq!(
-                    StorageEngineError::KeyFoundAsTombstoneInSSTableError.to_string(),
+                    Error::KeyFoundAsTombstoneInSSTableError.to_string(),
                     err.to_string()
                 )
             }
@@ -1316,9 +1317,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn storage_engine_update_asynchronous() {
+    async fn datastore_update_asynchronous() {
         let path = PathBuf::new().join("bump4");
-        let mut s_engine = StorageEngine::new(path.clone()).await.unwrap();
+        let mut s_engine = DataStore::new(path.clone()).await.unwrap();
 
         // Specify the number of random strings to generate
         let num_strings = 6000;
@@ -1431,9 +1432,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn storage_engine_deletion_asynchronous() {
+    async fn datastore_deletion_asynchronous() {
         let path = PathBuf::new().join("bump5");
-        let s_engine = StorageEngine::new(path.clone()).await.unwrap();
+        let s_engine = DataStore::new(path.clone()).await.unwrap();
 
         // Specify the number of random strings to generate
         let num_strings = 60000;

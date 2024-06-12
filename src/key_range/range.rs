@@ -1,5 +1,5 @@
 use crate::{
-    sstable::SSTFile,
+    sstable::Table,
     types::{self, Key},
 };
 use std::{cmp::Ordering, collections::HashMap, path::PathBuf};
@@ -15,10 +15,10 @@ pub struct KeyRange {
 pub struct Range {
     pub smallest_key: SmallestKey,
     pub biggest_key: LargestKey,
-    pub full_sst_path: SSTFile,
+    pub full_sst_path: Table,
 }
 impl Range {
-    pub fn new(smallest_key: SmallestKey, biggest_key: LargestKey, full_sst_path: SSTFile) -> Self {
+    pub fn new(smallest_key: SmallestKey, biggest_key: LargestKey, full_sst_path: Table) -> Self {
         Self {
             smallest_key,
             biggest_key,
@@ -38,7 +38,7 @@ impl KeyRange {
         sst_path: PathBuf,
         smallest_key: SmallestKey,
         biggest_key: LargestKey,
-        full_sst_path: SSTFile,
+        full_sst_path: Table,
     ) -> bool {
         self.key_ranges
             .insert(

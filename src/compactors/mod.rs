@@ -1,5 +1,7 @@
-mod size_tier_compactor;
+mod compact;
+mod insertor;
 
-pub use size_tier_compactor::CompactionState;
-pub use size_tier_compactor::Compactor;
-pub use size_tier_compactor::MergedSSTable;
+pub use compact::CompactionState;
+pub use compact::Compactor;
+pub use compact::MergedSSTable;
+pub use insertor::TableInsertor;

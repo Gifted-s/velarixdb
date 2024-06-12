@@ -9,7 +9,7 @@ use std::sync::atomic::AtomicBool;
 use log::{error, info, warn};
 use std::cmp::Ordering;
 
-use crate::bucket_coordinator::{Bucket, BucketID, BucketMap};
+use crate::bucket::{Bucket, BucketID, BucketMap, InsertableToBucket};
 use crate::consts::{
     DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI, DEFAULT_COMPACTION_INTERVAL_MILLI,
     DEFAULT_TOMBSTONE_COMPACTION_INTERVAL_MILLI,
@@ -23,14 +23,12 @@ use uuid::Uuid;
 
 use crate::types::{FlushSignal, Key};
 use crate::{
-    bloom_filter::BloomFilter,
-    consts::TOMB_STONE_TTL,
-    err::StorageEngineError,
-    key_offseter::KeyRange,
-    memtable::Entry,
-    sstable::{SSTFile, SSTable},
+    consts::TOMB_STONE_TTL, err::Error, filter::BloomFilter, key_range::KeyRange, memtable::Entry,
+    sstable::Table,
 };
-use StorageEngineError::*;
+use Error::*;
+
+use super::TableInsertor;
 #[derive(Debug)]
 pub struct Compactor {
     pub is_active: Arc<Mutex<CompactionState>>,
@@ -53,15 +51,31 @@ pub enum CompactionReason {
     MaxSize,
     Manual,
 }
-
+#[derive(Debug)]
 pub struct MergedSSTable {
-    pub sstable: SSTable,
+    pub sstable: Box<dyn InsertableToBucket>,
     pub hotness: u64,
     pub bloom_filter: BloomFilter,
 }
+impl Clone for MergedSSTable {
+    fn clone(&self) -> Self {
+        Self {
+            sstable: Box::new(TableInsertor {
+                entries: self.sstable.get_entries(),
+                size: self.sstable.size(),
+            }),
+            hotness: self.hotness,
+            bloom_filter: self.bloom_filter.clone(),
+        }
+    }
+}
 
 impl MergedSSTable {
-    pub fn new(sstable: SSTable, bloom_filter: BloomFilter, hotness: u64) -> Self {
+    pub fn new(
+        sstable: Box<dyn InsertableToBucket>,
+        bloom_filter: BloomFilter,
+        hotness: u64,
+    ) -> Self {
         Self {
             sstable,
             hotness,
@@ -126,7 +140,7 @@ impl Compactor {
                 //             log::info!("Compaction complete : {}", done);
                 //         }
                 //         Err(err) => {
-                //             log::info!("{}", StorageEngineError::CompactionFailed(err.to_string()))
+                //             log::info!("{}", Error::CompactionFailed(err.to_string()))
                 //         }
                 //     }
                 //     curr_state.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -150,28 +164,22 @@ impl Compactor {
         let curr_state = Arc::clone(&self.is_active);
         println!("Listening to event");
         tokio::spawn(async move {
-            let current_buckets = bucket_map;
-            let current_bloom_filters = bloom_filters;
-            let current_key_range = key_range;
             loop {
                 println!("Compaction started");
                 let signal = signal_receiver_clone.try_recv();
-                let mut compaction_state = curr_state.lock().await;
-                println!("GOT HERE1");
-                match *compaction_state {
+                let mut compaction_state_lock = curr_state.lock().await;
+                match *compaction_state_lock {
                     CompactionState::Sleep => match signal {
                         Ok(_) => {
-                            
-                            *compaction_state = CompactionState::Active;
-                            
-                            drop(compaction_state);
-                           
+                            *compaction_state_lock = CompactionState::Active;
+                            drop(compaction_state_lock);
+
                             let compaction_result = Compactor::handle_compaction(
                                 use_ttl,
                                 entry_ttl,
-                                current_buckets.clone(),
-                                current_bloom_filters.clone(),
-                                current_key_range.clone(),
+                                bucket_map.clone(),
+                                bloom_filters.clone(),
+                                key_range.clone(),
                             )
                             .await;
                             match compaction_result {
@@ -179,17 +187,14 @@ impl Compactor {
                                     log::info!("Compaction complete : {}", done);
                                 }
                                 Err(err) => {
-                                    log::info!(
-                                        "{}",
-                                        StorageEngineError::CompactionFailed(err.to_string())
-                                    )
+                                    log::info!("{}", Error::CompactionFailed(err.to_string()))
                                 }
                             }
-                            let mut compaction_state = curr_state.lock().await;
-                            *compaction_state = CompactionState::Sleep;
+                            let mut compaction_state_lock = curr_state.lock().await;
+                            *compaction_state_lock = CompactionState::Sleep;
                         }
                         Err(err) => {
-                            drop(compaction_state);
+                            drop(compaction_state_lock);
                             match err {
                                 async_broadcast::TryRecvError::Overflowed(_) => {
                                     log::error!("{}", FlushSignalOverflowError)
@@ -217,11 +222,10 @@ impl Compactor {
         current_buckets: Arc<RwLock<BucketMap>>,
         current_bloom_filters: Arc<RwLock<Vec<BloomFilter>>>,
         current_key_range: Arc<RwLock<KeyRange>>,
-    ) -> Result<bool, StorageEngineError> {
-        let bucket = current_buckets.read().await;
-
-        println!("get HEER");
-        if !bucket.is_balanced().await {
+    ) -> Result<bool, Error> {
+        let bucket_lock = current_buckets.read().await;
+        if !bucket_lock.is_balanced().await {
+            drop(bucket_lock);
             // compaction will continue until all the table is balanced
             let mut compactor = Compactor::new(use_ttl, entry_ttl);
             let comp_res = compactor
@@ -231,6 +235,7 @@ impl Compactor {
                     Arc::clone(&current_key_range),
                 )
                 .await;
+
             match comp_res {
                 Ok(done) => return Ok(done),
                 Err(err) => return Err(err),
@@ -238,31 +243,33 @@ impl Compactor {
         }
         return Ok(true);
     }
-
+    pub async fn get_extracted(
+        bucket_map: Arc<RwLock<BucketMap>>,
+    ) -> Result<(Vec<Bucket>, Vec<(Uuid, Vec<Table>)>), Error> {
+        bucket_map.read().await.extract_buckets_to_compact().await
+    }
     pub async fn run_compaction(
         &mut self,
         bucket_map: Arc<RwLock<BucketMap>>,
-        bf: Arc<RwLock<Vec<BloomFilter>>>,
+        bloom_filters: Arc<RwLock<Vec<BloomFilter>>>,
         key_range: Arc<RwLock<KeyRange>>,
-    ) -> Result<bool, StorageEngineError> {
+    ) -> Result<bool, Error> {
         let mut number_of_compactions = 0;
         // The compaction loop will keep running until there
         // are no more buckets with more than minimum treshold size
 
         // TODO: Handle this with multiple threads while keeping track of number of Disk IO used
         // so we don't run out of Disk IO during large compactions
+
         loop {
-            let buckets = Arc::clone(&bucket_map);
-            let bloom_filters = Arc::clone(&bf);
+            let buckets: Arc<RwLock<BucketMap>> = Arc::clone(&bucket_map);
+            let bloom_filters = Arc::clone(&bloom_filters);
             let key_range = Arc::clone(&key_range);
             // Step 1: Extract buckets to compact
-
             let buckets_to_compact_and_sstables_to_remove =
-                buckets.read().await.extract_buckets_to_compact().await?;
-
-            let buckets_to_compact = buckets_to_compact_and_sstables_to_remove.0;
-            let sstables_files_to_remove = buckets_to_compact_and_sstables_to_remove.1;
-
+                Compactor::get_extracted(bucket_map.clone()).await?;
+            let buckets_to_compact = buckets_to_compact_and_sstables_to_remove.0.to_owned();
+            let sstables_files_to_remove = buckets_to_compact_and_sstables_to_remove.1.to_owned();
             // Exit the compaction loop if there are no more buckets to compact
             if buckets_to_compact.is_empty() {
                 self.tombstones.clear();
@@ -278,24 +285,24 @@ impl Compactor {
                 )
             }
             // Step 2: Merge SSTables in each buckct
-            match self.merge_sstables_in_buckets(&buckets_to_compact).await {
+            let merge_res = self
+                .merge_sstables_in_buckets(&buckets_to_compact.to_owned())
+                .await;
+            match merge_res {
                 Ok(merged_sstables) => {
                     // Number of sstables actually written to disk
                     let mut actual_number_of_sstables_written_to_disk = 0;
                     // Number of sstables expected to be inserted to disk
                     let expected_sstables_to_be_writtten_to_disk = merged_sstables.len();
-
                     // Step 3: Write merged sstables to bucket map
-                    for (_, mut m) in merged_sstables.into_iter().enumerate() {
-                        match buckets
-                            .write()
-                            .await
-                            .insert_to_appropriate_bucket(
-                                Arc::new(tokio::sync::RwLock::new(m.sstable.clone())),
-                                m.hotness,
-                            )
-                            .await
-                        {
+                    for mut m in merged_sstables.into_iter() {
+                        let mut b = buckets.write().await;
+                        let insertable_sst = m.clone().sstable;
+                        let insert_response = b
+                            .insert_to_appropriate_bucket(Arc::new(insertable_sst), m.hotness)
+                            .await;
+                        drop(b);
+                        match insert_response {
                             Ok(sst_file_path) => {
                                 println!(
                                     "SSTable written to Disk data path: {:?}, index path {:?}",
@@ -307,8 +314,8 @@ impl Compactor {
 
                                 // Step 5: Store the bloom filter in the bloom filters vector
                                 bloom_filters.write().await.push(m.bloom_filter);
-                                let biggest_key = m.sstable.find_biggest_key()?;
-                                let smallest_key = m.sstable.find_smallest_key()?;
+                                let biggest_key = m.sstable.find_biggest_key_from_table()?;
+                                let smallest_key = m.sstable.find_smallest_key_from_table()?;
                                 if biggest_key.is_empty() {
                                     return Err(BiggestKeyIndexError);
                                 }
@@ -365,7 +372,7 @@ impl Compactor {
                         let bloom_filter_updated_opt = self
                             .clean_up_after_compaction(
                                 buckets,
-                                &sstables_files_to_remove,
+                                &sstables_files_to_remove.clone(),
                                 bloom_filters,
                                 key_range,
                             )
@@ -379,7 +386,7 @@ impl Compactor {
                                 );
                             }
                             Ok(None) => {
-                                return Err(StorageEngineError::CompactionPartiallyFailed(String::from(
+                                return Err(Error::CompactionPartiallyFailed(String::from(
                                       "Partial failure, obsolete sstables not deleted but sstable merge was successful",
                                   )));
                             }
@@ -388,7 +395,7 @@ impl Compactor {
                                     "Compaction cleanup failed but sstable merge was successful ",
                                 );
                                 err_des.push_str(&err.to_string());
-                                return Err(StorageEngineError::CompactionPartiallyFailed(err_des));
+                                return Err(Error::CompactionPartiallyFailed(err_des));
                             }
                         }
                     } else {
@@ -403,10 +410,10 @@ impl Compactor {
     pub async fn clean_up_after_compaction(
         &self,
         buckets: Arc<RwLock<BucketMap>>,
-        sstables_to_delete: &Vec<(BucketID, Vec<SSTFile>)>,
+        sstables_to_delete: &Vec<(BucketID, Vec<Table>)>,
         bloom_filters_with_both_old_and_new_sstables: Arc<RwLock<Vec<BloomFilter>>>,
         key_range: Arc<RwLock<KeyRange>>,
-    ) -> Result<Option<bool>, StorageEngineError> {
+    ) -> Result<Option<bool>, Error> {
         // Remove obsolete keys from biggest keys index
         sstables_to_delete.iter().for_each(|(_, sstables)| {
             sstables.iter().for_each(|s| {
@@ -441,7 +448,7 @@ impl Compactor {
     pub async fn filter_out_old_bloom_filters(
         &self,
         bloom_filters_with_both_old_and_new_sstables: Arc<RwLock<Vec<BloomFilter>>>,
-        sstables_to_delete: &Vec<(Uuid, Vec<SSTFile>)>,
+        sstables_to_delete: &Vec<(Uuid, Vec<Table>)>,
     ) -> Option<bool> {
         let mut bloom_filters_map: HashMap<PathBuf, BloomFilter> =
             bloom_filters_with_both_old_and_new_sstables
@@ -472,41 +479,40 @@ impl Compactor {
     async fn merge_sstables_in_buckets(
         &mut self,
         buckets: &Vec<Bucket>,
-    ) -> Result<Vec<MergedSSTable>, StorageEngineError> {
+    ) -> Result<Vec<MergedSSTable>, Error> {
         let mut merged_sstables: Vec<MergedSSTable> = Vec::new();
         for b in buckets.iter() {
             let mut hotness = 0;
-            let sstable_paths = &b.sstables;
-            let mut merged_sstable = SSTable::new(None).await;
-            println!("EMPTY 444 {}", sstable_paths.len());
-            for path in sstable_paths.iter() {
+            let sstable_paths = &b.sstables.read().await;
+            let mut merged_sst: Box<dyn InsertableToBucket> =
+                Box::new(sstable_paths.get(0).unwrap().to_owned());
+
+            for path in sstable_paths[1..].iter() {
                 hotness += path.hotness;
-                let sst_opt = SSTable::from_file(path.clone())
+                let sst_opt = path
+                    .from_file()
                     .await
                     .map_err(|err| CompactionFailed(err.to_string()))?;
-                
+
                 match sst_opt {
                     Some(sst) => {
-                        println!("EMPTY 6 {}", sst.get_entries().len());
-                        merged_sstable = self
-                            .merge_sstables(&merged_sstable, &sst)
+                        merged_sst = self
+                            .merge_sstables(merged_sst, Box::new(sst))
                             .await
                             .map_err(|err| CompactionFailed(err.to_string()))?;
                     }
                     None => {}
                 }
             }
-            if merged_sstable.entries.len() == 0{
-              println!("EMPTY 2")
-            }
             // Rebuild the bloom filter since a new sstable has been created
-            let new_bloom_filter = SSTable::build_bloomfilter_from_sstable(&merged_sstable.entries);
+            let new_bloom_filter = Table::build_bloomfilter_from_sstable(&merged_sst.get_entries());
             merged_sstables.push(MergedSSTable {
-                sstable: merged_sstable,
+                sstable: merged_sst,
                 hotness,
                 bloom_filter: new_bloom_filter,
             })
         }
+
         if merged_sstables.is_empty() {
             return Err(CompactionFailed(
                 "Merged SSTables cannot be empty".to_owned(),
@@ -520,10 +526,10 @@ impl Compactor {
 
     async fn merge_sstables(
         &mut self,
-        sst1: &SSTable,
-        sst2: &SSTable,
-    ) -> Result<SSTable, StorageEngineError> {
-        let mut new_sstable = SSTable::new(None).await;
+        sst1: Box<dyn InsertableToBucket>,
+        sst2: Box<dyn InsertableToBucket>,
+    ) -> Result<Box<dyn InsertableToBucket>, Error> {
+        let mut new_sstable = TableInsertor::new();
         let new_sstable_map = Arc::new(SkipMap::new());
         let mut merged_entries = Vec::new();
         let entries1 = sst1
@@ -587,14 +593,14 @@ impl Compactor {
             );
         });
         new_sstable.set_entries(new_sstable_map);
-        Ok(new_sstable)
+        Ok(Box::new(new_sstable))
     }
 
     fn tombstone_check(
         &mut self,
         entry: &Entry<Vec<u8>, usize>,
         merged_entries: &mut Vec<Entry<Vec<u8>, usize>>,
-    ) -> Result<bool, StorageEngineError> {
+    ) -> Result<bool, Error> {
         let mut insert_entry = false;
         // If key has been mapped to any tombstone
         if self.tombstones.contains_key(&entry.key) {
@@ -650,12 +656,12 @@ impl Compactor {
     async fn check_tombsone_for_merged_sstables(
         &mut self,
         merged_sstables: Vec<MergedSSTable>,
-    ) -> Result<Vec<MergedSSTable>, StorageEngineError> {
+    ) -> Result<Vec<MergedSSTable>, Error> {
         let mut filterd_merged_sstables: Vec<MergedSSTable> = Vec::new();
         for m in merged_sstables.iter() {
             let new_index = Arc::new(SkipMap::new());
-            let mut new_sstable = SSTable::new(None).await;
-            for entry in m.sstable.entries.iter() {
+            let mut new_sstable = TableInsertor::new();
+            for entry in m.sstable.get_entries().iter() {
                 if self.tombstones.contains_key(entry.key()) {
                     let tombstone_timestamp = *self.tombstones.get(entry.key()).unwrap();
                     if tombstone_timestamp < entry.value().1 {
@@ -673,7 +679,7 @@ impl Compactor {
             }
             new_sstable.set_entries(new_index);
             filterd_merged_sstables.push(MergedSSTable {
-                sstable: new_sstable,
+                sstable: Box::new(new_sstable),
                 hotness: m.hotness,
                 bloom_filter: m.bloom_filter.clone(),
             })

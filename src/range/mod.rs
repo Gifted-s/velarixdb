@@ -1,2 +1,2 @@
-mod range_queries;
-pub use range_queries::RangeIterator;
+mod range;
+pub use range::RangeIterator;

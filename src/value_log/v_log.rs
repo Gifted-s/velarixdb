@@ -1,6 +1,6 @@
 use crate::{
     consts::{EOF, VLOG_FILE_NAME},
-    err::StorageEngineError,
+    err::Error,
 };
 use log::error;
 use std::{mem, path::PathBuf, sync::Arc};
@@ -10,7 +10,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
 };
 use tokio::{fs::OpenOptions, sync::RwLock};
-use StorageEngineError::*;
+use Error::*;
 type TotalBytesRead = usize;
 #[derive(Debug, Clone)]
 pub struct ValueLog {
@@ -31,7 +31,7 @@ pub struct ValueLogEntry {
 }
 
 impl ValueLog {
-    pub async fn new(dir: &PathBuf) -> Result<Self, StorageEngineError> {
+    pub async fn new(dir: &PathBuf) -> Result<Self, Error> {
         let dir_path = PathBuf::from(dir);
 
         if !dir_path.exists() {
@@ -79,7 +79,7 @@ impl ValueLog {
         value: &Vec<u8>,
         created_at: u64,
         is_tombstone: bool,
-    ) -> Result<usize, StorageEngineError> {
+    ) -> Result<usize, Error> {
         let v_log_entry = ValueLogEntry::new(
             key.len(),
             value.len(),
@@ -109,10 +109,7 @@ impl ValueLog {
         Ok(last_offset as usize)
     }
 
-    pub async fn get(
-        &self,
-        start_offset: usize,
-    ) -> Result<Option<(Vec<u8>, bool)>, StorageEngineError> {
+    pub async fn get(&self, start_offset: usize) -> Result<Option<(Vec<u8>, bool)>, Error> {
         let mut file = self.file.write().await;
         file.seek(SeekFrom::Start(start_offset as u64))
             .await
@@ -197,10 +194,7 @@ impl ValueLog {
         Ok(Some((value, is_tombstone)))
     }
 
-    pub async fn recover(
-        &mut self,
-        start_offset: usize,
-    ) -> Result<Vec<ValueLogEntry>, StorageEngineError> {
+    pub async fn recover(&mut self, start_offset: usize) -> Result<Vec<ValueLogEntry>, Error> {
         let mut file = self.file.write().await;
         file.seek(SeekFrom::Start(start_offset as u64))
             .await
@@ -312,7 +306,7 @@ impl ValueLog {
     pub async fn read_chunk_to_garbage_collect(
         &self,
         bytes_to_collect: usize,
-    ) -> Result<(Vec<ValueLogEntry>, TotalBytesRead), StorageEngineError> {
+    ) -> Result<(Vec<ValueLogEntry>, TotalBytesRead), Error> {
         let mut file = self.file.write().await;
         file.seek(SeekFrom::Start(self.tail_offset as u64))
             .await

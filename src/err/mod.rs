@@ -4,7 +4,7 @@ use tokio::task::JoinError;
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum StorageEngineError {
+pub enum Error {
     /// There was an error while writing to sstbale file
     #[error("Failed to open sstable file")]
     SSTableFileOpenError {

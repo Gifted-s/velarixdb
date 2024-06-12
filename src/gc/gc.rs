@@ -6,12 +6,11 @@ extern crate nix;
 use crate::consts::{GC_CHUNK_SIZE, TAIL_ENTRY_KEY, TOMB_STONE_MARKER};
 use crate::value_log::ValueLogEntry;
 use crate::{err, types};
-use crate::{err::StorageEngineError, storage_engine::*};
+use crate::{err::Error, storage::*};
 use chrono::Utc;
-use err::StorageEngineError::*;
+use err::Error::*;
 use futures::future::join_all;
 use nix::libc::{c_int, off_t};
-use std::io::Error;
 use std::os::unix::io::AsRawFd;
 use std::str;
 use std::sync::Arc;
@@ -36,8 +35,8 @@ impl GarbageCollector {
 
     pub async fn run(
         &self,
-        engine: Arc<RwLock<StorageEngine<'static, K>>>,
-    ) -> std::result::Result<(), StorageEngineError> {
+        engine: Arc<RwLock<DataStore<'static, K>>>,
+    ) -> std::result::Result<(), Error> {
         let invalid_entries: Arc<RwLock<Vec<ValueLogEntry>>> = Arc::new(RwLock::new(Vec::new()));
         let valid_entries: Arc<RwLock<Vec<(K, V)>>> = Arc::new(RwLock::new(Vec::new()));
         let synced_entries: Arc<RwLock<Vec<(K, V, VOffset)>>> = Arc::new(RwLock::new(Vec::new()));
@@ -88,7 +87,7 @@ impl GarbageCollector {
                             invalid_entries_clone.write().await.push(entry);
                             Ok(())
                         }
-                        err::StorageEngineError::KeyNotFoundInValueLogError => {
+                        err::Error::KeyNotFoundInValueLogError => {
                             invalid_entries_clone.write().await.push(entry);
                             Ok(())
                         }
@@ -156,7 +155,7 @@ impl GarbageCollector {
         v_log
             .sync_all()
             .await
-            .map_err(|err| StorageEngineError::ValueLogFileSyncError { error: err })?;
+            .map_err(|err| Error::ValueLogFileSyncError { error: err })?;
         engine.write().await.val_log.set_tail(new_tail_offset);
 
         for (key, value, existing_v_offset) in synced_entries.to_owned().read().await.iter() {
@@ -184,11 +183,11 @@ impl GarbageCollector {
 
     pub async fn garbage_collect(
         &self,
-        engine: Arc<RwLock<StorageEngine<'static, K>>>,
+        engine: Arc<RwLock<DataStore<'static, K>>>,
         invalid_entries: Arc<RwLock<Vec<ValueLogEntry>>>,
         punch_hole_start_offset: usize,
         punch_hole_length: usize,
-    ) -> std::result::Result<(), StorageEngineError> {
+    ) -> std::result::Result<(), Error> {
         // Punch hole in file for linux operating system
         #[cfg(target_os = "linux")]
         {
@@ -205,9 +204,9 @@ impl GarbageCollector {
 
         #[cfg(not(target_os = "linux"))]
         {
-            return Err(StorageEngineError::GCErrorUnsupportedPlatform(
-                String::from("File system does not support file punch hole"),
-            ));
+            return Err(Error::GCErrorUnsupportedPlatform(String::from(
+                "File system does not support file punch hole",
+            )));
         }
     }
 
@@ -216,10 +215,10 @@ impl GarbageCollector {
         file_path: &str,
         offset: off_t,
         length: off_t,
-    ) -> std::result::Result<(), StorageEngineError> {
+    ) -> std::result::Result<(), Error> {
         let file = tokio::fs::File::open(file_path)
             .await
-            .map_err(|err| StorageEngineError::ValueLogFileReadError { error: err })?;
+            .map_err(|err| Error::ValueLogFileReadError { error: err })?;
 
         let fd = file.as_raw_fd();
 
@@ -234,8 +233,8 @@ impl GarbageCollector {
             if result == 0 {
                 Ok(())
             } else {
-                Err(StorageEngineError::GCErrorFailedToPunchHoleInVlogFile(
-                    Error::last_os_error(),
+                Err(Error::GCErrorFailedToPunchHoleInVlogFile(
+                    std::io::Error::last_os_error(),
                 ))
             }
         }

@@ -4,11 +4,10 @@
 // Although this stratedy is not available for now, It will be implmented in the future
 
 use crate::consts::{DEFAULT_ALLOW_PREFETCH, DEFAULT_PREFETCH_SIZE, HEAD_ENTRY_KEY};
-use crate::err::StorageEngineError;
+use crate::err::Error;
+use crate::index::Index;
 use crate::memtable::{Entry, InMemoryTable};
-use crate::sparse_index::SparseIndex;
-use crate::sstable::SSTable;
-use crate::storage_engine::StorageEngine;
+use crate::storage::DataStore;
 use crate::types::{Key, ValOffset, Value};
 use crate::value_log::ValueLog;
 use async_trait::async_trait;
@@ -70,7 +69,7 @@ impl<'a> RangeIterator<'a> {
                 }
                 match self.prefetch_entries().await {
                     Err(err) => {
-                        error!("{}", StorageEngineError::RangeScanError(Box::new(err)));
+                        error!("{}", Error::RangeScanError(Box::new(err)));
                         return None;
                     }
                     _ => {}
@@ -99,7 +98,7 @@ impl<'a> RangeIterator<'a> {
         None
     }
 
-    pub async fn prefetch_entries(&mut self) -> Result<(), StorageEngineError> {
+    pub async fn prefetch_entries(&mut self) -> Result<(), Error> {
         let keys: Vec<Entry<Key, ValOffset>>;
         if self.current + self.prefetch_entries_size <= self.keys.len() {
             keys = (&self.keys[self.current..self.current + self.prefetch_entries_size]).to_vec();
@@ -127,7 +126,7 @@ impl<'a> RangeIterator<'a> {
     pub async fn fetch_entries_in_parralel(
         &self,
         keys: &'a Vec<Entry<Key, ValOffset>>,
-    ) -> Result<Vec<FetchedEntry>, StorageEngineError> {
+    ) -> Result<Vec<FetchedEntry>, Error> {
         let mut entries_map: BTreeMap<Key, Value> = BTreeMap::new();
         let tokio_owned_keys = keys.to_owned();
         let tokio_owned_v_log = Arc::new(self.v_log.to_owned());
@@ -140,7 +139,7 @@ impl<'a> RangeIterator<'a> {
                     Ok(val_opt) => match val_opt {
                         Some((val, is_deleted)) => return Ok((entry.key, val, is_deleted)),
                         None => {
-                            return Err(StorageEngineError::KeyNotFoundInValueLogError);
+                            return Err(Error::KeyNotFoundInValueLogError);
                         }
                     },
                     Err(err) => return Err(err),
@@ -172,13 +171,9 @@ impl<'a> RangeIterator<'a> {
     }
 }
 
-impl<'a> StorageEngine<'a, Key> {
+impl<'a> DataStore<'a, Key> {
     // Start if the range query
-    pub async fn seek(
-        &self,
-        start: &'a [u8],
-        end: &'a [u8],
-    ) -> Result<RangeIterator, StorageEngineError> {
+    pub async fn seek(&self, start: &'a [u8], end: &'a [u8]) -> Result<RangeIterator, Error> {
         let mut merger = Merger::new();
         // check entries within active memtable
         // if !self.active_memtable.index.is_empty() {
@@ -285,7 +280,7 @@ impl<'a> StorageEngine<'a, Key> {
         //                 Err(err) => return Err(err),
         //             }
         //         }
-        //         Err(err) => return Err(StorageEngineError::RangeScanError(Box::new(err))),
+        //         Err(err) => return Err(Error::RangeScanError(Box::new(err))),
         //     }
         // }
 
@@ -379,7 +374,7 @@ mod tests {
     #[tokio::test]
     async fn range_test_without_compaction() {
         let path = PathBuf::new().join("bump3");
-        let s_engine = StorageEngine::new(path.clone()).await.unwrap();
+        let s_engine = DataStore::new(path.clone()).await.unwrap();
 
         // Specify the number of random strings to generate
         let num_strings = 50000;
