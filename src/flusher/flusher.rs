@@ -1,5 +1,6 @@
 use crate::bucket::BucketMap;
 use crate::consts::FLUSH_SIGNAL;
+use crate::fs::FileAsync;
 use crate::types::{self, FlushSignal};
 use crate::{
     cfg::Config, err::Error, filter::BloomFilter, key_range::KeyRange, memtable::InMemoryTable,
@@ -18,41 +19,41 @@ pub type FlushDataMemTable = (InActiveMemtableID, InActiveMemtable);
 use tokio::spawn;
 use tokio::sync::mpsc::Receiver;
 
-#[derive(Debug)]
-pub struct FlushUpdateMsg {
-    pub flushed_memtable_id: InActiveMemtableID,
-    pub buckets: BucketMap,
-    pub bloom_filters: Vec<BloomFilter>,
-    pub key_range: KeyRange,
-}
+// #[derive(Debug)]
+// pub struct FlushUpdateMsg {
+//     pub flushed_memtable_id: InActiveMemtableID,
+//     pub buckets: BucketMap,
+//     pub bloom_filters: Vec<BloomFilter>,
+//     pub key_range: KeyRange,
+// }
 
-#[derive(Debug)]
-pub enum FlushResponse {
-    Success {
-        table_id: Vec<u8>,
-        updated_bucket_map: BucketMap,
-        updated_bloom_filters: Vec<BloomFilter>,
-        key_range: KeyRange,
-    },
-    Failed {
-        reason: Error,
-    },
-}
+// #[derive(Debug)]
+// pub enum FlushResponse {
+//     Success {
+//         table_id: Vec<u8>,
+//         updated_bucket_map: BucketMap,
+//         updated_bloom_filters: Vec<BloomFilter>,
+//         key_range: KeyRange,
+//     },
+//     Failed {
+//         reason: Error,
+//     },
+// }
 
 #[derive(Debug, Clone)]
-pub struct Flusher {
+pub struct Flusher<F: FileAsync> {
     pub(crate) read_only_memtable: Arc<RwLock<IndexMap<K, Arc<RwLock<InMemoryTable<K>>>>>>,
-    pub(crate) bucket_map: Arc<RwLock<BucketMap>>,
+    pub(crate) bucket_map: Arc<RwLock<BucketMap<F>>>,
     pub(crate) bloom_filters: Arc<RwLock<Vec<BloomFilter>>>,
     pub(crate) key_range: Arc<RwLock<KeyRange>>,
     pub(crate) use_ttl: bool,
     pub(crate) entry_ttl: u64,
 }
 
-impl Flusher {
+impl<F: FileAsync> Flusher<F> {
     pub fn new(
         read_only_memtable: Arc<RwLock<IndexMap<K, Arc<RwLock<InMemoryTable<K>>>>>>,
-        bucket_map: Arc<RwLock<BucketMap>>,
+        bucket_map: Arc<RwLock<BucketMap<F>>>,
         bloom_filters: Arc<RwLock<Vec<BloomFilter>>>,
         key_range: Arc<RwLock<KeyRange>>,
         use_ttl: bool,
@@ -72,7 +73,6 @@ impl Flusher {
         let flush_data = self;
         let table_lock = table.read().await;
         if table_lock.entries.is_empty() {
-            println!("Cannot flush an empty table");
             return Err(Error::FailedToInsertToBucket(
                 "Cannot flush an empty table".to_string(),
             ));
@@ -93,7 +93,6 @@ impl Flusher {
             table_biggest_key,
             sstable_path.clone(),
         );
-
         table_bloom_filter.set_sstable_path(sstable_path);
         flush_data
             .bloom_filters

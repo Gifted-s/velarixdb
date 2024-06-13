@@ -21,6 +21,28 @@ pub enum Error {
         error: io::Error,
     },
 
+    /// There was an error while opening file
+    #[error("Failed to open  file")]
+    FileOpenError {
+        path: PathBuf,
+        #[source]
+        error: io::Error,
+    },
+
+    #[error("Failed to create directory")]
+    DirCreationError {
+        path: PathBuf,
+        #[source]
+        error: io::Error,
+    },
+    /// There was an error while atttempting to read a file
+    #[error("Failed to read file `{path}`: {error}")]
+    FileReadError { path: PathBuf, error: io::Error },
+
+    /// There was an error while atttempting to write to file
+    #[error("Failed to write to file `{path}`: {error}")]
+    FileWriteError { path: PathBuf, error: io::Error },
+
     /// There was an error while atttempting to read from sstbale file
     #[error("Failed to read sstsable file `{path}`: {error}")]
     SSTableFileReadError { path: PathBuf, error: io::Error },
@@ -48,13 +70,17 @@ pub enum Error {
         error: Box<Self>, // Flush to disk can be caused by any of the errors above
     },
 
-    /// There was an error while atttempting to create value log directory
+    /// RE There was an error while atttempting to create value log directory
     #[error("Failed to create v_log directory `{path}`: {error}")]
     VLogDirectoryCreationError { path: PathBuf, error: io::Error },
 
-    /// There was an error while atttempting to create value log file
+    /// RE There was an error while atttempting to create value log file
     #[error("Failed to create v_log.bin file `{path}`: {error}")]
     VLogFileCreationError { path: PathBuf, error: io::Error },
+
+    /// There was an error while atttempting to create a file
+    #[error("Failed to create file: `{path}`: {error}")]
+    FileCreationError { path: PathBuf, error: io::Error },
 
     /// There was an error while atttempting to write to value log file
     #[error("Failed to write to value log file")]
@@ -145,6 +171,10 @@ pub enum Error {
     #[error("Failed to sync writes to value log file : {error}")]
     ValueLogFileSyncError { error: io::Error },
 
+    /// There was an error while atttempting to sync writes to a file
+    #[error("Failed to sync writes to file : {error}")]
+    FileSyncError { error: io::Error },
+
     /// There was an error while atttempting to open v_log directory
     #[error("Failed to open value log directory `{error}`")]
     ValueLogDirectoryOpenError { error: io::Error },
@@ -193,6 +223,13 @@ pub enum Error {
     /// Error joining multiple tokio tasks to run concurrently
     #[error("Error joining tokio tasks. error: `{error}`, context: `{context}`")]
     TokioTaskJoinError { error: JoinError, context: String },
+
+    /// Error invalid lock type
+    #[error("Invalid lock type: expected `{expected}`, Found: `{found}`")]
+    InvalidLockType {
+        expected: &'static str,
+        found: &'static str,
+    },
 
     /// Error while trying to perform a range scan
     #[error("Range scan error `{0}`")]

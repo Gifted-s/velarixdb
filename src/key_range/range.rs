@@ -1,5 +1,5 @@
 use crate::{
-    sstable::Table,
+    sst::Table,
     types::{self, Key},
 };
 use std::{cmp::Ordering, collections::HashMap, path::PathBuf};

@@ -16,7 +16,7 @@ use crate::key_range::KeyRange;
 use crate::memtable::{Entry, InMemoryTable};
 use crate::meta::Meta;
 use crate::range::RangeIterator;
-use crate::sstable::Table;
+use crate::sst::Table;
 use crate::types::{self, FlushSignal, Key, ValOffset};
 use crate::value_log::ValueLog;
 use async_broadcast::broadcast;

@@ -1,5 +1,6 @@
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use crossbeam_skiplist::{SkipList, SkipMap};
+use futures::TryFutureExt;
 use num_traits::ops::bytes;
 use std::{
     cmp::Ordering,
@@ -15,9 +16,11 @@ use crate::{
     bucket::InsertableToBucket,
     consts::{
         DEFAULT_FALSE_POSITIVE_RATE, EOF, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, SIZE_OF_USIZE,
+        SSTABLE,
     },
     err::Error,
     filter::BloomFilter,
+    fs::{FileAsync, FileNode},
     index::{self, Index, RangeOffset},
     memtable::{Entry, InsertionTime, IsDeleted},
     types::{CreationTime, IsTombStone, Key, ValOffset},
@@ -27,19 +30,19 @@ use crate::{
 use Error::*;
 
 #[derive(Debug, Clone)]
-pub struct Table {
+pub struct Table<F: FileAsync> {
     pub(crate) dir: PathBuf,
     pub(crate) data_file_path: PathBuf,
     pub(crate) index_file_path: PathBuf,
     pub(crate) hotness: u64,
     pub(crate) size: usize,
     pub(crate) created_at: CreationTime,
-    pub(crate) data_file: Arc<tokio::sync::RwLock<tokio::fs::File>>,
-    pub(crate) index_file: Arc<tokio::sync::RwLock<tokio::fs::File>>,
+    pub(crate) data_file: F,
+    pub(crate) index_file: F,
     pub(crate) entries: Arc<SkipMap<Key, (ValOffset, InsertionTime, IsDeleted)>>,
 }
 
-impl InsertableToBucket for Table {
+impl<F: FileAsync> InsertableToBucket for Table<F> {
     fn get_entries(&self) -> Arc<SkipMap<Key, (ValOffset, InsertionTime, IsDeleted)>> {
         Arc::clone(&self.entries)
     }
@@ -55,41 +58,22 @@ impl InsertableToBucket for Table {
     }
 }
 
-impl Table {
+impl<F: FileAsync> Table<F> {
     pub async fn new(dir: PathBuf) -> Self {
-        let created_at = Utc::now();
-        let data_file_name = format!("sstable_{}_.db", created_at.timestamp_millis());
-        let index_file_name = format!("index_{}_.db", created_at.timestamp_millis());
-
-        if !dir.exists() {
-            fs::create_dir_all(&dir)
-                .await
-                .expect("sstable directory was not created successfullt")
-        }
-        let data_file_path = dir.join(data_file_name.clone());
-        let index_file_path = dir.join(index_file_name.clone());
-        let opened_data_file = File::options()
-            .create(true) // Set the create option
-            .read(true) // Set read access
-            .write(true) // Set write access
-            .open(data_file_path.clone())
-            .await
-            .unwrap();
-        let opened_index_file = File::options()
-            .create(true) // Set the create option
-            .read(true) // Set read access
-            .write(true) // Set write access
-            .open(index_file_path.clone())
-            .await
-            .unwrap();
+        //TODO: handle error during file creation
+        let (data_file_path, index_file_path, creation_time) =
+            Table::generate_file_path(dir.to_owned()).await.unwrap();
+        let data_file = FileNode::new(data_file_path, crate::fs::FileType::SSTable).await.unwrap();
+        let index_file = FileNode::new(index_file_path, crate::fs::FileType::Index).await.unwrap();
+       
         Self {
             data_file_path,
             index_file_path,
             dir,
             hotness: 0,
-            index_file: Arc::new(tokio::sync::RwLock::new(opened_index_file)),
-            data_file: Arc::new(tokio::sync::RwLock::new(opened_data_file)),
-            created_at: created_at.timestamp_millis() as u64,
+            index_file,
+            data_file,
+            created_at: creation_time.timestamp_millis() as u64,
             entries: Arc::new(SkipMap::new()),
             size: 0,
         }
@@ -103,6 +87,19 @@ impl Table {
 
     pub fn get_hotness(&self) -> u64 {
         self.hotness
+    }
+
+    pub async fn generate_file_path(
+        dir: PathBuf,
+    ) -> Result<(PathBuf, PathBuf, DateTime<Utc>), Error> {
+        let created_at = Utc::now();
+        let _ = FileNode::create_dir_all(dir.to_owned()).await?;
+        let data_file_name = format!("sstable_{}_.db", created_at.timestamp_millis());
+        let index_file_name = format!("index_{}_.db", created_at.timestamp_millis());
+
+        let data_file_path = dir.join(data_file_name.to_owned());
+        let index_file_path = dir.join(index_file_name.to_owned());
+        Ok((data_file_path, index_file_path, created_at))
     }
 
     pub(crate) async fn get(
@@ -201,7 +198,7 @@ impl Table {
         }
     }
 
-    pub(crate) async fn from_file(&self) -> Result<Option<Table>, Error> {
+    pub(crate) async fn from_file(&self) -> Result<Option<Table<F>>, Error> {
         let entries = Arc::new(SkipMap::new());
 
         let data_file_path = self.data_file_path.clone();

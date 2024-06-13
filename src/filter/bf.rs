@@ -1,4 +1,4 @@
-use crate::sstable::Table;
+use crate::{fs::FileAsync, sst::Table};
 use bit_vec::BitVec;
 use std::{
     collections::hash_map::DefaultHasher,
@@ -11,14 +11,14 @@ use std::{
 };
 
 #[derive(Debug)]
-pub struct BloomFilter {
-    pub sstable_path: Option<Table>,
+pub struct BloomFilter<F: FileAsync> {
+    pub sstable_path: Option<Table<F>>,
     pub no_of_hash_func: usize,
     pub no_of_elements: AtomicU32,
     pub bit_vec: Arc<Mutex<BitVec>>,
 }
 
-impl BloomFilter {
+impl<F:FileAsync> BloomFilter<F> {
     pub fn new(false_positive_rate: f64, no_of_elements: usize) -> Self {
         assert!(
             false_positive_rate >= 0.0,
@@ -63,14 +63,14 @@ impl BloomFilter {
         true
     }
 
-    pub fn set_sstable_path(&mut self, sstable_path: Table) {
+    pub fn set_sstable_path(&mut self, sstable_path: Table<F>) {
         self.sstable_path = Some(sstable_path);
     }
 
     pub fn bloom_filters_within_key_range<'a>(
-        bloom_filters: &'a Vec<BloomFilter>,
+        bloom_filters: &'a Vec<BloomFilter<F>>,
         paths: Vec<&'a PathBuf>,
-    ) -> Vec<&'a BloomFilter> {
+    ) -> Vec<&'a BloomFilter<F>> {
         let mut filtered_bfs = Vec::new();
         paths.into_iter().for_each(|p| {
             bloom_filters.iter().for_each(|b| {
@@ -83,9 +83,9 @@ impl BloomFilter {
     }
 
     pub fn sstables_within_key_range<T: Hash>(
-        bloom_filters: Vec<&BloomFilter>,
+        bloom_filters: Vec<&BloomFilter<F>>,
         key: &T,
-    ) -> Option<Vec<Table>> {
+    ) -> Option<Vec<Table<F>>> {
         let mut sstables: Vec<Table> = Vec::new();
         for bloom_filter in bloom_filters {
             if bloom_filter.contains(key) {
@@ -134,7 +134,7 @@ impl BloomFilter {
     }
 
     /// Get SSTable path
-    pub fn get_sstable_path(&self) -> &Table {
+    pub fn get_sstable_path(&self) -> &Table<F> {
         // Retrieve the element count atomically.
         self.sstable_path.as_ref().unwrap()
     }
@@ -158,7 +158,7 @@ impl BloomFilter {
     }
 }
 
-impl Clone for BloomFilter {
+impl<F: FileAsync> Clone for BloomFilter<F> {
     fn clone(&self) -> Self {
         // Implement custom logic here if needed
         BloomFilter {

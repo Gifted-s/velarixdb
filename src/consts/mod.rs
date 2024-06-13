@@ -8,10 +8,6 @@ pub const WRITE_BUFFER_SIZE: usize = SizeUnit::Kilobytes.to_bytes(50);
 
 pub const DEFAULT_MAX_WRITE_BUFFER_NUMBER: usize = 2;
 
-pub const DEFAULT_TARGET_FILE_SIZE_MULTIPLIER: i32 = 1;
-
-pub const DEFAULT_TARGET_FILE_SIZE_BASE: usize = SizeUnit::Kilobytes.to_bytes(64);
-
 pub const DEFAULT_FALSE_POSITIVE_RATE: f64 = 1e-300;
 
 pub const VALUE_LOG_DIRECTORY_NAME: &str = "v_log";
@@ -92,3 +88,4 @@ pub const SIZE_OF_U64: usize = std::mem::size_of::<u64>();
 pub const SIZE_OF_U8: usize = std::mem::size_of::<u8>();
 
 pub const FLUSH_SIGNAL: u8 = 1;
+
