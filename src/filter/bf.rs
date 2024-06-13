@@ -1,4 +1,4 @@
-use crate::sstable::Table;
+use crate::{fs::{FileAsync, FileNode}, sst::Table};
 use bit_vec::BitVec;
 use std::{
     collections::hash_map::DefaultHasher,
@@ -74,7 +74,7 @@ impl BloomFilter {
         let mut filtered_bfs = Vec::new();
         paths.into_iter().for_each(|p| {
             bloom_filters.iter().for_each(|b| {
-                if b.get_sstable_path().data_file_path.as_path() == p.as_path() {
+                if b.get_sstable_path().data_file.path.as_path() == p.as_path() {
                     filtered_bfs.push(b)
                 }
             })

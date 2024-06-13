@@ -1,13 +1,17 @@
 use crate::{
     consts::{EOF, VLOG_FILE_NAME},
     err::Error,
+    fs::FileAsync,
 };
 use log::error;
 use std::{mem, path::PathBuf, sync::Arc};
-use tokio::io::{self, AsyncSeekExt, SeekFrom};
 use tokio::{
     fs,
     io::{AsyncReadExt, AsyncWriteExt},
+};
+use tokio::{
+    fs::File,
+    io::{self, AsyncSeekExt, SeekFrom},
 };
 use tokio::{fs::OpenOptions, sync::RwLock};
 use Error::*;
@@ -15,7 +19,7 @@ type TotalBytesRead = usize;
 #[derive(Debug, Clone)]
 pub struct ValueLog {
     pub file_path: PathBuf,
-    pub file: Arc<tokio::sync::RwLock<tokio::fs::File>>,
+    pub file: Arc<RwLock<File>>,
     pub head_offset: usize,
     pub tail_offset: usize,
 }

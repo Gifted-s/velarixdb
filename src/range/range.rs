@@ -237,7 +237,7 @@ impl<'a> DataStore<'a, Key> {
             for b in self.bloom_filters.read().await.to_owned().into_iter() {
                 let bf_inner = b.to_owned();
                 let bf_sstable = bf_inner.sstable_path.to_owned().unwrap();
-                let data_path = bf_sstable.data_file_path.to_str().unwrap();
+                let data_path = bf_sstable.data_file.path.to_str().unwrap();
                 if bf_inner.contains(&start.to_vec()) || bf_inner.contains(&end.to_vec()) {
                     // add to sstable path
                     sstable_path.insert(data_path.to_owned(), bf_sstable.to_owned());
@@ -249,12 +249,12 @@ impl<'a> DataStore<'a, Key> {
             if !paths_from_key_range.is_empty() {
                 for range in paths_from_key_range.iter() {
                     if !sstable_path
-                        .contains_key(range.full_sst_path.data_file_path.to_str().unwrap())
+                        .contains_key(range.full_sst_path.data_file.path.to_str().unwrap())
                     {
                         sstable_path.insert(
                             range
                                 .full_sst_path
-                                .data_file_path
+                                .data_file.path
                                 .to_str()
                                 .unwrap()
                                 .to_owned(),

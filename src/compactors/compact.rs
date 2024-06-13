@@ -14,6 +14,7 @@ use crate::consts::{
     DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI, DEFAULT_COMPACTION_INTERVAL_MILLI,
     DEFAULT_TOMBSTONE_COMPACTION_INTERVAL_MILLI,
 };
+use crate::fs::{FileAsync, FileNode};
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::fs;
 use tokio::sync::mpsc::Receiver;
@@ -24,7 +25,7 @@ use uuid::Uuid;
 use crate::types::{FlushSignal, Key};
 use crate::{
     consts::TOMB_STONE_TTL, err::Error, filter::BloomFilter, key_range::KeyRange, memtable::Entry,
-    sstable::Table,
+    sst::Table,
 };
 use Error::*;
 
@@ -306,7 +307,7 @@ impl Compactor {
                             Ok(sst_file_path) => {
                                 println!(
                                     "SSTable written to Disk data path: {:?}, index path {:?}",
-                                    sst_file_path.data_file_path, sst_file_path.index_file_path
+                                    sst_file_path.data_file.path, sst_file_path.index_file.path
                                 );
                                 // Step 4: Map this bloom filter to its sstable file path
                                 let sstable_data_file_path = sst_file_path.get_data_file_path();
@@ -342,7 +343,7 @@ impl Compactor {
                                         {
                                             Ok(()) => {
                                                 key_range.write().await.remove(
-                                                    bf.get_sstable_path().data_file_path.clone(),
+                                                    bf.get_sstable_path().data_file.path.clone(),
                                                 );
                                                 info!("Stale SSTable File successfully deleted.")
                                             }

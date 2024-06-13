@@ -1,10 +1,10 @@
 use crate::consts::{
-    BUCKET_DIRECTORY_PREFIX, BUCKET_HIGH, BUCKET_LOW, DEFAULT_TARGET_FILE_SIZE_BASE,
-    DEFAULT_TARGET_FILE_SIZE_MULTIPLIER, MAX_TRESHOLD, MIN_SSTABLE_SIZE, MIN_TRESHOLD,
+    BUCKET_DIRECTORY_PREFIX, BUCKET_HIGH, BUCKET_LOW, MAX_TRESHOLD, MIN_SSTABLE_SIZE, MIN_TRESHOLD,
 };
 use crate::err::Error;
+use crate::fs::{FileAsync, FileNode};
 use crate::memtable::{InsertionTime, IsDeleted};
-use crate::sstable::Table;
+use crate::sst::Table;
 use crate::types::{Key, ValOffset};
 use chrono::Utc;
 use crossbeam_skiplist::SkipMap;
@@ -31,7 +31,7 @@ pub struct Bucket {
     pub(crate) dir: PathBuf,
     pub(crate) size: usize,
     pub(crate) avarage_size: usize,
-    pub(crate) sstables: Arc<tokio::sync::RwLock<Vec<Table>>>,
+    pub(crate) sstables: Arc<RwLock<Vec<Table>>>,
 }
 
 use Error::*;
@@ -43,15 +43,12 @@ pub trait InsertableToBucket: Debug + Send + Sync {
     fn find_smallest_key_from_table(&self) -> Result<Vec<u8>, Error>;
 }
 
-impl Bucket {
+impl Bucket{
     pub async fn new(dir: PathBuf) -> Self {
         let bucket_id = Uuid::new_v4();
         let bucket_dir =
             dir.join(BUCKET_DIRECTORY_PREFIX.to_string() + bucket_id.to_string().as_str());
-
-        if !bucket_dir.exists() {
-            let _ = fs::create_dir_all(&bucket_dir).await;
-        }
+        FileNode::create_dir_all(bucket_dir.to_owned()).await;
         Self {
             id: bucket_id,
             dir: bucket_dir,
@@ -78,7 +75,9 @@ impl Bucket {
         })
     }
 
-    async fn calculate_buckets_avg_size(sstables: Vec<Table>) -> Result<usize, Error> {
+    async fn calculate_buckets_avg_size(
+        sstables: Vec<Table>,
+    ) -> Result<usize, Error> {
         if sstables.is_empty() {
             return Ok(0);
         }
@@ -86,7 +85,7 @@ impl Bucket {
         let sst = sstables;
         let fetch_files_meta = sst
             .iter()
-            .map(|s| tokio::spawn(fs::metadata(s.data_file_path.clone())));
+            .map(|s| tokio::spawn(fs::metadata(s.data_file.path.clone())));
         for meta_task in fetch_files_meta {
             let meta_data = meta_task
                 .await
@@ -143,13 +142,9 @@ impl BucketMap {
                 let sstable_directory = bucket
                     .dir
                     .join(format!("sstable_{}", created_at.timestamp_millis()));
-
                 let mut sstable = Table::new(sstable_directory).await;
-
                 sstable.set_entries(table.get_entries());
-
                 sstable.write_to_file().await?;
-
                 bucket.sstables.write().await.push(sstable.clone());
                 // bucket
                 //     .sstables
@@ -166,17 +161,15 @@ impl BucketMap {
         // create a new bucket if none of the condition above was satisfied
         if !added_to_bucket {
             let mut bucket = Bucket::new(self.dir.clone()).await;
-
             let sstable_directory = bucket
                 .dir
                 .join(format!("sstable_{}", created_at.timestamp_millis()));
-
             let mut sstable = Table::new(sstable_directory).await;
             sstable.set_entries(table.get_entries());
             sstable.write_to_file().await?;
 
             bucket.sstables.write().await.push(sstable.clone());
-            bucket.avarage_size = fs::metadata(sstable.clone().data_file_path)
+            bucket.avarage_size = fs::metadata(sstable.clone().data_file.path)
                 .await
                 .map_err(|err| GetFileMetaDataError(err))?
                 .len() as usize;
@@ -221,15 +214,12 @@ impl BucketMap {
         sstables_to_delete: &Vec<(BucketID, Vec<Table>)>,
     ) -> Result<bool, Error> {
         let mut all_sstables_deleted = true;
-
         let mut buckets_to_delete: Vec<&BucketID> = Vec::new();
-
         for (bucket_id, sst_paths) in sstables_to_delete {
             if let Some(bucket) = self.buckets.get_mut(bucket_id) {
                 let bucket_clone = bucket.clone();
                 let b = bucket_clone.sstables.read().await;
                 let sstables_remaining = b.get(sst_paths.len()..).unwrap_or_default();
-
                 if !sstables_remaining.is_empty() {
                     let new_average =
                         Bucket::calculate_buckets_avg_size(sstables_remaining.to_vec()).await?;
@@ -268,7 +258,7 @@ impl BucketMap {
                         all_sstables_deleted = false;
                         error!(
                             "SStable directory not successfully deleted path={:?}, err={:?} ",
-                            sst.data_file_path, err
+                            sst.data_file.path, err
                         );
                     } else {
                         info!("SS Table directory deleted successfully.");
