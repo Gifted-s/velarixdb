@@ -16,22 +16,22 @@ use tokio::fs;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-type SSTablesToRemove = Vec<(BucketID, Vec<Table<FileNode>>)>;
-type BucketsToCompact = Result<(Vec<Bucket<FileNode>>, SSTablesToRemove), Error>;
+type SSTablesToRemove = Vec<(BucketID, Vec<Table>)>;
+type BucketsToCompact = Result<(Vec<Bucket>, SSTablesToRemove), Error>;
 pub type BucketID = Uuid;
 
 #[derive(Debug, Clone)]
-pub struct BucketMap<F: FileAsync> {
+pub struct BucketMap {
     pub dir: PathBuf,
-    pub buckets: IndexMap<BucketID, Bucket<F>>,
+    pub buckets: IndexMap<BucketID, Bucket>,
 }
 #[derive(Debug, Clone)]
-pub struct Bucket<F: FileAsync> {
+pub struct Bucket {
     pub(crate) id: BucketID,
     pub(crate) dir: PathBuf,
     pub(crate) size: usize,
     pub(crate) avarage_size: usize,
-    pub(crate) sstables: Arc<RwLock<Vec<Table<F>>>>,
+    pub(crate) sstables: Arc<RwLock<Vec<Table>>>,
 }
 
 use Error::*;
@@ -43,12 +43,12 @@ pub trait InsertableToBucket: Debug + Send + Sync {
     fn find_smallest_key_from_table(&self) -> Result<Vec<u8>, Error>;
 }
 
-impl<F:FileAsync> Bucket<F> {
+impl Bucket{
     pub async fn new(dir: PathBuf) -> Self {
         let bucket_id = Uuid::new_v4();
         let bucket_dir =
             dir.join(BUCKET_DIRECTORY_PREFIX.to_string() + bucket_id.to_string().as_str());
-        FileNode::create_dir_all(bucket_dir).await;
+        FileNode::create_dir_all(bucket_dir.to_owned()).await;
         Self {
             id: bucket_id,
             dir: bucket_dir,
@@ -60,9 +60,9 @@ impl<F:FileAsync> Bucket<F> {
     pub async fn new_with_id_dir_average_and_sstables(
         dir: PathBuf,
         id: BucketID,
-        sstables: Vec<Table<F>>,
+        sstables: Vec<Table>,
         mut avarage_size: usize,
-    ) -> Result<Bucket<F>, Error> {
+    ) -> Result<Bucket, Error> {
         if avarage_size == 0 {
             avarage_size = Bucket::calculate_buckets_avg_size(sstables.clone()).await?;
         }
@@ -76,7 +76,7 @@ impl<F:FileAsync> Bucket<F> {
     }
 
     async fn calculate_buckets_avg_size(
-        sstables: Vec<Table<F>>,
+        sstables: Vec<Table>,
     ) -> Result<usize, Error> {
         if sstables.is_empty() {
             return Ok(0);
@@ -85,7 +85,7 @@ impl<F:FileAsync> Bucket<F> {
         let sst = sstables;
         let fetch_files_meta = sst
             .iter()
-            .map(|s| tokio::spawn(fs::metadata(s.data_file_path.clone())));
+            .map(|s| tokio::spawn(fs::metadata(s.data_file.path.clone())));
         for meta_task in fetch_files_meta {
             let meta_data = meta_task
                 .await
@@ -96,7 +96,7 @@ impl<F:FileAsync> Bucket<F> {
         Ok(all_sstable_size / sst.len() as u64 as usize)
     }
 
-    async fn extract_sstables(&self) -> Result<(Vec<Table<F>>, usize), Error> {
+    async fn extract_sstables(&self) -> Result<(Vec<Table>, usize), Error> {
         if self.sstables.read().await.len() < MIN_TRESHOLD {
             return Ok((vec![], 0));
         }
@@ -116,14 +116,14 @@ impl<F:FileAsync> Bucket<F> {
     }
 }
 
-impl<F: FileAsync> BucketMap<F> {
+impl BucketMap {
     pub fn new(dir: PathBuf) -> Self {
         Self {
             dir,
             buckets: IndexMap::new(),
         }
     }
-    pub fn set_buckets(&mut self, buckets: IndexMap<BucketID, Bucket<F>>) {
+    pub fn set_buckets(&mut self, buckets: IndexMap<BucketID, Bucket>) {
         self.buckets = buckets
     }
 
@@ -131,7 +131,7 @@ impl<F: FileAsync> BucketMap<F> {
         &mut self,
         table: Arc<Box<T>>,
         hotness: u64,
-    ) -> Result<Table<impl FileAsync>, Error> {
+    ) -> Result<Table, Error> {
         let added_to_bucket = false;
         let created_at = Utc::now();
         for (_, bucket) in &mut self.buckets {
@@ -169,7 +169,7 @@ impl<F: FileAsync> BucketMap<F> {
             sstable.write_to_file().await?;
 
             bucket.sstables.write().await.push(sstable.clone());
-            bucket.avarage_size = fs::metadata(sstable.clone().data_file_path)
+            bucket.avarage_size = fs::metadata(sstable.clone().data_file.path)
                 .await
                 .map_err(|err| GetFileMetaDataError(err))?
                 .len() as usize;
@@ -211,7 +211,7 @@ impl<F: FileAsync> BucketMap<F> {
     // NOTE: This should be called only after compaction is complete
     pub async fn delete_sstables(
         &mut self,
-        sstables_to_delete: &Vec<(BucketID, Vec<Table<FileNode>>)>,
+        sstables_to_delete: &Vec<(BucketID, Vec<Table>)>,
     ) -> Result<bool, Error> {
         let mut all_sstables_deleted = true;
         let mut buckets_to_delete: Vec<&BucketID> = Vec::new();
@@ -258,7 +258,7 @@ impl<F: FileAsync> BucketMap<F> {
                         all_sstables_deleted = false;
                         error!(
                             "SStable directory not successfully deleted path={:?}, err={:?} ",
-                            sst.data_file_path, err
+                            sst.data_file.path, err
                         );
                     } else {
                         info!("SS Table directory deleted successfully.");

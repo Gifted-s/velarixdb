@@ -41,19 +41,19 @@ use tokio::sync::mpsc::Receiver;
 // }
 
 #[derive(Debug, Clone)]
-pub struct Flusher<F: FileAsync> {
+pub struct Flusher{
     pub(crate) read_only_memtable: Arc<RwLock<IndexMap<K, Arc<RwLock<InMemoryTable<K>>>>>>,
-    pub(crate) bucket_map: Arc<RwLock<BucketMap<F>>>,
+    pub(crate) bucket_map: Arc<RwLock<BucketMap>>,
     pub(crate) bloom_filters: Arc<RwLock<Vec<BloomFilter>>>,
     pub(crate) key_range: Arc<RwLock<KeyRange>>,
     pub(crate) use_ttl: bool,
     pub(crate) entry_ttl: u64,
 }
 
-impl<F: FileAsync> Flusher<F> {
+impl Flusher {
     pub fn new(
         read_only_memtable: Arc<RwLock<IndexMap<K, Arc<RwLock<InMemoryTable<K>>>>>>,
-        bucket_map: Arc<RwLock<BucketMap<F>>>,
+        bucket_map: Arc<RwLock<BucketMap>>,
         bloom_filters: Arc<RwLock<Vec<BloomFilter>>>,
         key_range: Arc<RwLock<KeyRange>>,
         use_ttl: bool,

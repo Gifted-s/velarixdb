@@ -1,5 +1,6 @@
 use crate::consts::{EOF, SIZE_OF_U32};
 use crate::err::Error;
+use crate::fs::{FileAsync, FileNode};
 use crate::types::Key;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -19,7 +20,7 @@ struct IndexEntry {
 pub struct Index {
     entries: Vec<IndexEntry>,
     file_path: PathBuf,
-    file: Arc<tokio::sync::RwLock<tokio::fs::File>>,
+    file: FileNode,
 }
 
 pub struct RangeOffset {
@@ -37,7 +38,7 @@ impl RangeOffset {
 }
 
 impl Index {
-    pub fn new(file_path: PathBuf, file: Arc<RwLock<tokio::fs::File>>) -> Self {
+    pub fn new(file_path: PathBuf, file: FileNode) -> Self {
         Self {
             file_path,
             entries: Vec::new(),
@@ -54,7 +55,7 @@ impl Index {
     }
 
     pub async fn write_to_file(&self) -> Result<(), Error> {
-        let mut file = self.file.write().await;
+        let mut file = self.file.w_lock().await;
         for entry in &self.entries {
             let entry_len = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U32;
 
@@ -83,7 +84,7 @@ impl Index {
     pub(crate) async fn get(&self, searched_key: &[u8]) -> Result<Option<u32>, Error> {
         let mut block_offset = -1;
         // Open the file in read mode
-        let mut file = self.file.write().await;
+        let mut file = self.file.w_lock().await;
         // read bloom filter to check if the key possbly exists in the sstable
         // search sstable for key
         loop {
@@ -155,7 +156,7 @@ impl Index {
         let mut range_offset = RangeOffset::new(0, 0);
         // Open the file in read mode
         let file_path = PathBuf::from(&self.file_path);
-        let mut file = self.file.write().await;
+        let mut file = self.file.w_lock().await;
         // read bloom filter to check if the key possbly exists in the sstable
         // search sstable for key
         loop {

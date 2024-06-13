@@ -14,7 +14,7 @@ use crate::consts::{
     DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI, DEFAULT_COMPACTION_INTERVAL_MILLI,
     DEFAULT_TOMBSTONE_COMPACTION_INTERVAL_MILLI,
 };
-use crate::fs::FileAsync;
+use crate::fs::{FileAsync, FileNode};
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::fs;
 use tokio::sync::mpsc::Receiver;
@@ -53,7 +53,7 @@ pub enum CompactionReason {
     Manual,
 }
 #[derive(Debug)]
-pub struct MergedSSTable<F: > {
+pub struct MergedSSTable {
     pub sstable: Box<dyn InsertableToBucket>,
     pub hotness: u64,
     pub bloom_filter: BloomFilter,
@@ -95,9 +95,9 @@ impl Compactor {
         }
     }
     /// TODO: This method will be used to check for the condition to trigger tombstone compaction
-    pub fn tombstone_compaction_condition_background_checker<F: FileAsync>(
+    pub fn tombstone_compaction_condition_background_checker(
         &self,
-        rcx: Arc<RwLock<Receiver<BucketMap<F>>>>,
+        rcx: Arc<RwLock<Receiver<BucketMap>>>,
     ) {
         let receiver = Arc::clone(&rcx);
         tokio::spawn(async move {
@@ -111,9 +111,9 @@ impl Compactor {
         });
     }
 
-    pub fn start_periodic_background_compaction<F: FileAsync>(
+    pub fn start_periodic_background_compaction(
         &self,
-        bucket_map: Arc<RwLock<BucketMap<F>>>,
+        bucket_map: Arc<RwLock<BucketMap>>,
         bloom_filters: Arc<RwLock<Vec<BloomFilter>>>,
         key_range: Arc<RwLock<KeyRange>>,
     ) {
@@ -152,10 +152,10 @@ impl Compactor {
         });
     }
 
-    pub fn start_flush_listner<F:FileAsync>(
+    pub fn start_flush_listner(
         &self,
         signal_receiver: &async_broadcast::Receiver<FlushSignal>,
-        bucket_map: Arc<RwLock<BucketMap<F>>>,
+        bucket_map: Arc<RwLock<BucketMap>>,
         bloom_filters: Arc<RwLock<Vec<BloomFilter>>>,
         key_range: Arc<RwLock<KeyRange>>,
     ) {
@@ -217,10 +217,10 @@ impl Compactor {
         });
     }
 
-    pub async fn handle_compaction<F: FileAsync>(
+    pub async fn handle_compaction(
         use_ttl: bool,
         entry_ttl: u64,
-        current_buckets: Arc<RwLock<BucketMap<F>>>,
+        current_buckets: Arc<RwLock<BucketMap>>,
         current_bloom_filters: Arc<RwLock<Vec<BloomFilter>>>,
         current_key_range: Arc<RwLock<KeyRange>>,
     ) -> Result<bool, Error> {
@@ -244,14 +244,14 @@ impl Compactor {
         }
         return Ok(true);
     }
-    pub async fn get_extracted<F:FileAsync>(
-        bucket_map: Arc<RwLock<BucketMap<F>>>,
-    ) -> Result<(Vec<Bucket<F>>, Vec<(Uuid, Vec<Table<F>>)>), Error> {
+    pub async fn get_extracted(
+        bucket_map: Arc<RwLock<BucketMap>>,
+    ) -> Result<(Vec<Bucket>, Vec<(Uuid, Vec<Table>)>), Error> {
         bucket_map.read().await.extract_buckets_to_compact().await
     }
-    pub async fn run_compaction<F:FileAsync>(
+    pub async fn run_compaction(
         &mut self,
-        bucket_map: Arc<RwLock<BucketMap<F>>>,
+        bucket_map: Arc<RwLock<BucketMap>>,
         bloom_filters: Arc<RwLock<Vec<BloomFilter>>>,
         key_range: Arc<RwLock<KeyRange>>,
     ) -> Result<bool, Error> {
@@ -307,7 +307,7 @@ impl Compactor {
                             Ok(sst_file_path) => {
                                 println!(
                                     "SSTable written to Disk data path: {:?}, index path {:?}",
-                                    sst_file_path.data_file_path, sst_file_path.index_file_path
+                                    sst_file_path.data_file.path, sst_file_path.index_file.path
                                 );
                                 // Step 4: Map this bloom filter to its sstable file path
                                 let sstable_data_file_path = sst_file_path.get_data_file_path();
@@ -343,7 +343,7 @@ impl Compactor {
                                         {
                                             Ok(()) => {
                                                 key_range.write().await.remove(
-                                                    bf.get_sstable_path().data_file_path.clone(),
+                                                    bf.get_sstable_path().data_file.path.clone(),
                                                 );
                                                 info!("Stale SSTable File successfully deleted.")
                                             }
@@ -408,10 +408,10 @@ impl Compactor {
         }
     }
 
-    pub async fn clean_up_after_compaction<F: FileAsync>(
+    pub async fn clean_up_after_compaction(
         &self,
-        buckets: Arc<RwLock<BucketMap<F>>>,
-        sstables_to_delete: &Vec<(BucketID, Vec<Table<F>>)>,
+        buckets: Arc<RwLock<BucketMap>>,
+        sstables_to_delete: &Vec<(BucketID, Vec<Table>)>,
         bloom_filters_with_both_old_and_new_sstables: Arc<RwLock<Vec<BloomFilter>>>,
         key_range: Arc<RwLock<KeyRange>>,
     ) -> Result<Option<bool>, Error> {
@@ -446,10 +446,10 @@ impl Compactor {
         Ok(None)
     }
 
-    pub async fn filter_out_old_bloom_filters<F:FileAsync>(
+    pub async fn filter_out_old_bloom_filters(
         &self,
         bloom_filters_with_both_old_and_new_sstables: Arc<RwLock<Vec<BloomFilter>>>,
-        sstables_to_delete: &Vec<(Uuid, Vec<Table<F>>)>,
+        sstables_to_delete: &Vec<(Uuid, Vec<Table>)>,
     ) -> Option<bool> {
         let mut bloom_filters_map: HashMap<PathBuf, BloomFilter> =
             bloom_filters_with_both_old_and_new_sstables
@@ -477,9 +477,9 @@ impl Compactor {
         Some(true)
     }
 
-    async fn merge_sstables_in_buckets<F: FileAsync>(
+    async fn merge_sstables_in_buckets(
         &mut self,
-        buckets: &Vec<Bucket<F>>,
+        buckets: &Vec<Bucket>,
     ) -> Result<Vec<MergedSSTable>, Error> {
         let mut merged_sstables: Vec<MergedSSTable> = Vec::new();
         for b in buckets.iter() {

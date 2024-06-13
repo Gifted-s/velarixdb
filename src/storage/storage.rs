@@ -11,12 +11,13 @@ use crate::err::Error;
 use crate::err::Error::*;
 use crate::filter::BloomFilter;
 use crate::flusher::{FlushDataMemTable, Flusher};
+use crate::fs::FileNode;
 use crate::index::Index;
 use crate::key_range::KeyRange;
 use crate::memtable::{Entry, InMemoryTable};
 use crate::meta::Meta;
 use crate::range::RangeIterator;
-use crate::sst::Table;
+use crate::sst::{Table, TableFile};
 use crate::types::{self, FlushSignal, Key, ValOffset};
 use crate::value_log::ValueLog;
 use async_broadcast::broadcast;
@@ -290,8 +291,8 @@ impl<'a> DataStore<'a, Key> {
                     Some(sstables_within_key_range) => {
                         for sstable in sstables_within_key_range.iter() {
                             let sparse_index = Index::new(
-                                sstable.index_file_path.clone(),
-                                sstable.index_file.clone(),
+                                sstable.index_file.path.clone(),
+                                sstable.index_file.file.clone(),
                             );
                             let block_offset_res = sparse_index.get(&key).await;
                             match block_offset_res {
@@ -638,12 +639,11 @@ impl<'a> DataStore<'a, Key> {
 
             let sst_file = Table {
                 dir: sstable_path.as_path().to_owned(),
-                data_file_path,
-                index_file_path,
                 hotness: 1,
                 created_at: created_at.timestamp_millis() as u64,
-                data_file,
-                index_file,
+                //TODO// instead of unwrapping this can return a file already exisit error, handle it
+                data_file: TableFile { file: FileNode::new(data_file_path.to_owned(), crate::fs::FileType::SSTable).await.unwrap(), path: data_file_path },
+                index_file: TableFile { file: FileNode::new(index_file_path.to_owned(), crate::fs::FileType::Index).await.unwrap(), path: index_file_path },
                 size: 0, // TODO
                 entries: Arc::new(SkipMap::new()),
             };

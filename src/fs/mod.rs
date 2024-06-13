@@ -1,10 +1,6 @@
 use async_trait::async_trait;
 use std::{
-    fs::Metadata,
-    io::SeekFrom,
-    path::{Path, PathBuf},
-    result,
-    sync::Arc,
+    fmt::Debug, fs::Metadata, io::SeekFrom, path::{Path, PathBuf}, result, sync::Arc
 };
 use tokio::{
     fs::{self, File, OpenOptions},
@@ -38,7 +34,7 @@ impl From<LockType<'_>> for &str {
         }
     }
 }
-
+#[derive(Debug, Clone)]
 pub enum FileType {
    Index,
    SSTable,
@@ -46,7 +42,7 @@ pub enum FileType {
 }
 
 #[async_trait]
-pub trait FileAsync: Send + Sync {
+pub trait FileAsync: Send + Sync + Debug + Clone{
     async fn create(path: PathBuf) -> Result<File, Error>;
 
     async fn create_dir_all(path: PathBuf) -> Result<(), Error>;
@@ -101,6 +97,7 @@ impl FileNode {
 #[async_trait]
 impl FileAsync for FileNode {
     async fn create(path: PathBuf) -> Result<File, Error> {
+        
         Ok(OpenOptions::new()
             .read(true)
             .append(true)

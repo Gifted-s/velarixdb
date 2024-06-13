@@ -16,7 +16,6 @@ use crate::{
     bucket::InsertableToBucket,
     consts::{
         DEFAULT_FALSE_POSITIVE_RATE, EOF, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, SIZE_OF_USIZE,
-        SSTABLE,
     },
     err::Error,
     filter::BloomFilter,
@@ -30,19 +29,29 @@ use crate::{
 use Error::*;
 
 #[derive(Debug, Clone)]
-pub struct Table<F: FileAsync> {
+pub struct TableFile<F: FileAsync> {
+    pub(crate) file: F,
+    pub(crate) path: PathBuf,
+}
+
+impl<F: FileAsync> TableFile<F> {
+    pub fn new(path: PathBuf, file: F) -> Self{
+        Self { path, file }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Table {
     pub(crate) dir: PathBuf,
-    pub(crate) data_file_path: PathBuf,
-    pub(crate) index_file_path: PathBuf,
     pub(crate) hotness: u64,
     pub(crate) size: usize,
     pub(crate) created_at: CreationTime,
-    pub(crate) data_file: F,
-    pub(crate) index_file: F,
+    pub(crate) data_file: TableFile<FileNode>,
+    pub(crate) index_file: TableFile<FileNode>,
     pub(crate) entries: Arc<SkipMap<Key, (ValOffset, InsertionTime, IsDeleted)>>,
 }
 
-impl<F: FileAsync> InsertableToBucket for Table<F> {
+impl InsertableToBucket for Table {
     fn get_entries(&self) -> Arc<SkipMap<Key, (ValOffset, InsertionTime, IsDeleted)>> {
         Arc::clone(&self.entries)
     }
@@ -58,21 +67,23 @@ impl<F: FileAsync> InsertableToBucket for Table<F> {
     }
 }
 
-impl<F: FileAsync> Table<F> {
+impl Table {
     pub async fn new(dir: PathBuf) -> Self {
         //TODO: handle error during file creation
         let (data_file_path, index_file_path, creation_time) =
             Table::generate_file_path(dir.to_owned()).await.unwrap();
-        let data_file = FileNode::new(data_file_path, crate::fs::FileType::SSTable).await.unwrap();
-        let index_file = FileNode::new(index_file_path, crate::fs::FileType::Index).await.unwrap();
-       
+        let data_file = FileNode::new(data_file_path.to_owned(), crate::fs::FileType::SSTable)
+            .await
+            .unwrap();
+        let index_file = FileNode::new(index_file_path.to_owned(), crate::fs::FileType::Index)
+            .await
+            .unwrap();
+
         Self {
-            data_file_path,
-            index_file_path,
             dir,
             hotness: 0,
-            index_file,
-            data_file,
+            index_file: TableFile::new(index_file_path, index_file),
+            data_file: TableFile::new(data_file_path, data_file),
             created_at: creation_time.timestamp_millis() as u64,
             entries: Arc::new(SkipMap::new()),
             size: 0,
@@ -82,7 +93,7 @@ impl<F: FileAsync> Table<F> {
         self.hotness += 1;
     }
     pub fn get_data_file_path(&self) -> PathBuf {
-        self.data_file_path.clone()
+        self.data_file.path.clone()
     }
 
     pub fn get_hotness(&self) -> u64 {
@@ -107,9 +118,9 @@ impl<F: FileAsync> Table<F> {
         start_offset: u32,
         searched_key: &[u8],
     ) -> Result<Option<(ValOffset, CreationTime, IsTombStone)>, Error> {
-        let data_file = &self.data_file;
-        let data_file_path = &self.data_file_path;
-        let mut data_file_lock = data_file.write().await;
+        let data_file = &self.data_file.file;
+        let data_file_path = &self.data_file.file;
+        let mut data_file_lock = data_file.w_lock().await;
 
         data_file_lock
             .seek(tokio::io::SeekFrom::Start(start_offset.into()))
@@ -123,7 +134,7 @@ impl<F: FileAsync> Table<F> {
                 .read(&mut key_len_bytes)
                 .await
                 .map_err(|err| SSTableFileReadError {
-                    path: data_file_path.clone(),
+                    path: data_file_path.file_path.clone(),
                     error: err,
                 })?;
             if bytes_read == 0 {
@@ -136,7 +147,7 @@ impl<F: FileAsync> Table<F> {
                     .read(&mut key)
                     .await
                     .map_err(|err| SSTableFileReadError {
-                        path: data_file_path.clone(),
+                        path: data_file_path.file_path.clone(),
                         error: err,
                     })?;
             if bytes_read == 0 {
@@ -150,7 +161,7 @@ impl<F: FileAsync> Table<F> {
                 .read(&mut val_offset_bytes)
                 .await
                 .map_err(|err| SSTableFileReadError {
-                    path: data_file_path.clone(),
+                    path: data_file_path.file_path.clone(),
                     error: err,
                 })?;
             if bytes_read == 0 {
@@ -164,7 +175,7 @@ impl<F: FileAsync> Table<F> {
                 .read(&mut created_at_bytes)
                 .await
                 .map_err(|err| SSTableFileReadError {
-                    path: data_file_path.clone(),
+                    path: data_file_path.file_path.clone(),
                     error: err,
                 })?;
             if bytes_read == 0 {
@@ -179,7 +190,7 @@ impl<F: FileAsync> Table<F> {
                 .read(&mut is_tombstone_byte)
                 .await
                 .map_err(|err| SSTableFileReadError {
-                    path: data_file_path.clone(),
+                    path: data_file_path.file_path.to_owned(),
                     error: err,
                 })?;
             if bytes_read == 0 {
@@ -198,17 +209,17 @@ impl<F: FileAsync> Table<F> {
         }
     }
 
-    pub(crate) async fn from_file(&self) -> Result<Option<Table<F>>, Error> {
+    pub(crate) async fn from_file(&self) -> Result<Option<Table>, Error> {
         let entries = Arc::new(SkipMap::new());
 
-        let data_file_path = self.data_file_path.clone();
+        let data_file_path = self.data_file.path.clone();
         let mut total_bytes_read = 0;
         // Open the file in read mode
         if !data_file_exists(&data_file_path) {
             return Ok(None);
         }
 
-        let mut data_file_lock = self.data_file.write().await;
+        let mut data_file_lock = self.data_file.file.w_lock().await;
         data_file_lock
             .seek(tokio::io::SeekFrom::Start(0))
             .await
@@ -322,12 +333,10 @@ impl<F: FileAsync> Table<F> {
             entries,
             size: total_bytes_read,
             dir: self.dir.clone(),
-            data_file_path,
-            index_file_path: self.index_file_path.clone(),
             hotness: self.hotness,
             created_at: self.created_at,
-            data_file: self.data_file.clone(),
-            index_file: self.index_file.clone(),
+            data_file: self.data_file.to_owned(),
+            index_file: self.index_file.to_owned(),
         }))
     }
 
@@ -355,7 +364,7 @@ impl<F: FileAsync> Table<F> {
         let index_file = &self.index_file;
 
         let mut blocks: Vec<Block> = Vec::new();
-        let mut table_index = Index::new(self.index_file_path.clone(), index_file.clone());
+        let mut table_index = Index::new(self.index_file.path.clone(), index_file.file.clone());
         let mut current_block = Block::new();
         for e in self.entries.iter() {
             let entry = Entry::new(e.key().clone(), e.value().0, e.value().1, e.value().2);
@@ -394,7 +403,7 @@ impl<F: FileAsync> Table<F> {
 
     async fn write_block(&self, block: &Block, table_index: &mut Index) -> Result<(), Error> {
         let data_file = &self.data_file;
-        let data_file_lock = data_file.read().await;
+        let data_file_lock = data_file.file.r_lock().await;
         // Get the current offset before writing (this will be the offset of the value stored in the sparse index)
         let offset = data_file_lock
             .metadata()
@@ -406,7 +415,7 @@ impl<F: FileAsync> Table<F> {
         // Store initial entry key and its sstable file offset in sparse index
         table_index.insert(first_entry.key_prefix, first_entry.key, offset as u32);
 
-        block.write_to_file(data_file.clone()).await?;
+        block.write_to_file(data_file.file.clone()).await?;
         Ok(())
     }
 
@@ -417,9 +426,9 @@ impl<F: FileAsync> Table<F> {
         let mut entries = Vec::new();
         // Open the file in read mode
 
-        let data_file = &self.data_file;
-        let data_file_path = &self.data_file_path;
-        let mut data_file_lock = data_file.write().await;
+        let data_file = &self.data_file.file;
+        let data_file_path = &self.data_file.path;
+        let mut data_file_lock = data_file.w_lock().await;
         let mut total_bytes_read = range_offset.start_offset as usize;
         data_file_lock
             .seek(tokio::io::SeekFrom::Start(range_offset.start_offset.into()))

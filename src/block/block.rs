@@ -59,7 +59,7 @@ use err::Error::*;
 
 use crate::{
     consts::{SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8},
-    err::{self, Error},
+    err::{self, Error}, fs::{FileAsync, FileNode},
 };
 const BLOCK_SIZE: usize = 4 * 1024; // 4KB
 
@@ -131,7 +131,7 @@ impl Block {
 
     pub async fn write_to_file(
         &self,
-        file: Arc<tokio::sync::RwLock<tokio::fs::File>>,
+        file: FileNode,
     ) -> Result<(), Error> {
         for entry in &self.data {
             let entry_len = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
@@ -156,7 +156,7 @@ impl Block {
                     error: io::Error::new(io::ErrorKind::InvalidInput, "Invalid Input"),
                 });
             }
-            let mut file_lock = file.write().await;
+            let mut file_lock = file.w_lock().await;
             file_lock
                 .write_all(&entry_vec)
                 .await

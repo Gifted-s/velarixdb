@@ -1,4 +1,4 @@
-use crate::{fs::FileAsync, sst::Table};
+use crate::{fs::{FileAsync, FileNode}, sst::Table};
 use bit_vec::BitVec;
 use std::{
     collections::hash_map::DefaultHasher,
@@ -11,14 +11,14 @@ use std::{
 };
 
 #[derive(Debug)]
-pub struct BloomFilter<F: FileAsync> {
-    pub sstable_path: Option<Table<F>>,
+pub struct BloomFilter {
+    pub sstable_path: Option<Table>,
     pub no_of_hash_func: usize,
     pub no_of_elements: AtomicU32,
     pub bit_vec: Arc<Mutex<BitVec>>,
 }
 
-impl<F:FileAsync> BloomFilter<F> {
+impl BloomFilter {
     pub fn new(false_positive_rate: f64, no_of_elements: usize) -> Self {
         assert!(
             false_positive_rate >= 0.0,
@@ -63,18 +63,18 @@ impl<F:FileAsync> BloomFilter<F> {
         true
     }
 
-    pub fn set_sstable_path(&mut self, sstable_path: Table<F>) {
+    pub fn set_sstable_path(&mut self, sstable_path: Table) {
         self.sstable_path = Some(sstable_path);
     }
 
     pub fn bloom_filters_within_key_range<'a>(
-        bloom_filters: &'a Vec<BloomFilter<F>>,
+        bloom_filters: &'a Vec<BloomFilter>,
         paths: Vec<&'a PathBuf>,
-    ) -> Vec<&'a BloomFilter<F>> {
+    ) -> Vec<&'a BloomFilter> {
         let mut filtered_bfs = Vec::new();
         paths.into_iter().for_each(|p| {
             bloom_filters.iter().for_each(|b| {
-                if b.get_sstable_path().data_file_path.as_path() == p.as_path() {
+                if b.get_sstable_path().data_file.path.as_path() == p.as_path() {
                     filtered_bfs.push(b)
                 }
             })
@@ -83,9 +83,9 @@ impl<F:FileAsync> BloomFilter<F> {
     }
 
     pub fn sstables_within_key_range<T: Hash>(
-        bloom_filters: Vec<&BloomFilter<F>>,
+        bloom_filters: Vec<&BloomFilter>,
         key: &T,
-    ) -> Option<Vec<Table<F>>> {
+    ) -> Option<Vec<Table>> {
         let mut sstables: Vec<Table> = Vec::new();
         for bloom_filter in bloom_filters {
             if bloom_filter.contains(key) {
@@ -134,7 +134,7 @@ impl<F:FileAsync> BloomFilter<F> {
     }
 
     /// Get SSTable path
-    pub fn get_sstable_path(&self) -> &Table<F> {
+    pub fn get_sstable_path(&self) -> &Table {
         // Retrieve the element count atomically.
         self.sstable_path.as_ref().unwrap()
     }
@@ -158,7 +158,7 @@ impl<F:FileAsync> BloomFilter<F> {
     }
 }
 
-impl<F: FileAsync> Clone for BloomFilter<F> {
+impl Clone for BloomFilter {
     fn clone(&self) -> Self {
         // Implement custom logic here if needed
         BloomFilter {
