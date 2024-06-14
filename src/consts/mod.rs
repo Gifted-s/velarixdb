@@ -88,4 +88,3 @@ pub const SIZE_OF_U64: usize = std::mem::size_of::<u64>();
 pub const SIZE_OF_U8: usize = std::mem::size_of::<u8>();
 
 pub const FLUSH_SIGNAL: u8 = 1;
-

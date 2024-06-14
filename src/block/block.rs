@@ -59,7 +59,8 @@ use err::Error::*;
 
 use crate::{
     consts::{SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8},
-    err::{self, Error}, fs::{FileAsync, FileNode},
+    err::{self, Error},
+    fs::{FileAsync, FileNode},
 };
 const BLOCK_SIZE: usize = 4 * 1024; // 4KB
 
@@ -129,14 +130,11 @@ impl Block {
         Ok(())
     }
 
-    pub async fn write_to_file(
-        &self,
-        file: FileNode,
-    ) -> Result<(), Error> {
+    pub async fn write_to_file(&self, file: FileNode) -> Result<(), Error> {
         for entry in &self.data {
             let entry_len = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
             let mut entry_vec = Vec::with_capacity(entry_len);
-
+            //TODO: serialize
             //add key len
             entry_vec.extend_from_slice(&(entry.key_prefix).to_le_bytes());
 
@@ -156,15 +154,9 @@ impl Block {
                     error: io::Error::new(io::ErrorKind::InvalidInput, "Invalid Input"),
                 });
             }
-            let mut file_lock = file.w_lock().await;
-            file_lock
-                .write_all(&entry_vec)
-                .await
-                .map_err(|err| SSTableWriteError { error: err })?;
-            file_lock
-                .flush()
-                .await
-                .map_err(|err| SSTableFlushError { error: err })?;
+            let file_lock = file.w_lock().await;
+            file.write_all(crate::fs::LockType::WriteOuterLock(&file_lock), &entry_vec)
+                .await?;
         }
         Ok(())
     }

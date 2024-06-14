@@ -4,6 +4,7 @@
 extern crate libc;
 extern crate nix;
 use crate::consts::{GC_CHUNK_SIZE, TAIL_ENTRY_KEY, TOMB_STONE_MARKER};
+use crate::fs::FileAsync;
 use crate::value_log::ValueLogEntry;
 use crate::{err, types};
 use crate::{err::Error, storage::*};
@@ -151,7 +152,7 @@ impl GarbageCollector {
 
         // call fsync on vLog
         let engine_r_lock = engine.read().await;
-        let v_log = engine_r_lock.val_log.file.write().await;
+        let v_log = engine_r_lock.val_log.file.w_lock().await;
         v_log
             .sync_all()
             .await

@@ -1,4 +1,7 @@
-use crate::{fs::{FileAsync, FileNode}, sst::Table};
+use crate::{
+    fs::{FileAsync, FileNode},
+    sst::Table,
+};
 use bit_vec::BitVec;
 use std::{
     collections::hash_map::DefaultHasher,

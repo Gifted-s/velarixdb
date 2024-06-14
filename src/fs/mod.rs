@@ -1,6 +1,11 @@
 use async_trait::async_trait;
 use std::{
-    fmt::Debug, fs::Metadata, io::SeekFrom, path::{Path, PathBuf}, result, sync::Arc
+    fmt::Debug,
+    fs::Metadata,
+    io::SeekFrom,
+    path::{Path, PathBuf},
+    result,
+    sync::Arc,
 };
 use tokio::{
     fs::{self, File, OpenOptions},
@@ -18,8 +23,8 @@ const RLOCK: &str = "RwLockReadGuard";
 const WLOCK: &str = "RwLockWriteGuard";
 
 pub enum LockType<'a> {
-    ReadOuterLock(RGuard<'a, File>),
-    WriteOuterLock(WGuard<'a, File>),
+    ReadOuterLock(&'a RGuard<'a, File>),
+    WriteOuterLock(&'a WGuard<'a, File>),
     ReadInnerLock,
     WriteInnerLock,
 }
@@ -36,13 +41,13 @@ impl From<LockType<'_>> for &str {
 }
 #[derive(Debug, Clone)]
 pub enum FileType {
-   Index,
-   SSTable,
-   ValueLog
+    Index,
+    SSTable,
+    ValueLog,
 }
 
 #[async_trait]
-pub trait FileAsync: Send + Sync + Debug + Clone{
+pub trait FileAsync: Send + Sync + Debug + Clone {
     async fn create(path: PathBuf) -> Result<File, Error>;
 
     async fn create_dir_all(path: PathBuf) -> Result<(), Error>;
@@ -84,10 +89,10 @@ pub struct FileNode {
 }
 
 impl FileNode {
-   pub async fn new(path: PathBuf, file_type: FileType) -> Result<Self, Error> {
+    pub async fn new(path: PathBuf, file_type: FileType) -> Result<Self, Error> {
         let file = FileNode::create(path.to_owned()).await?;
         return Ok(Self {
-           file_type,
+            file_type,
             file: Arc::new(RwLock::new(file)),
             file_path: path,
         });
@@ -97,7 +102,6 @@ impl FileNode {
 #[async_trait]
 impl FileAsync for FileNode {
     async fn create(path: PathBuf) -> Result<File, Error> {
-        
         Ok(OpenOptions::new()
             .read(true)
             .append(true)
@@ -135,14 +139,14 @@ impl FileAsync for FileNode {
 
     async fn read_buf(&self, file_lock: LockType<'_>, mut buf: &mut Buf) -> Result<usize, Error> {
         match file_lock {
-            LockType::WriteOuterLock(mut file) => {
+            LockType::WriteOuterLock(file) => {
                 Ok(file.read(&mut buf).await.map_err(|err| FileReadError {
                     path: self.file_path.clone(),
                     error: err,
                 })?)
             }
             LockType::WriteInnerLock => {
-                let mut file = self.w_lock().await;
+                let file = self.w_lock().await;
                 Ok(file.read(&mut buf).await.map_err(|err| FileReadError {
                     path: self.file_path.clone(),
                     error: err,

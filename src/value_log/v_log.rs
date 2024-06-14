@@ -1,7 +1,7 @@
 use crate::{
     consts::{EOF, VLOG_FILE_NAME},
     err::Error,
-    fs::FileAsync,
+    fs::{FileAsync, FileNode},
 };
 use log::error;
 use std::{mem, path::PathBuf, sync::Arc};
@@ -19,7 +19,7 @@ type TotalBytesRead = usize;
 #[derive(Debug, Clone)]
 pub struct ValueLog {
     pub file_path: PathBuf,
-    pub file: Arc<RwLock<File>>,
+    pub file: FileNode,
     pub head_offset: usize,
     pub tail_offset: usize,
 }
@@ -37,30 +37,11 @@ pub struct ValueLogEntry {
 impl ValueLog {
     pub async fn new(dir: &PathBuf) -> Result<Self, Error> {
         let dir_path = PathBuf::from(dir);
-
-        if !dir_path.exists() {
-            fs::create_dir_all(&dir_path)
-                .await
-                .map_err(|err| VLogDirectoryCreationError {
-                    path: dir_path.clone(),
-                    error: err,
-                })?;
-        }
-
+        FileNode::create_dir_all(dir_path.to_owned()).await;
         let file_path = dir_path.join(VLOG_FILE_NAME);
-
-        let file = Arc::new(RwLock::new(
-            OpenOptions::new()
-                .read(true)
-                .append(true)
-                .create(true)
-                .open(file_path.clone())
-                .await
-                .map_err(|err| VLogFileCreationError {
-                    path: dir_path,
-                    error: err,
-                })?,
-        ));
+        let file = FileNode::new(file_path.to_owned(), crate::fs::FileType::ValueLog)
+            .await
+            .unwrap();
         Ok(Self {
             file_path,
             head_offset: 0,
@@ -93,42 +74,33 @@ impl ValueLog {
             is_tombstone,
         );
         let serialized_data = v_log_entry.serialize();
-        // Open the file in write mode with the append flag.
-        let mut file = self.file.write().await;
 
         // Get the current offset before writing(this will be the offset of the value stored in the memtable)
-        let last_offset = file
-            .metadata()
-            .await
-            .map_err(|err| GetFileMetaDataError(err))?
-            .len();
-
-        file.write_all(&serialized_data)
-            .await
-            .expect("Failed to write to value log entry");
-        file.flush()
-            .await
-            .map_err(|error| VLogFileWriteError(error.to_string()))?;
-
+        let last_offset = self.file.size().await;
+        let data_file = &self.file;
+        let _ = data_file
+            .write_all(crate::fs::LockType::WriteInnerLock, &serialized_data)
+            .await;
         Ok(last_offset as usize)
     }
 
     pub async fn get(&self, start_offset: usize) -> Result<Option<(Vec<u8>, bool)>, Error> {
-        let mut file = self.file.write().await;
-        file.seek(SeekFrom::Start(start_offset as u64))
-            .await
-            .map_err(|err| ValueLogFileReadError {
-                error: io::Error::new(err.kind(), EOF),
-            })?;
+        let file = &self.file;
+        let file_lock = self.file.w_lock().await;
+        file.seek(
+            crate::fs::LockType::WriteOuterLock(&file_lock),
+            start_offset as u64,
+        )
+        .await?;
 
         // get key length
         let mut key_len_bytes = [0; mem::size_of::<u32>()];
-        let bytes_read =
-            file.read(&mut key_len_bytes)
-                .await
-                .map_err(|err| ValueLogFileReadError {
-                    error: io::Error::new(err.kind(), EOF),
-                })?;
+        let mut bytes_read = file
+            .read_buf(
+                crate::fs::LockType::WriteOuterLock(&file_lock),
+                &mut key_len_bytes,
+            )
+            .await?;
         if bytes_read == 0 {
             return Ok(None);
         }
@@ -136,12 +108,12 @@ impl ValueLog {
 
         // get value length
         let mut val_len_bytes = [0; mem::size_of::<u32>()];
-        let bytes_read =
-            file.read(&mut val_len_bytes)
-                .await
-                .map_err(|err| ValueLogFileReadError {
-                    error: io::Error::new(err.kind(), EOF),
-                })?;
+        bytes_read = file
+            .read_buf(
+                crate::fs::LockType::WriteOuterLock(&file_lock),
+                &mut val_len_bytes,
+            )
+            .await?;
         if bytes_read == 0 {
             return Ok(None);
         }
@@ -149,12 +121,12 @@ impl ValueLog {
 
         // get date length
         let mut creation_date_bytes = [0; mem::size_of::<u64>()];
-        let bytes_read =
-            file.read(&mut creation_date_bytes)
-                .await
-                .map_err(|err| ValueLogFileReadError {
-                    error: io::Error::new(err.kind(), EOF),
-                })?;
+        bytes_read = file
+            .read_buf(
+                crate::fs::LockType::WriteOuterLock(&file_lock),
+                &mut creation_date_bytes,
+            )
+            .await?;
         if bytes_read == 0 {
             return Ok(None);
         }
@@ -162,12 +134,12 @@ impl ValueLog {
 
         // get tombstone
         let mut istombstone_bytes = [0; mem::size_of::<u8>()];
-        let mut bytes_read =
-            file.read(&mut istombstone_bytes)
-                .await
-                .map_err(|err| ValueLogFileReadError {
-                    error: io::Error::new(err.kind(), EOF),
-                })?;
+        let mut bytes_read = file
+            .read_buf(
+                crate::fs::LockType::WriteOuterLock(&file_lock),
+                &mut istombstone_bytes,
+            )
+            .await?;
         if bytes_read == 0 {
             return Ok(None);
         }
@@ -176,21 +148,15 @@ impl ValueLog {
 
         let mut key = vec![0; key_len as usize];
         bytes_read = file
-            .read(&mut key)
-            .await
-            .map_err(|err| ValueLogFileReadError {
-                error: io::Error::new(err.kind(), EOF),
-            })?;
+            .read_buf(crate::fs::LockType::WriteOuterLock(&file_lock), &mut key)
+            .await?;
         if bytes_read == 0 {
             return Ok(None);
         }
         let mut value = vec![0; val_len as usize];
         bytes_read = file
-            .read(&mut value)
-            .await
-            .map_err(|err| ValueLogFileReadError {
-                error: io::Error::new(err.kind(), EOF),
-            })?;
+            .read_buf(crate::fs::LockType::WriteOuterLock(&file_lock), &mut value)
+            .await?;
 
         if bytes_read == 0 {
             return Ok(None);
@@ -199,20 +165,24 @@ impl ValueLog {
     }
 
     pub async fn recover(&mut self, start_offset: usize) -> Result<Vec<ValueLogEntry>, Error> {
-        let mut file = self.file.write().await;
-        file.seek(SeekFrom::Start(start_offset as u64))
-            .await
-            .map_err(|err| FileSeekError(err))?;
+        let file = &self.file;
+        let file_lock = self.file.w_lock().await;
+        file.seek(
+            crate::fs::LockType::WriteOuterLock(&file_lock),
+            start_offset as u64,
+        )
+        .await?;
+
         let mut entries = Vec::new();
         loop {
             // get key length
             let mut key_len_bytes = [0; mem::size_of::<u32>()];
-            let bytes_read =
-                file.read(&mut key_len_bytes)
-                    .await
-                    .map_err(|err| ValueLogFileReadError {
-                        error: io::Error::new(err.kind(), EOF),
-                    })?;
+            let mut bytes_read = file
+                .read_buf(
+                    crate::fs::LockType::WriteOuterLock(&file_lock),
+                    &mut key_len_bytes,
+                )
+                .await?;
             if bytes_read == 0 {
                 return Ok(entries);
             }
@@ -220,12 +190,12 @@ impl ValueLog {
 
             // get value length
             let mut val_len_bytes = [0; mem::size_of::<u32>()];
-            let bytes_read =
-                file.read(&mut val_len_bytes)
-                    .await
-                    .map_err(|err| ValueLogFileReadError {
-                        error: io::Error::new(err.kind(), EOF),
-                    })?;
+            bytes_read = file
+                .read_buf(
+                    crate::fs::LockType::WriteOuterLock(&file_lock),
+                    &mut val_len_bytes,
+                )
+                .await?;
             if bytes_read == 0 {
                 return Err(UnexpectedEOF(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
@@ -236,12 +206,12 @@ impl ValueLog {
 
             // get date length
             let mut creation_date_bytes = [0; mem::size_of::<u64>()];
-            let bytes_read =
-                file.read(&mut creation_date_bytes)
-                    .await
-                    .map_err(|err| ValueLogFileReadError {
-                        error: io::Error::new(err.kind(), EOF),
-                    })?;
+            bytes_read = file
+                .read_buf(
+                    crate::fs::LockType::WriteOuterLock(&file_lock),
+                    &mut creation_date_bytes,
+                )
+                .await?;
             if bytes_read == 0 {
                 return Err(UnexpectedEOF(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
@@ -251,12 +221,12 @@ impl ValueLog {
 
             // is tombstone
             let mut istombstone_bytes = [0; mem::size_of::<u8>()];
-            let mut bytes_read =
-                file.read(&mut istombstone_bytes)
-                    .await
-                    .map_err(|err| ValueLogFileReadError {
-                        error: io::Error::new(err.kind(), EOF),
-                    })?;
+            bytes_read = file
+                .read_buf(
+                    crate::fs::LockType::WriteOuterLock(&file_lock),
+                    &mut istombstone_bytes,
+                )
+                .await?;
             if bytes_read == 0 {
                 return Err(UnexpectedEOF(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
@@ -268,11 +238,9 @@ impl ValueLog {
 
             let mut key = vec![0; key_len as usize];
             bytes_read = file
-                .read(&mut key)
-                .await
-                .map_err(|err| ValueLogFileReadError {
-                    error: io::Error::new(err.kind(), EOF),
-                })?;
+                .read_buf(crate::fs::LockType::WriteOuterLock(&file_lock), &mut key)
+                .await?;
+
             if bytes_read == 0 {
                 return Err(UnexpectedEOF(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
@@ -282,11 +250,8 @@ impl ValueLog {
 
             let mut value = vec![0; val_len as usize];
             bytes_read = file
-                .read(&mut value)
-                .await
-                .map_err(|err| ValueLogFileReadError {
-                    error: io::Error::new(err.kind(), EOF),
-                })?;
+                .read_buf(crate::fs::LockType::WriteOuterLock(&file_lock), &mut value)
+                .await?;
 
             if bytes_read == 0 {
                 return Err(UnexpectedEOF(io::Error::new(
@@ -311,10 +276,13 @@ impl ValueLog {
         &self,
         bytes_to_collect: usize,
     ) -> Result<(Vec<ValueLogEntry>, TotalBytesRead), Error> {
-        let mut file = self.file.write().await;
-        file.seek(SeekFrom::Start(self.tail_offset as u64))
-            .await
-            .map_err(|err| FileSeekError(err))?;
+        let file = &self.file;
+        let file_lock = self.file.w_lock().await;
+        file.seek(
+            crate::fs::LockType::WriteOuterLock(&file_lock),
+            self.tail_offset as u64,
+        )
+        .await?;
         let mut entries = Vec::new();
 
         let mut total_bytes_read: usize = 0;
@@ -322,12 +290,13 @@ impl ValueLog {
         loop {
             // get key length
             let mut key_len_bytes = [0; mem::size_of::<u32>()];
-            let bytes_read =
-                file.read(&mut key_len_bytes)
-                    .await
-                    .map_err(|err| ValueLogFileReadError {
-                        error: io::Error::new(err.kind(), EOF),
-                    })?;
+            let bytes_read = file
+                .read_buf(
+                    crate::fs::LockType::WriteOuterLock(&file_lock),
+                    &mut key_len_bytes,
+                )
+                .await?;
+
             if bytes_read == 0 {
                 return Ok((entries, total_bytes_read));
             }
@@ -336,12 +305,13 @@ impl ValueLog {
 
             // get value length
             let mut val_len_bytes = [0; mem::size_of::<u32>()];
-            let bytes_read =
-                file.read(&mut val_len_bytes)
-                    .await
-                    .map_err(|err| ValueLogFileReadError {
-                        error: io::Error::new(err.kind(), EOF),
-                    })?;
+            let bytes_read = file
+                .read_buf(
+                    crate::fs::LockType::WriteOuterLock(&file_lock),
+                    &mut val_len_bytes,
+                )
+                .await?;
+
             if bytes_read == 0 {
                 return Err(UnexpectedEOF(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
@@ -353,12 +323,13 @@ impl ValueLog {
 
             // get date length
             let mut creation_date_bytes = [0; mem::size_of::<u64>()];
-            let bytes_read =
-                file.read(&mut creation_date_bytes)
-                    .await
-                    .map_err(|err| ValueLogFileReadError {
-                        error: io::Error::new(err.kind(), EOF),
-                    })?;
+            let bytes_read = file
+                .read_buf(
+                    crate::fs::LockType::WriteOuterLock(&file_lock),
+                    &mut creation_date_bytes,
+                )
+                .await?;
+
             if bytes_read == 0 {
                 return Err(UnexpectedEOF(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
@@ -369,12 +340,13 @@ impl ValueLog {
 
             // is tombstone
             let mut istombstone_bytes = [0; mem::size_of::<u8>()];
-            let mut bytes_read =
-                file.read(&mut istombstone_bytes)
-                    .await
-                    .map_err(|err| ValueLogFileReadError {
-                        error: io::Error::new(err.kind(), EOF),
-                    })?;
+            let mut bytes_read = file
+                .read_buf(
+                    crate::fs::LockType::WriteOuterLock(&file_lock),
+                    &mut istombstone_bytes,
+                )
+                .await?;
+
             if bytes_read == 0 {
                 return Err(UnexpectedEOF(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
@@ -386,12 +358,9 @@ impl ValueLog {
             let created_at = u64::from_le_bytes(creation_date_bytes);
 
             let mut key = vec![0; key_len as usize];
-            bytes_read = file
-                .read(&mut key)
-                .await
-                .map_err(|err| ValueLogFileReadError {
-                    error: io::Error::new(err.kind(), EOF),
-                })?;
+            file.read_buf(crate::fs::LockType::WriteOuterLock(&file_lock), &mut key)
+                .await?;
+
             if bytes_read == 0 {
                 return Err(UnexpectedEOF(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
@@ -401,12 +370,8 @@ impl ValueLog {
             total_bytes_read += bytes_read;
 
             let mut value = vec![0; val_len as usize];
-            bytes_read = file
-                .read(&mut value)
-                .await
-                .map_err(|err| ValueLogFileReadError {
-                    error: io::Error::new(err.kind(), EOF),
-                })?;
+            file.read_buf(crate::fs::LockType::WriteOuterLock(&file_lock), &mut value)
+                .await?;
 
             if bytes_read == 0 {
                 return Err(UnexpectedEOF(io::Error::new(

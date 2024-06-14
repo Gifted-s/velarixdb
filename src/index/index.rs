@@ -55,7 +55,7 @@ impl Index {
     }
 
     pub async fn write_to_file(&self) -> Result<(), Error> {
-        let mut file = self.file.w_lock().await;
+        let file = self.file.w_lock().await;
         for entry in &self.entries {
             let entry_len = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U32;
 
@@ -71,34 +71,31 @@ impl Index {
             entry_vec.extend_from_slice(&(entry.block_handle as u32).to_le_bytes());
             assert!(entry_len == entry_vec.len(), "Incorrect entry size");
 
-            file.write_all(&entry_vec)
-                .await
-                .map_err(|err| IndexFileWriteError(err))?;
-
-            file.flush().await.map_err(|err| IndexFileFlushError(err))?;
+            self.file
+                .write_all(crate::fs::LockType::WriteOuterLock(&file), &entry_vec)
+                .await?;
         }
-
         Ok(())
     }
 
     pub(crate) async fn get(&self, searched_key: &[u8]) -> Result<Option<u32>, Error> {
         let mut block_offset = -1;
         // Open the file in read mode
-        let mut file = self.file.w_lock().await;
-        // read bloom filter to check if the key possbly exists in the sstable
-        // search sstable for key
+        let file_lock = self.file.w_lock().await;
+        self.file
+            .seek(crate::fs::LockType::WriteOuterLock(&file_lock), 0)
+            .await?;
         loop {
             let mut key_len_bytes = [0; SIZE_OF_U32];
-            let mut bytes_read =
-                file.read(&mut key_len_bytes)
-                    .await
-                    .map_err(|err| SSTableFileReadError {
-                        path: self.file_path.clone(),
-                        error: err,
-                    })?;
+            let mut bytes_read = self
+                .file
+                .read_buf(
+                    crate::fs::LockType::WriteOuterLock(&file_lock),
+                    &mut key_len_bytes,
+                )
+                .await?;
             // If the end of the file is reached and no match is found, return non
             if bytes_read == 0 {
-                println!("0 bytes read");
                 if block_offset == -1 {
                     return Ok(None);
                 }
@@ -106,10 +103,9 @@ impl Index {
             }
             let key_len = u32::from_le_bytes(key_len_bytes);
             let mut key = vec![0; key_len as usize];
-            bytes_read = file
-                .read(&mut key)
-                .await
-                .map_err(|err| IndexFileReadError(err))?;
+            self.file
+                .read_buf(crate::fs::LockType::WriteOuterLock(&file_lock), &mut key)
+                .await?;
             if bytes_read == 0 {
                 return Err(UnexpectedEOF(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
@@ -117,13 +113,13 @@ impl Index {
                 )));
             }
             let mut key_offset_bytes = [0; SIZE_OF_U32];
-            bytes_read =
-                file.read(&mut key_offset_bytes)
-                    .await
-                    .map_err(|err| SSTableFileReadError {
-                        path: self.file_path.clone(),
-                        error: err,
-                    })?;
+            bytes_read = self
+                .file
+                .read_buf(
+                    crate::fs::LockType::WriteOuterLock(&file_lock),
+                    &mut key_offset_bytes,
+                )
+                .await?;
             if bytes_read == 0 {
                 return Err(UnexpectedEOF(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
@@ -155,29 +151,31 @@ impl Index {
     ) -> Result<RangeOffset, Error> {
         let mut range_offset = RangeOffset::new(0, 0);
         // Open the file in read mode
-        let file_path = PathBuf::from(&self.file_path);
-        let mut file = self.file.w_lock().await;
+        let file_lock = self.file.w_lock().await;
+        self.file
+            .seek(crate::fs::LockType::WriteOuterLock(&file_lock), 0)
+            .await?;
         // read bloom filter to check if the key possbly exists in the sstable
         // search sstable for key
         loop {
             let mut key_len_bytes = [0; SIZE_OF_U32];
-            let mut bytes_read =
-                file.read(&mut key_len_bytes)
-                    .await
-                    .map_err(|err| SSTableFileReadError {
-                        path: file_path.clone(),
-                        error: err,
-                    })?;
+            let mut bytes_read = self
+                .file
+                .read_buf(
+                    crate::fs::LockType::WriteOuterLock(&file_lock),
+                    &mut key_len_bytes,
+                )
+                .await?;
             // If the end of the file is reached and no match is found, return non
             if bytes_read == 0 {
                 return Ok(range_offset);
             }
             let key_len = u32::from_le_bytes(key_len_bytes);
             let mut key = vec![0; key_len as usize];
-            bytes_read = file
-                .read(&mut key)
-                .await
-                .map_err(|err| IndexFileReadError(err))?;
+            bytes_read = self
+                .file
+                .read_buf(crate::fs::LockType::WriteOuterLock(&file_lock), &mut key)
+                .await?;
             if bytes_read == 0 {
                 return Err(UnexpectedEOF(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
@@ -185,13 +183,13 @@ impl Index {
                 )));
             }
             let mut key_offset_bytes = [0; SIZE_OF_U32];
-            bytes_read =
-                file.read(&mut key_offset_bytes)
-                    .await
-                    .map_err(|err| SSTableFileReadError {
-                        path: file_path.clone(),
-                        error: err,
-                    })?;
+            bytes_read = self
+                .file
+                .read_buf(
+                    crate::fs::LockType::WriteOuterLock(&file_lock),
+                    &mut key_offset_bytes,
+                )
+                .await?;
             if bytes_read == 0 {
                 return Err(UnexpectedEOF(io::Error::new(
                     io::ErrorKind::UnexpectedEof,

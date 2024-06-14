@@ -43,7 +43,7 @@ pub trait InsertableToBucket: Debug + Send + Sync {
     fn find_smallest_key_from_table(&self) -> Result<Vec<u8>, Error>;
 }
 
-impl Bucket{
+impl Bucket {
     pub async fn new(dir: PathBuf) -> Self {
         let bucket_id = Uuid::new_v4();
         let bucket_dir =
@@ -75,9 +75,7 @@ impl Bucket{
         })
     }
 
-    async fn calculate_buckets_avg_size(
-        sstables: Vec<Table>,
-    ) -> Result<usize, Error> {
+    async fn calculate_buckets_avg_size(sstables: Vec<Table>) -> Result<usize, Error> {
         if sstables.is_empty() {
             return Ok(0);
         }

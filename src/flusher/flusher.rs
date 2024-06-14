@@ -41,7 +41,7 @@ use tokio::sync::mpsc::Receiver;
 // }
 
 #[derive(Debug, Clone)]
-pub struct Flusher{
+pub struct Flusher {
     pub(crate) read_only_memtable: Arc<RwLock<IndexMap<K, Arc<RwLock<InMemoryTable<K>>>>>>,
     pub(crate) bucket_map: Arc<RwLock<BucketMap>>,
     pub(crate) bloom_filters: Arc<RwLock<Vec<BloomFilter>>>,

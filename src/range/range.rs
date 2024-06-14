@@ -254,7 +254,8 @@ impl<'a> DataStore<'a, Key> {
                         sstable_path.insert(
                             range
                                 .full_sst_path
-                                .data_file.path
+                                .data_file
+                                .path
                                 .to_str()
                                 .unwrap()
                                 .to_owned(),

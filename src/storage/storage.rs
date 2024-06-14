@@ -642,8 +642,18 @@ impl<'a> DataStore<'a, Key> {
                 hotness: 1,
                 created_at: created_at.timestamp_millis() as u64,
                 //TODO// instead of unwrapping this can return a file already exisit error, handle it
-                data_file: TableFile { file: FileNode::new(data_file_path.to_owned(), crate::fs::FileType::SSTable).await.unwrap(), path: data_file_path },
-                index_file: TableFile { file: FileNode::new(index_file_path.to_owned(), crate::fs::FileType::Index).await.unwrap(), path: index_file_path },
+                data_file: TableFile {
+                    file: FileNode::new(data_file_path.to_owned(), crate::fs::FileType::SSTable)
+                        .await
+                        .unwrap(),
+                    path: data_file_path,
+                },
+                index_file: TableFile {
+                    file: FileNode::new(index_file_path.to_owned(), crate::fs::FileType::Index)
+                        .await
+                        .unwrap(),
+                    path: index_file_path,
+                },
                 size: 0, // TODO
                 entries: Arc::new(SkipMap::new()),
             };
