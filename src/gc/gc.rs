@@ -3,7 +3,10 @@
 
 extern crate libc;
 extern crate nix;
-use crate::consts::{GC_CHUNK_SIZE, TAIL_ENTRY_KEY, TOMB_STONE_MARKER};
+use crate::consts::{
+    DEFAULT_MAJOR_GARBAGE_COLLECTION_INTERVAL_MILLI, GC_CHUNK_SIZE, TAIL_ENTRY_KEY,
+    TOMB_STONE_MARKER,
+};
 use crate::fs::FileAsync;
 use crate::types::Key;
 use crate::value_log::ValueLogEntry;
@@ -15,8 +18,10 @@ use futures::future::join_all;
 use nix::libc::{c_int, off_t};
 use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
+use std::time::Duration;
 use std::{io, str};
 use tokio::sync::RwLock;
+use tokio::time::sleep;
 type K = types::Key;
 type V = types::Value;
 type VOffset = types::ValOffset;
@@ -30,7 +35,7 @@ const FALLOC_FL_KEEP_SIZE: c_int = 0x1;
 
 impl DataStore<'static, Key> {
     pub async fn garbage_collect(&'static mut self) {
-        let store = Arc::new(RwLock::new(&mut *self));
+        let store = Arc::new(RwLock::new(self));
         loop {
             let store_clone = store.clone();
             let invalid_entries = Arc::new(RwLock::new(Vec::new()));
@@ -43,6 +48,7 @@ impl DataStore<'static, Key> {
                 .val_log
                 .read_chunk_to_garbage_collect(GC_CHUNK_SIZE)
                 .await;
+            drop(store_read_lock);
             match chunk_res {
                 Ok((entries, total_bytes_read)) => {
                     let tasks = entries.into_iter().map(|entry| {
@@ -217,6 +223,10 @@ impl DataStore<'static, Key> {
                 }
                 Err(err) => {}
             }
+            sleep(Duration::from_millis(
+                DEFAULT_MAJOR_GARBAGE_COLLECTION_INTERVAL_MILLI,
+            ))
+            .await;
         }
     }
 
