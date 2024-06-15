@@ -48,7 +48,7 @@ impl Bucket {
         let bucket_id = Uuid::new_v4();
         let bucket_dir =
             dir.join(BUCKET_DIRECTORY_PREFIX.to_string() + bucket_id.to_string().as_str());
-        FileNode::create_dir_all(bucket_dir.to_owned()).await;
+        let _ = FileNode::create_dir_all(bucket_dir.to_owned()).await;
         Self {
             id: bucket_id,
             dir: bucket_dir,
@@ -199,7 +199,7 @@ impl BucketMap {
         Ok((buckets_to_compact, sstables_to_delete))
     }
     pub async fn is_balanced(&self) -> bool {
-        for (_, (_, bucket)) in self.buckets.iter().enumerate() {
+        for (_, bucket) in self.buckets.iter() {
             if bucket.sstable_count_exceeds_threshhold().await {
                 return false;
             }

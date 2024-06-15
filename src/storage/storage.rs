@@ -11,13 +11,13 @@ use crate::err::Error;
 use crate::err::Error::*;
 use crate::filter::BloomFilter;
 use crate::flusher::{FlushDataMemTable, Flusher};
-use crate::fs::FileNode;
-use crate::index::Index;
+use crate::fs::{DataFileNode, DataFs, FileNode, IndexFileNode, IndexFs};
+use crate::index::{Index, IndexFile};
 use crate::key_range::KeyRange;
 use crate::memtable::{Entry, InMemoryTable};
 use crate::meta::Meta;
 use crate::range::RangeIterator;
-use crate::sst::{Table, TableFile};
+use crate::sst::{DataFile, Table};
 use crate::types::{self, FlushSignal, Key, ValOffset};
 use crate::value_log::ValueLog;
 use async_broadcast::broadcast;
@@ -42,7 +42,7 @@ use tokio::{
 #[derive(Debug)]
 pub struct DataStore<'a, K>
 where
-    K: Hash + Ord + Send + Sync,
+    K: Hash + Ord + Send + Sync + Clone
 {
     pub dir: DirPath,
     pub active_memtable: InMemoryTable<K>,
@@ -347,6 +347,7 @@ impl<'a> DataStore<'a, Key> {
                 None => return Err(KeyNotFoundInValueLogError),
             };
         }
+
         Err(NotFoundInDB)
     }
     pub async fn delete(&mut self, key: &str) -> Result<bool, Error> {
@@ -616,24 +617,6 @@ impl<'a> DataStore<'a, Key> {
             let data_file_path = sst_files[1].to_owned();
             let index_file_path = sst_files[0].to_owned();
 
-            let data_file = Arc::new(RwLock::new(
-                OpenOptions::new()
-                    .read(true)
-                    .append(true)
-                    .create(false)
-                    .open(data_file_path.clone())
-                    .await
-                    .expect("error opening file"),
-            ));
-            let index_file = Arc::new(RwLock::new(
-                OpenOptions::new()
-                    .read(true)
-                    .append(true)
-                    .create(false)
-                    .open(index_file_path.clone())
-                    .await
-                    .expect("error opening file"),
-            ));
             // TODO: extract from file path
             let created_at = Utc::now();
 
@@ -642,16 +625,19 @@ impl<'a> DataStore<'a, Key> {
                 hotness: 1,
                 created_at: created_at.timestamp_millis() as u64,
                 //TODO// instead of unwrapping this can return a file already exisit error, handle it
-                data_file: TableFile {
-                    file: FileNode::new(data_file_path.to_owned(), crate::fs::FileType::SSTable)
+                data_file: DataFile {
+                    file: DataFileNode::new(data_file_path.to_owned(), crate::fs::FileType::SSTable)
                         .await
                         .unwrap(),
                     path: data_file_path,
                 },
-                index_file: TableFile {
-                    file: FileNode::new(index_file_path.to_owned(), crate::fs::FileType::Index)
-                        .await
-                        .unwrap(),
+                index_file: IndexFile {
+                    file: IndexFileNode::new(
+                        index_file_path.to_owned(),
+                        crate::fs::FileType::Index,
+                    )
+                    .await
+                    .unwrap(),
                     path: index_file_path,
                 },
                 size: 0, // TODO
@@ -665,7 +651,7 @@ impl<'a> DataStore<'a, Key> {
                 })?;
             // If bucket already exist in recovered bucket then just append sstable to its sstables vector
             if let Some(b) = recovered_buckets.get(&bucket_uuid) {
-                let mut temp_sstables = b.sstables.clone();
+                let temp_sstables = b.sstables.clone();
                 temp_sstables.write().await.push(sst_file.clone());
                 let updated_bucket = Bucket::new_with_id_dir_average_and_sstables(
                     buckets_dir.path(),
@@ -1053,41 +1039,41 @@ mod tests {
             }
         }
         println!("Write completed ");
-        sleep(Duration::from_millis(
-            DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI * 14,
-        ))
-        .await;
+        // sleep(Duration::from_millis(
+        //     DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI * 2,
+        // ))
+        // .await;
 
         // println!("Compaction completed !");
-        // //random_strings.sort();
-        // let tasks = random_strings
-        //     .get(0..(num_strings / 2))
-        //     .unwrap_or_default()
-        //     .iter()
-        //     .map(|k| {
-        //         let s_engine = Arc::clone(&sg);
-        //         let key = k.clone();
-        //         tokio::spawn(async move {
-        //             let value = s_engine.read().await;
-        //             let nn = value.get(&key).await;
-        //             return nn;
-        //         })
-        //     });
-        // let all_results = join_all(tasks).await;
-        // for tokio_response in all_results {
-        //     match tokio_response {
-        //         Ok(entry) => match entry {
-        //             Ok(v) => {
-        //                 println!("Found  {}", String::from_utf8_lossy(&v.0))
-        //                 //assert_eq!(v.0, b"boy");
-        //             }
-        //             Err(err) => assert!(false, "Error: {}", err.to_string()),
-        //         },
-        //         Err(err) => {
-        //             assert!(false, "{}", err.to_string())
-        //         }
-        //     }
-        // }
+        //random_strings.sort();
+        let tasks = random_strings
+            .get(0..(num_strings / 2))
+            .unwrap_or_default()
+            .iter()
+            .map(|k| {
+                let s_engine = Arc::clone(&sg);
+                let key = k.clone();
+                tokio::spawn(async move {
+                    let value = s_engine.read().await;
+                    let nn = value.get(&key).await;
+                    return nn;
+                })
+            });
+        let all_results = join_all(tasks).await;
+        for tokio_response in all_results {
+            match tokio_response {
+                Ok(entry) => match entry {
+                    Ok(v) => {
+                        println!("Found  {}", String::from_utf8_lossy(&v.0))
+                        //assert_eq!(v.0, b"boy");
+                    }
+                    Err(err) => assert!(false, "Error: {}", err.to_string()),
+                },
+                Err(err) => {
+                    assert!(false, "{}", err.to_string())
+                }
+            }
+        }
 
         let _ = fs::remove_dir_all(path.clone()).await;
     }

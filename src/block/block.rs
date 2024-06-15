@@ -48,12 +48,7 @@
 //! The index hashmap (`index`) maintains references to the keys and their corresponding offsets within the data vector.
 //!
 
-use std::sync::Arc;
-
-use tokio::{
-    fs::File,
-    io::{self, AsyncWriteExt},
-};
+use tokio::io::{self};
 
 use err::Error::*;
 
@@ -154,9 +149,7 @@ impl Block {
                     error: io::Error::new(io::ErrorKind::InvalidInput, "Invalid Input"),
                 });
             }
-            let file_lock = file.w_lock().await;
-            file.write_all(crate::fs::LockType::WriteOuterLock(&file_lock), &entry_vec)
-                .await?;
+            file.write_all(&entry_vec).await?;
         }
         Ok(())
     }

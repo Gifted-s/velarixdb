@@ -1,25 +1,35 @@
 use crate::{
     consts::{EOF, VLOG_FILE_NAME},
     err::Error,
-    fs::{FileAsync, FileNode},
+    fs::{FileAsync, FileNode, VLogFileNode, VLogFs},
 };
 use log::error;
-use std::{mem, path::PathBuf, sync::Arc};
-use tokio::{
-    fs,
-    io::{AsyncReadExt, AsyncWriteExt},
-};
-use tokio::{
-    fs::File,
-    io::{self, AsyncSeekExt, SeekFrom},
-};
-use tokio::{fs::OpenOptions, sync::RwLock};
-use Error::*;
+use std::{mem, path::PathBuf};
+use tokio::io::{self};
+
 type TotalBytesRead = usize;
+
+#[derive(Debug, Clone)]
+pub struct VFile<F>
+where
+    F: VLogFs,
+{
+    pub(crate) file: F,
+    pub(crate) path: PathBuf,
+}
+
+impl<F> VFile<F>
+where
+    F: VLogFs,
+{
+    pub fn new(path: PathBuf, file: F) -> Self {
+        Self { path, file }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ValueLog {
-    pub file_path: PathBuf,
-    pub file: FileNode,
+    pub content: VFile<VLogFileNode>,
     pub head_offset: usize,
     pub tail_offset: usize,
 }
@@ -30,32 +40,23 @@ pub struct ValueLogEntry {
     pub vsize: usize,
     pub key: Vec<u8>,
     pub value: Vec<u8>,
-    pub created_at: u64, // date to milliseconds
+    pub created_at: u64,
     pub is_tombstone: bool,
 }
 
 impl ValueLog {
     pub async fn new(dir: &PathBuf) -> Result<Self, Error> {
         let dir_path = PathBuf::from(dir);
-        FileNode::create_dir_all(dir_path.to_owned()).await;
+        FileNode::create_dir_all(dir_path.to_owned()).await?;
         let file_path = dir_path.join(VLOG_FILE_NAME);
-        let file = FileNode::new(file_path.to_owned(), crate::fs::FileType::ValueLog)
+        let file = VLogFileNode::new(file_path.to_owned(), crate::fs::FileType::ValueLog)
             .await
             .unwrap();
         Ok(Self {
-            file_path,
             head_offset: 0,
             tail_offset: 0,
-            file,
+            content: VFile::new(file_path, file),
         })
-    }
-
-    pub fn set_head(&mut self, head: usize) {
-        self.head_offset = head;
-    }
-
-    pub fn set_tail(&mut self, tail: usize) {
-        self.tail_offset = tail;
     }
 
     pub async fn append(
@@ -74,342 +75,51 @@ impl ValueLog {
             is_tombstone,
         );
         let serialized_data = v_log_entry.serialize();
-
         // Get the current offset before writing(this will be the offset of the value stored in the memtable)
-        let last_offset = self.file.size().await;
-        let data_file = &self.file;
-        let _ = data_file
-            .write_all(crate::fs::LockType::WriteInnerLock, &serialized_data)
-            .await;
+        let last_offset = self.content.file.node.size().await;
+        let data_file = &self.content;
+        let _ = data_file.file.node.write_all(&serialized_data).await;
         Ok(last_offset as usize)
     }
 
     pub async fn get(&self, start_offset: usize) -> Result<Option<(Vec<u8>, bool)>, Error> {
-        let file = &self.file;
-        let file_lock = self.file.w_lock().await;
-        file.seek(
-            crate::fs::LockType::WriteOuterLock(&file_lock),
-            start_offset as u64,
-        )
-        .await?;
-
-        // get key length
-        let mut key_len_bytes = [0; mem::size_of::<u32>()];
-        let mut bytes_read = file
-            .read_buf(
-                crate::fs::LockType::WriteOuterLock(&file_lock),
-                &mut key_len_bytes,
-            )
-            .await?;
-        if bytes_read == 0 {
-            return Ok(None);
-        }
-        let key_len = u32::from_le_bytes(key_len_bytes);
-
-        // get value length
-        let mut val_len_bytes = [0; mem::size_of::<u32>()];
-        bytes_read = file
-            .read_buf(
-                crate::fs::LockType::WriteOuterLock(&file_lock),
-                &mut val_len_bytes,
-            )
-            .await?;
-        if bytes_read == 0 {
-            return Ok(None);
-        }
-        let val_len = u32::from_le_bytes(val_len_bytes);
-
-        // get date length
-        let mut creation_date_bytes = [0; mem::size_of::<u64>()];
-        bytes_read = file
-            .read_buf(
-                crate::fs::LockType::WriteOuterLock(&file_lock),
-                &mut creation_date_bytes,
-            )
-            .await?;
-        if bytes_read == 0 {
-            return Ok(None);
-        }
-        let _ = u64::from_le_bytes(creation_date_bytes);
-
-        // get tombstone
-        let mut istombstone_bytes = [0; mem::size_of::<u8>()];
-        let mut bytes_read = file
-            .read_buf(
-                crate::fs::LockType::WriteOuterLock(&file_lock),
-                &mut istombstone_bytes,
-            )
-            .await?;
-        if bytes_read == 0 {
-            return Ok(None);
-        }
-
-        let is_tombstone = istombstone_bytes[0] == 1;
-
-        let mut key = vec![0; key_len as usize];
-        bytes_read = file
-            .read_buf(crate::fs::LockType::WriteOuterLock(&file_lock), &mut key)
-            .await?;
-        if bytes_read == 0 {
-            return Ok(None);
-        }
-        let mut value = vec![0; val_len as usize];
-        bytes_read = file
-            .read_buf(crate::fs::LockType::WriteOuterLock(&file_lock), &mut value)
-            .await?;
-
-        if bytes_read == 0 {
-            return Ok(None);
-        }
-        Ok(Some((value, is_tombstone)))
+        self.content.file.get(start_offset).await
     }
 
     pub async fn recover(&mut self, start_offset: usize) -> Result<Vec<ValueLogEntry>, Error> {
-        let file = &self.file;
-        let file_lock = self.file.w_lock().await;
-        file.seek(
-            crate::fs::LockType::WriteOuterLock(&file_lock),
-            start_offset as u64,
-        )
-        .await?;
-
-        let mut entries = Vec::new();
-        loop {
-            // get key length
-            let mut key_len_bytes = [0; mem::size_of::<u32>()];
-            let mut bytes_read = file
-                .read_buf(
-                    crate::fs::LockType::WriteOuterLock(&file_lock),
-                    &mut key_len_bytes,
-                )
-                .await?;
-            if bytes_read == 0 {
-                return Ok(entries);
-            }
-            let key_len = u32::from_le_bytes(key_len_bytes);
-
-            // get value length
-            let mut val_len_bytes = [0; mem::size_of::<u32>()];
-            bytes_read = file
-                .read_buf(
-                    crate::fs::LockType::WriteOuterLock(&file_lock),
-                    &mut val_len_bytes,
-                )
-                .await?;
-            if bytes_read == 0 {
-                return Err(UnexpectedEOF(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    EOF,
-                )));
-            }
-            let val_len = u32::from_le_bytes(val_len_bytes);
-
-            // get date length
-            let mut creation_date_bytes = [0; mem::size_of::<u64>()];
-            bytes_read = file
-                .read_buf(
-                    crate::fs::LockType::WriteOuterLock(&file_lock),
-                    &mut creation_date_bytes,
-                )
-                .await?;
-            if bytes_read == 0 {
-                return Err(UnexpectedEOF(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    EOF,
-                )));
-            }
-
-            // is tombstone
-            let mut istombstone_bytes = [0; mem::size_of::<u8>()];
-            bytes_read = file
-                .read_buf(
-                    crate::fs::LockType::WriteOuterLock(&file_lock),
-                    &mut istombstone_bytes,
-                )
-                .await?;
-            if bytes_read == 0 {
-                return Err(UnexpectedEOF(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    EOF,
-                )));
-            }
-
-            let created_at = u64::from_le_bytes(creation_date_bytes);
-
-            let mut key = vec![0; key_len as usize];
-            bytes_read = file
-                .read_buf(crate::fs::LockType::WriteOuterLock(&file_lock), &mut key)
-                .await?;
-
-            if bytes_read == 0 {
-                return Err(UnexpectedEOF(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    EOF,
-                )));
-            }
-
-            let mut value = vec![0; val_len as usize];
-            bytes_read = file
-                .read_buf(crate::fs::LockType::WriteOuterLock(&file_lock), &mut value)
-                .await?;
-
-            if bytes_read == 0 {
-                return Err(UnexpectedEOF(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    EOF,
-                )));
-            }
-
-            let is_tombstone = istombstone_bytes[0] == 1;
-            entries.push(ValueLogEntry {
-                ksize: key_len as usize,
-                vsize: val_len as usize,
-                key,
-                value,
-                created_at,
-                is_tombstone,
-            })
-        }
+        self.content.file.recover(start_offset).await
     }
 
     pub async fn read_chunk_to_garbage_collect(
         &self,
         bytes_to_collect: usize,
     ) -> Result<(Vec<ValueLogEntry>, TotalBytesRead), Error> {
-        let file = &self.file;
-        let file_lock = self.file.w_lock().await;
-        file.seek(
-            crate::fs::LockType::WriteOuterLock(&file_lock),
-            self.tail_offset as u64,
-        )
-        .await?;
-        let mut entries = Vec::new();
-
-        let mut total_bytes_read: usize = 0;
-
-        loop {
-            // get key length
-            let mut key_len_bytes = [0; mem::size_of::<u32>()];
-            let bytes_read = file
-                .read_buf(
-                    crate::fs::LockType::WriteOuterLock(&file_lock),
-                    &mut key_len_bytes,
-                )
-                .await?;
-
-            if bytes_read == 0 {
-                return Ok((entries, total_bytes_read));
-            }
-            total_bytes_read += bytes_read;
-            let key_len = u32::from_le_bytes(key_len_bytes);
-
-            // get value length
-            let mut val_len_bytes = [0; mem::size_of::<u32>()];
-            let bytes_read = file
-                .read_buf(
-                    crate::fs::LockType::WriteOuterLock(&file_lock),
-                    &mut val_len_bytes,
-                )
-                .await?;
-
-            if bytes_read == 0 {
-                return Err(UnexpectedEOF(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    EOF,
-                )));
-            }
-            total_bytes_read += bytes_read;
-            let val_len = u32::from_le_bytes(val_len_bytes);
-
-            // get date length
-            let mut creation_date_bytes = [0; mem::size_of::<u64>()];
-            let bytes_read = file
-                .read_buf(
-                    crate::fs::LockType::WriteOuterLock(&file_lock),
-                    &mut creation_date_bytes,
-                )
-                .await?;
-
-            if bytes_read == 0 {
-                return Err(UnexpectedEOF(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    EOF,
-                )));
-            }
-            total_bytes_read += bytes_read;
-
-            // is tombstone
-            let mut istombstone_bytes = [0; mem::size_of::<u8>()];
-            let mut bytes_read = file
-                .read_buf(
-                    crate::fs::LockType::WriteOuterLock(&file_lock),
-                    &mut istombstone_bytes,
-                )
-                .await?;
-
-            if bytes_read == 0 {
-                return Err(UnexpectedEOF(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    EOF,
-                )));
-            }
-            total_bytes_read += bytes_read;
-
-            let created_at = u64::from_le_bytes(creation_date_bytes);
-
-            let mut key = vec![0; key_len as usize];
-            file.read_buf(crate::fs::LockType::WriteOuterLock(&file_lock), &mut key)
-                .await?;
-
-            if bytes_read == 0 {
-                return Err(UnexpectedEOF(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    EOF,
-                )));
-            }
-            total_bytes_read += bytes_read;
-
-            let mut value = vec![0; val_len as usize];
-            file.read_buf(crate::fs::LockType::WriteOuterLock(&file_lock), &mut value)
-                .await?;
-
-            if bytes_read == 0 {
-                return Err(UnexpectedEOF(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    EOF,
-                )));
-            }
-            total_bytes_read += bytes_read;
-
-            let is_tombstone = istombstone_bytes[0] == 1;
-            entries.push(ValueLogEntry {
-                ksize: key_len as usize,
-                vsize: val_len as usize,
-                key,
-                value,
-                created_at,
-                is_tombstone,
-            });
-
-            // Ensure the size read from value log is approximately bytes expected to be garbage collected
-            if total_bytes_read >= bytes_to_collect {
-                return Ok((entries, total_bytes_read));
-            }
-        }
+        self.content
+            .file
+            .read_chunk_to_garbage_collect(bytes_to_collect, self.tail_offset as u64)
+            .await
     }
 
     // CAUTION: This deletes the value log file
     pub async fn clear_all(&mut self) {
-        if fs::metadata(&self.file_path).await.is_ok() {
-            if let Err(err) = fs::remove_dir_all(&self.file_path).await {
+        if self.content.file.node.metadata().await.is_ok() {
+            if let Err(err) = self.content.file.node.remove_dir_all().await {
                 error!(
-                    "Err sstable not deleted path={:?}, err={:?} ",
-                    self.file_path, err
+                    "path: {:?}, err={:?} ",
+                    self.content.file.node.file_path, err
                 );
             }
         }
         self.tail_offset = 0;
         self.head_offset = 0;
+    }
+
+    pub fn set_head(&mut self, head: usize) {
+        self.head_offset = head;
+    }
+
+    pub fn set_tail(&mut self, tail: usize) {
+        self.tail_offset = tail;
     }
 }
 

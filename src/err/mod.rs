@@ -90,6 +90,10 @@ pub enum Error {
     #[error("File seek error")]
     FileSeekError(#[source] io::Error),
 
+    /// There was an error while atttempting to delete a directory
+    #[error("Directory deletion error")]
+    DirDeleteError(#[source] io::Error),
+
     /// There was an error inserting entry to memtable
     #[error("Error occured while inserting entry to memtable value  Key: `{key}` Value: `{value_offset}`")]
     InsertToMemTableFailedError { key: String, value_offset: usize },
@@ -240,4 +244,7 @@ pub enum Error {
 
     #[error("Flush signal channel has been closed")]
     FlushSignalClosedError,
+
+    #[error("Serializartion error: {0} ")]
+    SerializationError(&'static str),
 }

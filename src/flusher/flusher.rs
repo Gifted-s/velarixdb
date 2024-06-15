@@ -16,30 +16,6 @@ pub type InActiveMemtableID = Vec<u8>;
 pub type InActiveMemtable = Arc<RwLock<InMemoryTable<K>>>;
 pub type FlushDataMemTable = (InActiveMemtableID, InActiveMemtable);
 
-use tokio::spawn;
-use tokio::sync::mpsc::Receiver;
-
-// #[derive(Debug)]
-// pub struct FlushUpdateMsg {
-//     pub flushed_memtable_id: InActiveMemtableID,
-//     pub buckets: BucketMap,
-//     pub bloom_filters: Vec<BloomFilter>,
-//     pub key_range: KeyRange,
-// }
-
-// #[derive(Debug)]
-// pub enum FlushResponse {
-//     Success {
-//         table_id: Vec<u8>,
-//         updated_bucket_map: BucketMap,
-//         updated_bloom_filters: Vec<BloomFilter>,
-//         key_range: KeyRange,
-//     },
-//     Failed {
-//         reason: Error,
-//     },
-// }
-
 #[derive(Debug, Clone)]
 pub struct Flusher {
     pub(crate) read_only_memtable: Arc<RwLock<IndexMap<K, Arc<RwLock<InMemoryTable<K>>>>>>,

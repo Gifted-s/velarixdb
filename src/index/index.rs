@@ -1,28 +1,42 @@
 use crate::consts::{EOF, SIZE_OF_U32};
 use crate::err::Error;
-use crate::fs::{FileAsync, FileNode};
+use crate::fs::{FileAsync, FileNode, IndexFileNode, IndexFs};
 use crate::types::Key;
 use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use tokio::{
-    fs::OpenOptions,
-    io::{self, AsyncReadExt, AsyncWriteExt},
-};
+
+use tokio::io::{self};
 use Error::*;
 type Offset = u32;
-struct IndexEntry {
-    key_prefix: u32,
-    key: Vec<u8>,
-    block_handle: u32,
+
+#[derive(Debug, Clone)]
+pub struct IndexFile<F>
+where
+    F: IndexFs,
+{
+    pub(crate) file: F,
+    pub(crate) path: PathBuf,
 }
 
+impl<F> IndexFile<F>
+where
+    F: IndexFs,
+{
+    pub fn new(path: PathBuf, file: F) -> Self {
+        Self { path, file }
+    }
+}
+#[derive(Debug, Clone)]
+pub struct IndexEntry {
+    pub key_prefix: u32,
+    pub key: Vec<u8>,
+    pub block_handle: u32,
+}
+#[derive(Debug, Clone)]
 pub struct Index {
     entries: Vec<IndexEntry>,
-    file_path: PathBuf,
-    file: FileNode,
+    file: IndexFile<IndexFileNode>,
 }
-
+#[derive(Debug, Clone)]
 pub struct RangeOffset {
     pub start_offset: Offset,
     pub end_offset: Offset,
@@ -38,14 +52,12 @@ impl RangeOffset {
 }
 
 impl Index {
-    pub fn new(file_path: PathBuf, file: FileNode) -> Self {
+    pub fn new(path: PathBuf, file: IndexFileNode) -> Self {
         Self {
-            file_path,
             entries: Vec::new(),
-            file,
+            file: IndexFile::new(path, file),
         }
     }
-
     pub fn insert(&mut self, key_prefix: u32, key: Key, offset: Offset) {
         self.entries.push(IndexEntry {
             key_prefix,
@@ -55,93 +67,34 @@ impl Index {
     }
 
     pub async fn write_to_file(&self) -> Result<(), Error> {
-        let file = self.file.w_lock().await;
-        for entry in &self.entries {
-            let entry_len = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U32;
-
-            let mut entry_vec = Vec::with_capacity(entry_len);
-
-            //add key len
-            entry_vec.extend_from_slice(&(entry.key_prefix).to_le_bytes());
-
-            //add key
-            entry_vec.extend_from_slice(&entry.key);
-
-            //add value offset
-            entry_vec.extend_from_slice(&(entry.block_handle as u32).to_le_bytes());
-            assert!(entry_len == entry_vec.len(), "Incorrect entry size");
-
-            self.file
-                .write_all(crate::fs::LockType::WriteOuterLock(&file), &entry_vec)
-                .await?;
+        for e in &self.entries {
+            let serialized_input = self.serialize_entry(e)?;
+            self.file.file.node.write_all(&serialized_input).await?;
         }
         Ok(())
     }
 
-    pub(crate) async fn get(&self, searched_key: &[u8]) -> Result<Option<u32>, Error> {
-        let mut block_offset = -1;
-        // Open the file in read mode
-        let file_lock = self.file.w_lock().await;
-        self.file
-            .seek(crate::fs::LockType::WriteOuterLock(&file_lock), 0)
-            .await?;
-        loop {
-            let mut key_len_bytes = [0; SIZE_OF_U32];
-            let mut bytes_read = self
-                .file
-                .read_buf(
-                    crate::fs::LockType::WriteOuterLock(&file_lock),
-                    &mut key_len_bytes,
-                )
-                .await?;
-            // If the end of the file is reached and no match is found, return non
-            if bytes_read == 0 {
-                if block_offset == -1 {
-                    return Ok(None);
-                }
-                return Ok(Some(block_offset as u32));
-            }
-            let key_len = u32::from_le_bytes(key_len_bytes);
-            let mut key = vec![0; key_len as usize];
-            self.file
-                .read_buf(crate::fs::LockType::WriteOuterLock(&file_lock), &mut key)
-                .await?;
-            if bytes_read == 0 {
-                return Err(UnexpectedEOF(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    EOF,
-                )));
-            }
-            let mut key_offset_bytes = [0; SIZE_OF_U32];
-            bytes_read = self
-                .file
-                .read_buf(
-                    crate::fs::LockType::WriteOuterLock(&file_lock),
-                    &mut key_offset_bytes,
-                )
-                .await?;
-            if bytes_read == 0 {
-                return Err(UnexpectedEOF(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    EOF,
-                )));
-            }
+    fn serialize_entry(&self, e: &IndexEntry) -> Result<Vec<u8>, Error> {
+        let entry_len = e.key.len() + SIZE_OF_U32 + SIZE_OF_U32;
 
-            let offset = u32::from_le_bytes(key_offset_bytes);
-            match key.cmp(&searched_key.to_vec()) {
-                std::cmp::Ordering::Less => block_offset = offset as i32,
-                std::cmp::Ordering::Equal => {
-                    return Ok(Some(offset));
-                }
-                std::cmp::Ordering::Greater => {
-                    // if all index keys are greater than the searched key then return none
-                    if block_offset == -1 {
-                        return Ok(None);
-                    }
-                    return Ok(Some(block_offset as u32));
-                }
-            }
+        let mut entry_vec = Vec::with_capacity(entry_len);
+
+        //add key len
+        entry_vec.extend_from_slice(&(e.key_prefix).to_le_bytes());
+
+        //add key
+        entry_vec.extend_from_slice(&e.key);
+
+        //add value offset
+        entry_vec.extend_from_slice(&(e.block_handle as u32).to_le_bytes());
+        if entry_len != entry_vec.len() {
+            return Err(SerializationError("Invalid entry size"));
         }
+        Ok(entry_vec)
+    }
+
+    pub(crate) async fn get(&self, searched_key: &[u8]) -> Result<Option<u32>, Error> {
+        self.file.file.get_from_index(searched_key).await
     }
 
     pub(crate) async fn get_block_offset_range(
@@ -149,65 +102,6 @@ impl Index {
         start_key: &[u8],
         end_key: &[u8],
     ) -> Result<RangeOffset, Error> {
-        let mut range_offset = RangeOffset::new(0, 0);
-        // Open the file in read mode
-        let file_lock = self.file.w_lock().await;
-        self.file
-            .seek(crate::fs::LockType::WriteOuterLock(&file_lock), 0)
-            .await?;
-        // read bloom filter to check if the key possbly exists in the sstable
-        // search sstable for key
-        loop {
-            let mut key_len_bytes = [0; SIZE_OF_U32];
-            let mut bytes_read = self
-                .file
-                .read_buf(
-                    crate::fs::LockType::WriteOuterLock(&file_lock),
-                    &mut key_len_bytes,
-                )
-                .await?;
-            // If the end of the file is reached and no match is found, return non
-            if bytes_read == 0 {
-                return Ok(range_offset);
-            }
-            let key_len = u32::from_le_bytes(key_len_bytes);
-            let mut key = vec![0; key_len as usize];
-            bytes_read = self
-                .file
-                .read_buf(crate::fs::LockType::WriteOuterLock(&file_lock), &mut key)
-                .await?;
-            if bytes_read == 0 {
-                return Err(UnexpectedEOF(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    EOF,
-                )));
-            }
-            let mut key_offset_bytes = [0; SIZE_OF_U32];
-            bytes_read = self
-                .file
-                .read_buf(
-                    crate::fs::LockType::WriteOuterLock(&file_lock),
-                    &mut key_offset_bytes,
-                )
-                .await?;
-            if bytes_read == 0 {
-                return Err(UnexpectedEOF(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    EOF,
-                )));
-            }
-
-            let offset = u32::from_le_bytes(key_offset_bytes);
-            match key.cmp(&start_key.to_vec()) {
-                std::cmp::Ordering::Greater => match key.cmp(&end_key.to_vec()) {
-                    std::cmp::Ordering::Greater => {
-                        range_offset.end_offset = offset;
-                        return Ok(range_offset);
-                    }
-                    _ => range_offset.end_offset = offset,
-                },
-                _ => range_offset.start_offset = offset,
-            }
-        }
+        self.file.file.get_block_range(start_key, end_key).await
     }
 }
