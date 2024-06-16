@@ -1,5 +1,7 @@
 use crate::{
-    fs::FileNode, sst::Table, types::{self, Key}
+    fs::FileNode,
+    sst::Table,
+    types::{self, Key},
 };
 use std::{cmp::Ordering, collections::HashMap, path::PathBuf};
 

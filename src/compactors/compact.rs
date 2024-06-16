@@ -165,55 +165,55 @@ impl Compactor {
         let curr_state = Arc::clone(&self.is_active);
         println!("Listening to event");
         tokio::spawn(async move {
-            loop {
-                println!("Compaction started");
-                let signal = signal_receiver_clone.try_recv();
-                let mut compaction_state_lock = curr_state.lock().await;
-                match *compaction_state_lock {
-                    CompactionState::Sleep => match signal {
-                        Ok(_) => {
-                            *compaction_state_lock = CompactionState::Active;
-                            drop(compaction_state_lock);
+            // loop {
+            //     println!("Compaction started");
+            //     let signal = signal_receiver_clone.try_recv();
+            //     let mut compaction_state_lock = curr_state.lock().await;
+            //     match *compaction_state_lock {
+            //         CompactionState::Sleep => match signal {
+            //             Ok(_) => {
+            //                 *compaction_state_lock = CompactionState::Active;
+            //                 drop(compaction_state_lock);
 
-                            let compaction_result = Compactor::handle_compaction(
-                                use_ttl,
-                                entry_ttl,
-                                bucket_map.clone(),
-                                bloom_filters.clone(),
-                                key_range.clone(),
-                            )
-                            .await;
-                            match compaction_result {
-                                Ok(done) => {
-                                    log::info!("Compaction complete : {}", done);
-                                }
-                                Err(err) => {
-                                    log::info!("{}", Error::CompactionFailed(err.to_string()))
-                                }
-                            }
-                            let mut compaction_state_lock = curr_state.lock().await;
-                            *compaction_state_lock = CompactionState::Sleep;
-                        }
-                        Err(err) => {
-                            drop(compaction_state_lock);
-                            match err {
-                                async_broadcast::TryRecvError::Overflowed(_) => {
-                                    log::error!("{}", FlushSignalOverflowError)
-                                }
-                                async_broadcast::TryRecvError::Closed => {
-                                    log::error!("{}", FlushSignalClosedError)
-                                }
-                                async_broadcast::TryRecvError::Empty => {}
-                            }
-                        }
-                    },
-                    CompactionState::Active => {}
-                }
-                sleep(Duration::from_millis(
-                    DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI,
-                ))
-                .await;
-            }
+            //                 let compaction_result = Compactor::handle_compaction(
+            //                     use_ttl,
+            //                     entry_ttl,
+            //                     bucket_map.clone(),
+            //                     bloom_filters.clone(),
+            //                     key_range.clone(),
+            //                 )
+            //                 .await;
+            //                 match compaction_result {
+            //                     Ok(done) => {
+            //                         log::info!("Compaction complete : {}", done);
+            //                     }
+            //                     Err(err) => {
+            //                         log::info!("{}", Error::CompactionFailed(err.to_string()))
+            //                     }
+            //                 }
+            //                 let mut compaction_state_lock = curr_state.lock().await;
+            //                 *compaction_state_lock = CompactionState::Sleep;
+            //             }
+            //             Err(err) => {
+            //                 drop(compaction_state_lock);
+            //                 match err {
+            //                     async_broadcast::TryRecvError::Overflowed(_) => {
+            //                         log::error!("{}", FlushSignalOverflowError)
+            //                     }
+            //                     async_broadcast::TryRecvError::Closed => {
+            //                         log::error!("{}", FlushSignalClosedError)
+            //                     }
+            //                     async_broadcast::TryRecvError::Empty => {}
+            //                 }
+            //             }
+            //         },
+            //         CompactionState::Active => {}
+            //     }
+            //     sleep(Duration::from_millis(
+            //         DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI,
+            //     ))
+            //     .await;
+            // }
         });
     }
 

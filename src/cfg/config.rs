@@ -1,16 +1,12 @@
 use crate::consts::{
-    DEFAULT_ALLOW_PREFETCH, DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MAX_WRITE_BUFFER_NUMBER,
+    DEFAULT_ALLOW_PREFETCH, DEFAULT_FALSE_POSITIVE_RATE,
+    DEFAULT_MAJOR_GARBAGE_COLLECTION_INTERVAL_MILLI, DEFAULT_MAX_WRITE_BUFFER_NUMBER,
     DEFAULT_PREFETCH_SIZE, DEFUALT_ENABLE_TTL, ENTRY_TTL, GC_THREAD_COUNT, WRITE_BUFFER_SIZE,
 };
 
 #[derive(Clone, Debug)]
 /// Configuration options for the storage engine.
 pub struct Config {
-    /// Number of threads to be used to handle garbage collection.
-    /// Tokio::task is used, which functions like a lightweight thread and
-    /// multiplexed to the OS threads at runtime.
-    pub gc_thread_count: u32,
-
     /// False positive rate for the Bloom filter. The lower the value, the more accurate,
     /// but it incurs extra cost on the CPU.
     pub false_positive_rate: f64,
@@ -32,10 +28,11 @@ pub struct Config {
 
     /// How many memtables should we have
     pub max_buffer_write_number: usize,
+
+    pub major_garbage_collection_interval: u64,
 }
 impl Config {
     pub fn new(
-        gc_thread_count: u32,
         false_positive_rate: f64,
         enable_ttl: bool,
         entry_ttl_millis: u64,
@@ -43,9 +40,9 @@ impl Config {
         prefetch_size: usize,
         write_buffer_size: usize,
         max_buffer_write_number: usize,
+        major_garbage_collection_interval: u64,
     ) -> Self {
         Self {
-            gc_thread_count,
             false_positive_rate,
             enable_ttl,
             entry_ttl_millis,
@@ -53,6 +50,7 @@ impl Config {
             prefetch_size,
             max_buffer_write_number,
             write_buffer_size,
+            major_garbage_collection_interval,
         }
     }
 }
@@ -60,7 +58,6 @@ impl Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            gc_thread_count: GC_THREAD_COUNT,
             false_positive_rate: DEFAULT_FALSE_POSITIVE_RATE,
             enable_ttl: DEFUALT_ENABLE_TTL,
             entry_ttl_millis: ENTRY_TTL, // 1 year
@@ -68,6 +65,7 @@ impl Default for Config {
             prefetch_size: DEFAULT_PREFETCH_SIZE,
             max_buffer_write_number: DEFAULT_MAX_WRITE_BUFFER_NUMBER,
             write_buffer_size: WRITE_BUFFER_SIZE,
+            major_garbage_collection_interval: DEFAULT_MAJOR_GARBAGE_COLLECTION_INTERVAL_MILLI,
         }
     }
 }

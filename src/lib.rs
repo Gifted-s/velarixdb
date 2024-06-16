@@ -10,6 +10,7 @@ mod fs;
 mod gc;
 mod index;
 mod key_range;
+mod macros;
 mod memtable;
 mod meta;
 mod range;

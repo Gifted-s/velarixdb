@@ -33,6 +33,9 @@ pub const DEFAULT_COMPACTION_INTERVAL_MILLI: u64 = 3600000;
 //pub const DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI: u64 = 60000;
 pub const DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI: u64 = 1000 * 20;
 
+//pub const DEFAULT_MAJOR_GARBAGE_COLLECTION_INTERVAL_MILLI: 10 hours
+pub const DEFAULT_MAJOR_GARBAGE_COLLECTION_INTERVAL_MILLI: u64 = 36000000;
+
 pub const DEFAULT_FLUSH_DATA_CHANNEL_SIZE: usize = 10;
 
 /// Only the compactor listens to flush events for now
@@ -88,4 +91,3 @@ pub const SIZE_OF_U64: usize = std::mem::size_of::<u64>();
 pub const SIZE_OF_U8: usize = std::mem::size_of::<u8>();
 
 pub const FLUSH_SIGNAL: u8 = 1;
-

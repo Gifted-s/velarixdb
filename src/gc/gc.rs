@@ -3,7 +3,12 @@
 
 extern crate libc;
 extern crate nix;
-use crate::consts::{GC_CHUNK_SIZE, TAIL_ENTRY_KEY, TOMB_STONE_MARKER};
+use crate::consts::{
+    DEFAULT_MAJOR_GARBAGE_COLLECTION_INTERVAL_MILLI, GC_CHUNK_SIZE, TAIL_ENTRY_KEY,
+    TOMB_STONE_MARKER,
+};
+use crate::fs::FileAsync;
+use crate::types::Key;
 use crate::value_log::ValueLogEntry;
 use crate::{err, types};
 use crate::{err::Error, storage::*};
@@ -12,9 +17,11 @@ use err::Error::*;
 use futures::future::join_all;
 use nix::libc::{c_int, off_t};
 use std::os::unix::io::AsRawFd;
-use std::str;
 use std::sync::Arc;
+use std::time::Duration;
+use std::{io, str};
 use tokio::sync::RwLock;
+use tokio::time::sleep;
 type K = types::Key;
 type V = types::Value;
 type VOffset = types::ValOffset;
@@ -26,164 +33,205 @@ extern "C" {
 const FALLOC_FL_PUNCH_HOLE: c_int = 0x2;
 const FALLOC_FL_KEEP_SIZE: c_int = 0x1;
 
-pub struct GarbageCollector {}
-
-impl GarbageCollector {
-    pub fn new() -> Self {
-        Self {}
-    }
-
-    pub async fn run(
-        &self,
-        engine: Arc<RwLock<DataStore<'static, K>>>,
-    ) -> std::result::Result<(), Error> {
-        let invalid_entries: Arc<RwLock<Vec<ValueLogEntry>>> = Arc::new(RwLock::new(Vec::new()));
-        let valid_entries: Arc<RwLock<Vec<(K, V)>>> = Arc::new(RwLock::new(Vec::new()));
-        let synced_entries: Arc<RwLock<Vec<(K, V, VOffset)>>> = Arc::new(RwLock::new(Vec::new()));
-        // Step 1: Read chunks to garbage collect
-        let store = engine.read().await;
-        let punch_hole_start_offset = store.val_log.tail_offset;
-        let (entries, total_bytes_read) = store
-            .val_log
-            .read_chunk_to_garbage_collect(GC_CHUNK_SIZE)
-            .await?;
-
-        let tasks = entries.into_iter().map(|entry| {
-            let s_engine = Arc::clone(&engine);
-            let invalid_entries_clone = Arc::clone(&invalid_entries);
-            let valid_entries_clone = Arc::clone(&valid_entries);
-            tokio::spawn(async move {
-                let s = s_engine.read().await;
-                let most_recent_value = s.get(str::from_utf8(&entry.key).unwrap()).await;
-                match most_recent_value {
-                    Ok((value, creation_time)) => {
-                        if entry.created_at != creation_time
-                            || value == TOMB_STONE_MARKER.to_le_bytes().to_vec()
-                        {
-                            invalid_entries_clone.write().await.push(entry);
-                        } else {
-                            valid_entries_clone.write().await.push((entry.key, value));
-                        }
-                        Ok(())
-                    }
-                    Err(err) => match err {
-                        KeyFoundAsTombstoneInMemtableError => {
-                            invalid_entries_clone.write().await.push(entry);
-                            Ok(())
-                        }
-                        KeyNotFoundInAnySSTableError => {
-                            invalid_entries_clone.write().await.push(entry);
-                            Ok(())
-                        }
-                        KeyNotFoundByAnyBloomFilterError => {
-                            invalid_entries_clone.write().await.push(entry);
-                            Ok(())
-                        }
-                        KeyFoundAsTombstoneInSSTableError => {
-                            invalid_entries_clone.write().await.push(entry);
-                            Ok(())
-                        }
-                        KeyFoundAsTombstoneInValueLogError => {
-                            invalid_entries_clone.write().await.push(entry);
-                            Ok(())
-                        }
-                        err::Error::KeyNotFoundInValueLogError => {
-                            invalid_entries_clone.write().await.push(entry);
-                            Ok(())
-                        }
-                        NotFoundInDB => {
-                            invalid_entries_clone.write().await.push(entry);
-                            Ok(())
-                        }
-                        _ => return Err(err),
-                    },
-                }
-            })
-        });
-        let all_results = join_all(tasks).await;
-        for tokio_response in all_results {
-            match tokio_response {
-                Ok(entry) => match entry {
-                    Err(err) => return Err(err),
-                    _ => {}
-                },
-                Err(err) => {
-                    return Err(TokioTaskJoinError {
-                        error: err,
-                        context: "GC".to_owned(),
-                    })
-                }
-            }
-        }
-
-        let new_tail_offset = engine.read().await.val_log.tail_offset + total_bytes_read;
-
-        let v_offset = engine
-            .write()
-            .await
-            .val_log
-            .append(
-                &TAIL_ENTRY_KEY.to_vec(),
-                &new_tail_offset.to_le_bytes().to_vec(),
-                Utc::now().timestamp_millis() as u64,
-                false,
-            )
-            .await?;
-        synced_entries.write().await.push((
-            TAIL_ENTRY_KEY.to_vec(),
-            new_tail_offset.to_le_bytes().to_vec(),
-            v_offset,
-        ));
-
-        for (key, value) in valid_entries.to_owned().read().await.iter() {
-            let mut store = engine.write().await;
-
-            let v_offset = store
+impl DataStore<'static, Key> {
+    pub async fn garbage_collect(&'static mut self) {
+        let store = Arc::new(RwLock::new(self));
+        loop {
+            let store_clone = store.clone();
+            let invalid_entries = Arc::new(RwLock::new(Vec::new()));
+            let valid_entries = Arc::new(RwLock::new(Vec::new()));
+            let synced_entries = Arc::new(RwLock::new(Vec::new()));
+            // Step 1: Read chunks to garbage collect
+            let store_read_lock = store_clone.read().await;
+            let punch_hole_start_offset = store_read_lock.val_log.tail_offset;
+            let chunk_res = store_read_lock
                 .val_log
-                .append(&key, &value, Utc::now().timestamp_millis() as u64, false)
-                .await?;
-
-            synced_entries
-                .write()
-                .await
-                .push((key.to_owned(), value.to_owned(), v_offset));
-        }
-
-        // call fsync on vLog
-        let engine_r_lock = engine.read().await;
-        let v_log = engine_r_lock.val_log.file.write().await;
-        v_log
-            .sync_all()
-            .await
-            .map_err(|err| Error::ValueLogFileSyncError { error: err })?;
-        engine.write().await.val_log.set_tail(new_tail_offset);
-
-        for (key, value, existing_v_offset) in synced_entries.to_owned().read().await.iter() {
-            let _ = engine
-                .write()
-                .await
-                .put(
-                    str::from_utf8(&key).unwrap(),
-                    str::from_utf8(&value).unwrap(),
-                    Some(*existing_v_offset),
-                )
+                .read_chunk_to_garbage_collect(GC_CHUNK_SIZE)
                 .await;
+            drop(store_read_lock);
+            match chunk_res {
+                Ok((entries, total_bytes_read)) => {
+                    let tasks = entries.into_iter().map(|entry| {
+                        let invalid_entries_clone = Arc::clone(&invalid_entries);
+                        let valid_entries_clone = Arc::clone(&valid_entries);
+                        let s_engine = store.clone();
+                        tokio::spawn(async move {
+                            let s = s_engine.read().await;
+                            let most_recent_value =
+                                s.get(str::from_utf8(&entry.key).unwrap()).await;
+                            match most_recent_value {
+                                Ok((value, creation_time)) => {
+                                    if entry.created_at != creation_time
+                                        || value == TOMB_STONE_MARKER.to_le_bytes().to_vec()
+                                    {
+                                        invalid_entries_clone.write().await.push(entry);
+                                    } else {
+                                        valid_entries_clone.write().await.push((entry.key, value));
+                                    }
+                                    Ok(())
+                                }
+                                Err(err) => match err {
+                                    KeyFoundAsTombstoneInMemtableError => {
+                                        invalid_entries_clone.write().await.push(entry);
+                                        Ok(())
+                                    }
+                                    KeyNotFoundInAnySSTableError => {
+                                        invalid_entries_clone.write().await.push(entry);
+                                        Ok(())
+                                    }
+                                    KeyNotFoundByAnyBloomFilterError => {
+                                        invalid_entries_clone.write().await.push(entry);
+                                        Ok(())
+                                    }
+                                    KeyFoundAsTombstoneInSSTableError => {
+                                        invalid_entries_clone.write().await.push(entry);
+                                        Ok(())
+                                    }
+                                    KeyFoundAsTombstoneInValueLogError => {
+                                        invalid_entries_clone.write().await.push(entry);
+                                        Ok(())
+                                    }
+                                    err::Error::KeyNotFoundInValueLogError => {
+                                        invalid_entries_clone.write().await.push(entry);
+                                        Ok(())
+                                    }
+                                    NotFoundInDB => {
+                                        invalid_entries_clone.write().await.push(entry);
+                                        Ok(())
+                                    }
+                                    _ => return Err(err),
+                                },
+                            }
+                        })
+                    });
+                    let all_results = join_all(tasks).await;
+                    for tokio_response in all_results {
+                        match tokio_response {
+                            Ok(entry) => match entry {
+                                Err(err) => todo!(),
+                                _ => {}
+                            },
+                            Err(err) => {
+                                todo!();
+                                // return Err(TokioTaskJoinError {
+                                //     error: err,
+                                //     context: "GC".to_owned(),
+                                // })
+                            }
+                        }
+                    }
+
+                    let new_tail_offset = store.read().await.val_log.tail_offset + total_bytes_read;
+                    let append_res = store
+                        .write()
+                        .await
+                        .val_log
+                        .append(
+                            &TAIL_ENTRY_KEY.to_vec(),
+                            &new_tail_offset.to_le_bytes().to_vec(),
+                            Utc::now().timestamp_millis() as u64,
+                            false,
+                        )
+                        .await;
+                    match append_res {
+                        Ok(v_offset) => {
+                            synced_entries.write().await.push((
+                                TAIL_ENTRY_KEY.to_vec(),
+                                new_tail_offset.to_le_bytes().to_vec(),
+                                v_offset,
+                            ));
+
+                            for (key, value) in valid_entries.to_owned().read().await.iter() {
+                                let mut store = store.write().await;
+
+                                let append_res = store
+                                    .val_log
+                                    .append(
+                                        &key,
+                                        &value,
+                                        Utc::now().timestamp_millis() as u64,
+                                        false,
+                                    )
+                                    .await;
+
+                                match append_res {
+                                    Ok(v_offset) => {
+                                        synced_entries.write().await.push((
+                                            key.to_owned(),
+                                            value.to_owned(),
+                                            v_offset,
+                                        ));
+                                    }
+                                    Err(_) => todo!(),
+                                }
+                            }
+
+                            // call fsync on vLog
+                            let sync_res = store
+                                .write()
+                                .await
+                                .val_log
+                                .content
+                                .file
+                                .node
+                                .sync_all()
+                                .await
+                                .map_err(|err| Error::FileSyncError {
+                                    error: io::Error::new(io::ErrorKind::Other, err),
+                                });
+                            match sync_res {
+                                Ok(_) => {
+                                    store.write().await.val_log.set_tail(new_tail_offset);
+
+                                    for (key, value, existing_v_offset) in
+                                        synced_entries.to_owned().read().await.iter()
+                                    {
+                                        let put_res = store
+                                            .write()
+                                            .await
+                                            .put(
+                                                str::from_utf8(&key).unwrap(),
+                                                str::from_utf8(&value).unwrap(),
+                                                Some(*existing_v_offset),
+                                            )
+                                            .await;
+                                        match put_res {
+                                            Err(err) => {}
+                                            _ => {}
+                                        }
+                                    }
+
+                                    let remove_res = store
+                                        .write()
+                                        .await
+                                        .remove_unsed(
+                                            invalid_entries,
+                                            punch_hole_start_offset,
+                                            total_bytes_read,
+                                        )
+                                        .await;
+                                    match remove_res {
+                                        Err(err) => {}
+                                        _ => {}
+                                    }
+                                }
+                                Err(err) => {}
+                            }
+                        }
+                        Err(err) => {}
+                    }
+                }
+                Err(err) => {}
+            }
+            sleep(Duration::from_millis(
+                DEFAULT_MAJOR_GARBAGE_COLLECTION_INTERVAL_MILLI,
+            ))
+            .await;
         }
-
-        self.garbage_collect(
-            Arc::clone(&engine),
-            invalid_entries,
-            punch_hole_start_offset,
-            total_bytes_read,
-        )
-        .await?;
-
-        Ok(())
     }
 
-    pub async fn garbage_collect(
+    pub async fn remove_unsed(
         &self,
-        engine: Arc<RwLock<DataStore<'static, K>>>,
         invalid_entries: Arc<RwLock<Vec<ValueLogEntry>>>,
         punch_hole_start_offset: usize,
         punch_hole_length: usize,

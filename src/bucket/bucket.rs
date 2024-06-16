@@ -43,12 +43,12 @@ pub trait InsertableToBucket: Debug + Send + Sync {
     fn find_smallest_key_from_table(&self) -> Result<Vec<u8>, Error>;
 }
 
-impl Bucket{
+impl Bucket {
     pub async fn new(dir: PathBuf) -> Self {
         let bucket_id = Uuid::new_v4();
         let bucket_dir =
             dir.join(BUCKET_DIRECTORY_PREFIX.to_string() + bucket_id.to_string().as_str());
-        FileNode::create_dir_all(bucket_dir.to_owned()).await;
+        let _ = FileNode::create_dir_all(bucket_dir.to_owned()).await;
         Self {
             id: bucket_id,
             dir: bucket_dir,
@@ -75,9 +75,7 @@ impl Bucket{
         })
     }
 
-    async fn calculate_buckets_avg_size(
-        sstables: Vec<Table>,
-    ) -> Result<usize, Error> {
+    async fn calculate_buckets_avg_size(sstables: Vec<Table>) -> Result<usize, Error> {
         if sstables.is_empty() {
             return Ok(0);
         }
@@ -201,7 +199,7 @@ impl BucketMap {
         Ok((buckets_to_compact, sstables_to_delete))
     }
     pub async fn is_balanced(&self) -> bool {
-        for (_, (_, bucket)) in self.buckets.iter().enumerate() {
+        for (_, bucket) in self.buckets.iter() {
             if bucket.sstable_count_exceeds_threshhold().await {
                 return false;
             }
