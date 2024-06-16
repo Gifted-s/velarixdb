@@ -24,8 +24,7 @@ use uuid::Uuid;
 
 use crate::types::{FlushSignal, Key};
 use crate::{
-    consts::TOMB_STONE_TTL, err::Error, filter::BloomFilter, key_range::KeyRange, memtable::Entry,
-    sst::Table,
+    consts::TOMB_STONE_TTL, err::Error, filter::BloomFilter, key_range::KeyRange, memtable::Entry, sst::Table,
 };
 use Error::*;
 
@@ -72,11 +71,7 @@ impl Clone for MergedSSTable {
 }
 
 impl MergedSSTable {
-    pub fn new(
-        sstable: Box<dyn InsertableToBucket>,
-        bloom_filter: BloomFilter,
-        hotness: u64,
-    ) -> Self {
+    pub fn new(sstable: Box<dyn InsertableToBucket>, bloom_filter: BloomFilter, hotness: u64) -> Self {
         Self {
             sstable,
             hotness,
@@ -95,18 +90,12 @@ impl Compactor {
         }
     }
     /// TODO: This method will be used to check for the condition to trigger tombstone compaction
-    pub fn tombstone_compaction_condition_background_checker(
-        &self,
-        rcx: Arc<RwLock<Receiver<BucketMap>>>,
-    ) {
+    pub fn tombstone_compaction_condition_background_checker(&self, rcx: Arc<RwLock<Receiver<BucketMap>>>) {
         let receiver = Arc::clone(&rcx);
         tokio::spawn(async move {
             loop {
                 let _ = receiver.write().await.try_recv();
-                sleep(Duration::from_millis(
-                    DEFAULT_TOMBSTONE_COMPACTION_INTERVAL_MILLI,
-                ))
-                .await;
+                sleep(Duration::from_millis(DEFAULT_TOMBSTONE_COMPACTION_INTERVAL_MILLI)).await;
             }
         });
     }
@@ -267,8 +256,7 @@ impl Compactor {
             let bloom_filters = Arc::clone(&bloom_filters);
             let key_range = Arc::clone(&key_range);
             // Step 1: Extract buckets to compact
-            let buckets_to_compact_and_sstables_to_remove =
-                Compactor::get_extracted(bucket_map.clone()).await?;
+            let buckets_to_compact_and_sstables_to_remove = Compactor::get_extracted(bucket_map.clone()).await?;
             let buckets_to_compact = buckets_to_compact_and_sstables_to_remove.0.to_owned();
             let sstables_files_to_remove = buckets_to_compact_and_sstables_to_remove.1.to_owned();
             // Exit the compaction loop if there are no more buckets to compact
@@ -286,9 +274,7 @@ impl Compactor {
                 )
             }
             // Step 2: Merge SSTables in each buckct
-            let merge_res = self
-                .merge_sstables_in_buckets(&buckets_to_compact.to_owned())
-                .await;
+            let merge_res = self.merge_sstables_in_buckets(&buckets_to_compact.to_owned()).await;
             match merge_res {
                 Ok(merged_sstables) => {
                     // Number of sstables actually written to disk
@@ -338,13 +324,12 @@ impl Compactor {
                                 // the compaction process and also remove merged sstables written to disk so far to prevent unstable state
                                 while actual_number_of_sstables_written_to_disk > 0 {
                                     if let Some(bf) = bloom_filters.write().await.pop() {
-                                        match fs::remove_dir_all(bf.get_sstable_path().dir.clone())
-                                            .await
-                                        {
+                                        match fs::remove_dir_all(bf.get_sstable_path().dir.clone()).await {
                                             Ok(()) => {
-                                                key_range.write().await.remove(
-                                                    bf.get_sstable_path().data_file.path.clone(),
-                                                );
+                                                key_range
+                                                    .write()
+                                                    .await
+                                                    .remove(bf.get_sstable_path().data_file.path.clone());
                                                 info!("Stale SSTable File successfully deleted.")
                                             }
                                             Err(e) => {
@@ -364,11 +349,10 @@ impl Compactor {
 
                     info!(
                         "Expected number of new SSTables written to disk : {}, Actual number of SSTables written {}",
-                         expected_sstables_to_be_writtten_to_disk, actual_number_of_sstables_written_to_disk);
+                        expected_sstables_to_be_writtten_to_disk, actual_number_of_sstables_written_to_disk
+                    );
 
-                    if expected_sstables_to_be_writtten_to_disk
-                        == actual_number_of_sstables_written_to_disk
-                    {
+                    if expected_sstables_to_be_writtten_to_disk == actual_number_of_sstables_written_to_disk {
                         // Step 7:  Delete the sstables that we already merged from their previous buckets and update bloom filters
                         let bloom_filter_updated_opt = self
                             .clean_up_after_compaction(
@@ -388,13 +372,12 @@ impl Compactor {
                             }
                             Ok(None) => {
                                 return Err(Error::CompactionPartiallyFailed(String::from(
-                                      "Partial failure, obsolete sstables not deleted but sstable merge was successful",
-                                  )));
+                                    "Partial failure, obsolete sstables not deleted but sstable merge was successful",
+                                )));
                             }
                             Err(err) => {
-                                let mut err_des = String::from(
-                                    "Compaction cleanup failed but sstable merge was successful ",
-                                );
+                                let mut err_des =
+                                    String::from("Compaction cleanup failed but sstable merge was successful ");
                                 err_des.push_str(&err.to_string());
                                 return Err(Error::CompactionPartiallyFailed(err_des));
                             }
@@ -425,21 +408,14 @@ impl Compactor {
                 });
             })
         });
-        let all_sstables_deleted = buckets
-            .write()
-            .await
-            .delete_sstables(sstables_to_delete)
-            .await?;
+        let all_sstables_deleted = buckets.write().await.delete_sstables(sstables_to_delete).await?;
         // if all sstables were not deleted then don't remove the associated bloom filters
         // although this can lead to redundancy bloom filters are in-memory and its also less costly
         // since keys are represented in bits
         if all_sstables_deleted {
             // Step 8: Delete the bloom filters associated with the sstables that we already merged
             let bloom_filter_updated = self
-                .filter_out_old_bloom_filters(
-                    bloom_filters_with_both_old_and_new_sstables,
-                    sstables_to_delete,
-                )
+                .filter_out_old_bloom_filters(bloom_filters_with_both_old_and_new_sstables, sstables_to_delete)
                 .await;
             return Ok(bloom_filter_updated);
         }
@@ -451,25 +427,19 @@ impl Compactor {
         bloom_filters_with_both_old_and_new_sstables: Arc<RwLock<Vec<BloomFilter>>>,
         sstables_to_delete: &Vec<(Uuid, Vec<Table>)>,
     ) -> Option<bool> {
-        let mut bloom_filters_map: HashMap<PathBuf, BloomFilter> =
-            bloom_filters_with_both_old_and_new_sstables
-                .read()
-                .await
-                .iter()
-                .map(|b| (b.get_sstable_path().dir.to_owned(), b.to_owned()))
-                .collect();
-
-        sstables_to_delete
-            .iter()
-            .for_each(|(_, sstable_files_paths)| {
-                sstable_files_paths.iter().for_each(|file_path_to_delete| {
-                    bloom_filters_map.remove(&file_path_to_delete.dir);
-                })
-            });
-        bloom_filters_with_both_old_and_new_sstables
-            .write()
+        let mut bloom_filters_map: HashMap<PathBuf, BloomFilter> = bloom_filters_with_both_old_and_new_sstables
+            .read()
             .await
-            .clear();
+            .iter()
+            .map(|b| (b.get_sstable_path().dir.to_owned(), b.to_owned()))
+            .collect();
+
+        sstables_to_delete.iter().for_each(|(_, sstable_files_paths)| {
+            sstable_files_paths.iter().for_each(|file_path_to_delete| {
+                bloom_filters_map.remove(&file_path_to_delete.dir);
+            })
+        });
+        bloom_filters_with_both_old_and_new_sstables.write().await.clear();
         bloom_filters_with_both_old_and_new_sstables
             .write()
             .await
@@ -477,16 +447,12 @@ impl Compactor {
         Some(true)
     }
 
-    async fn merge_sstables_in_buckets(
-        &mut self,
-        buckets: &Vec<Bucket>,
-    ) -> Result<Vec<MergedSSTable>, Error> {
+    async fn merge_sstables_in_buckets(&mut self, buckets: &Vec<Bucket>) -> Result<Vec<MergedSSTable>, Error> {
         let mut merged_sstables: Vec<MergedSSTable> = Vec::new();
         for b in buckets.iter() {
             let mut hotness = 0;
             let sstable_paths = &b.sstables.read().await;
-            let mut merged_sst: Box<dyn InsertableToBucket> =
-                Box::new(sstable_paths.get(0).unwrap().to_owned());
+            let mut merged_sst: Box<dyn InsertableToBucket> = Box::new(sstable_paths.get(0).unwrap().to_owned());
 
             for path in sstable_paths[1..].iter() {
                 hotness += path.hotness;
@@ -515,13 +481,9 @@ impl Compactor {
         }
 
         if merged_sstables.is_empty() {
-            return Err(CompactionFailed(
-                "Merged SSTables cannot be empty".to_owned(),
-            ));
+            return Err(CompactionFailed("Merged SSTables cannot be empty".to_owned()));
         }
-        let filtered_sstables = self
-            .check_tombsone_for_merged_sstables(merged_sstables)
-            .await?;
+        let filtered_sstables = self.check_tombsone_for_merged_sstables(merged_sstables).await?;
         Ok(filtered_sstables)
     }
 
@@ -588,10 +550,7 @@ impl Compactor {
         }
 
         merged_entries.iter().for_each(|e| {
-            new_sstable_map.insert(
-                e.key.to_owned(),
-                (e.val_offset, e.created_at, e.is_tombstone),
-            );
+            new_sstable_map.insert(e.key.to_owned(), (e.val_offset, e.created_at, e.is_tombstone));
         });
         new_sstable.set_entries(new_sstable_map);
         Ok(Box::new(new_sstable))

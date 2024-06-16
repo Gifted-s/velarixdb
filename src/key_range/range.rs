@@ -42,10 +42,7 @@ impl KeyRange {
         full_sst_path: Table,
     ) -> bool {
         self.key_ranges
-            .insert(
-                sst_path,
-                Range::new(smallest_key, biggest_key, full_sst_path),
-            )
+            .insert(sst_path, Range::new(smallest_key, biggest_key, full_sst_path))
             .is_some()
     }
 

@@ -27,14 +27,10 @@ impl BloomFilter {
             false_positive_rate >= 0.0,
             "False positive rate can not be les than or equal to zero"
         );
-        assert!(
-            no_of_elements > 0,
-            "No of elements should be greater than 0"
-        );
+        assert!(no_of_elements > 0, "No of elements should be greater than 0");
 
         let no_of_bits = Self::calculate_no_of_bits(no_of_elements, false_positive_rate);
-        let no_of_hash_func =
-            Self::calculate_no_of_hash_function(no_of_bits, no_of_elements as u32) as usize;
+        let no_of_hash_func = Self::calculate_no_of_hash_function(no_of_bits, no_of_elements as u32) as usize;
         let bv = BitVec::from_elem(no_of_bits as usize, false);
 
         Self {
@@ -85,10 +81,7 @@ impl BloomFilter {
         filtered_bfs
     }
 
-    pub fn sstables_within_key_range<T: Hash>(
-        bloom_filters: Vec<&BloomFilter>,
-        key: &T,
-    ) -> Option<Vec<Table>> {
+    pub fn sstables_within_key_range<T: Hash>(bloom_filters: Vec<&BloomFilter>, key: &T) -> Option<Vec<Table>> {
         let mut sstables: Vec<Table> = Vec::new();
         for bloom_filter in bloom_filters {
             if bloom_filter.contains(key) {
@@ -150,8 +143,7 @@ impl BloomFilter {
     }
 
     fn calculate_no_of_bits(no_of_elements: usize, false_positive_rate: f64) -> u32 {
-        let no_bits =
-            -((no_of_elements as f64 * false_positive_rate.ln()) / ((2_f64.ln()).powi(2))).ceil();
+        let no_bits = -((no_of_elements as f64 * false_positive_rate.ln()) / ((2_f64.ln()).powi(2))).ceil();
         no_bits as u32
     }
 
@@ -185,11 +177,9 @@ mod tests {
         let no_of_elements: usize = 10;
         let mut bloom_filter = BloomFilter::new(false_positive_rate, no_of_elements);
 
-        let no_bits =
-            -((no_of_elements as f64 * false_positive_rate.ln()) / ((2_f64.ln()).powi(2))).ceil();
+        let no_bits = -((no_of_elements as f64 * false_positive_rate.ln()) / ((2_f64.ln()).powi(2))).ceil();
 
-        let expected_no_hash_func =
-            ((no_bits / no_of_elements as f64) * (2_f64.ln()).ceil()) as usize;
+        let expected_no_hash_func = ((no_bits / no_of_elements as f64) * (2_f64.ln()).ceil()) as usize;
 
         assert_eq!(bloom_filter.num_elements(), 0);
         assert_eq!(bloom_filter.no_of_hash_func, expected_no_hash_func);

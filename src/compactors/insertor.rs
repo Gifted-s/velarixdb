@@ -59,10 +59,7 @@ impl TableInsertor {
             None => Err(LowestKeyIndexError),
         }
     }
-    pub(crate) fn set_entries(
-        &mut self,
-        entries: Arc<SkipMap<Key, (ValOffset, CreationTime, IsTombStone)>>,
-    ) {
+    pub(crate) fn set_entries(&mut self, entries: Arc<SkipMap<Key, (ValOffset, CreationTime, IsTombStone)>>) {
         self.entries = entries;
         self.set_sst_size_from_entries();
     }

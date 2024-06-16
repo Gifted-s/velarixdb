@@ -86,6 +86,10 @@ impl ValueLog {
         self.content.file.get(start_offset).await
     }
 
+    pub async fn sync_to_disk(&self) -> Result<(), Error> {
+        self.content.file.node.sync_all().await
+    }
+
     pub async fn recover(&mut self, start_offset: usize) -> Result<Vec<ValueLogEntry>, Error> {
         self.content.file.recover(start_offset).await
     }
@@ -104,10 +108,7 @@ impl ValueLog {
     pub async fn clear_all(&mut self) {
         if self.content.file.node.metadata().await.is_ok() {
             if let Err(err) = self.content.file.node.remove_dir_all().await {
-                error!(
-                    "path: {:?}, err={:?} ",
-                    self.content.file.node.file_path, err
-                );
+                error!("path: {:?}, err={:?} ", self.content.file.node.file_path, err);
             }
         }
         self.tail_offset = 0;
@@ -124,14 +125,7 @@ impl ValueLog {
 }
 
 impl ValueLogEntry {
-    pub fn new(
-        ksize: usize,
-        vsize: usize,
-        key: Vec<u8>,
-        value: Vec<u8>,
-        created_at: u64,
-        is_tombstone: bool,
-    ) -> Self {
+    pub fn new(ksize: usize, vsize: usize, key: Vec<u8>, value: Vec<u8>, created_at: u64, is_tombstone: bool) -> Self {
         Self {
             ksize,
             vsize,
@@ -241,8 +235,7 @@ mod tests {
 
         assert_eq!(serialized_data.len(), expected_entry_len);
 
-        let deserialized_entry =
-            ValueLogEntry::deserialize(&serialized_data).expect("failed to deserialize data");
+        let deserialized_entry = ValueLogEntry::deserialize(&serialized_data).expect("failed to deserialize data");
 
         assert_eq!(deserialized_entry, original_entry);
     }

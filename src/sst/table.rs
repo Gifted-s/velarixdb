@@ -65,8 +65,7 @@ impl InsertableToBucket for Table {
 impl Table {
     pub async fn new(dir: PathBuf) -> Self {
         //TODO: handle error during file creation
-        let (data_file_path, index_file_path, creation_time) =
-            Table::generate_file_path(dir.to_owned()).await.unwrap();
+        let (data_file_path, index_file_path, creation_time) = Table::generate_file_path(dir.to_owned()).await.unwrap();
         let data_file = DataFileNode::new(data_file_path.to_owned(), crate::fs::FileType::SSTable)
             .await
             .unwrap();
@@ -95,9 +94,7 @@ impl Table {
         self.hotness
     }
 
-    pub async fn generate_file_path(
-        dir: PathBuf,
-    ) -> Result<(PathBuf, PathBuf, DateTime<Utc>), Error> {
+    pub async fn generate_file_path(dir: PathBuf) -> Result<(PathBuf, PathBuf, DateTime<Utc>), Error> {
         let created_at = Utc::now();
         let _ = FileNode::create_dir_all(dir.to_owned()).await?;
         let data_file_name = format!("sstable_{}_.db", created_at.timestamp_millis());
@@ -113,10 +110,7 @@ impl Table {
         start_offset: u32,
         searched_key: &[u8],
     ) -> Result<Option<(ValOffset, CreationTime, IsTombStone)>, Error> {
-        self.data_file
-            .file
-            .find_entry(start_offset, searched_key)
-            .await
+        self.data_file.file.find_entry(start_offset, searched_key).await
     }
 
     pub(crate) async fn from_file(&self) -> Result<Option<Table>, Error> {
@@ -192,20 +186,12 @@ impl Table {
         // Store initial entry key and its sstable file offset in sparse index
         table_index.insert(first_entry.key_prefix, first_entry.key, offset as u32);
 
-        block
-            .write_to_file(self.data_file.file.node.clone())
-            .await?;
+        block.write_to_file(self.data_file.file.node.clone()).await?;
         Ok(())
     }
 
-    pub(crate) async fn range(
-        &self,
-        range_offset: RangeOffset,
-    ) -> Result<Vec<Entry<Vec<u8>, usize>>, Error> {
-        self.data_file
-            .file
-            .load_entries_within_range(range_offset)
-            .await
+    pub(crate) async fn range(&self, range_offset: RangeOffset) -> Result<Vec<Entry<Vec<u8>, usize>>, Error> {
+        self.data_file.file.load_entries_within_range(range_offset).await
     }
 
     pub(crate) fn build_bloomfilter_from_sstable(
@@ -218,10 +204,7 @@ impl Table {
         new_bloom_filter
     }
 
-    pub(crate) fn get_value_from_entries(
-        &self,
-        key: &[u8],
-    ) -> Option<(ValOffset, CreationTime, IsTombStone)> {
+    pub(crate) fn get_value_from_entries(&self, key: &[u8]) -> Option<(ValOffset, CreationTime, IsTombStone)> {
         self.entries.get(key).map(|entry| entry.value().to_owned())
     }
 
@@ -239,10 +222,7 @@ impl Table {
         self.size
     }
 
-    pub(crate) fn set_entries(
-        &mut self,
-        entries: Arc<SkipMap<Key, (ValOffset, CreationTime, IsTombStone)>>,
-    ) {
+    pub(crate) fn set_entries(&mut self, entries: Arc<SkipMap<Key, (ValOffset, CreationTime, IsTombStone)>>) {
         self.entries = entries;
         self.set_sst_size_from_entries();
     }

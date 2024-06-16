@@ -248,17 +248,9 @@ impl<'a> DataStore<'a, Key> {
             let paths_from_key_range = key_range.range_scan(&start.to_vec(), &end.to_vec());
             if !paths_from_key_range.is_empty() {
                 for range in paths_from_key_range.iter() {
-                    if !sstable_path
-                        .contains_key(range.full_sst_path.data_file.path.to_str().unwrap())
-                    {
+                    if !sstable_path.contains_key(range.full_sst_path.data_file.path.to_str().unwrap()) {
                         sstable_path.insert(
-                            range
-                                .full_sst_path
-                                .data_file
-                                .path
-                                .to_str()
-                                .unwrap()
-                                .to_owned(),
+                            range.full_sst_path.data_file.path.to_str().unwrap().to_owned(),
                             range.full_sst_path.to_owned(),
                         );
                     }
@@ -303,9 +295,7 @@ pub struct Merger {
 
 impl Merger {
     fn new() -> Self {
-        Self {
-            entries: Vec::new(),
-        }
+        Self { entries: Vec::new() }
     }
     // merge entries in sorted order
     fn merge_entries(&mut self, entries_to_merge: Vec<Entry<Key, ValOffset>>) {
@@ -351,11 +341,7 @@ impl Merger {
         self.entries = merged_indexes;
     }
 
-    fn head_entry_checker(
-        &self,
-        entry: &Entry<Key, ValOffset>,
-        merged_indexes: &mut Vec<Entry<Key, ValOffset>>,
-    ) {
+    fn head_entry_checker(&self, entry: &Entry<Key, ValOffset>, merged_indexes: &mut Vec<Entry<Key, ValOffset>>) {
         if entry.key != HEAD_ENTRY_KEY {
             merged_indexes.push(entry.to_owned());
         }

@@ -2,9 +2,7 @@ use crate::bucket::BucketMap;
 use crate::consts::FLUSH_SIGNAL;
 use crate::fs::FileAsync;
 use crate::types::{self, FlushSignal};
-use crate::{
-    cfg::Config, err::Error, filter::BloomFilter, key_range::KeyRange, memtable::InMemoryTable,
-};
+use crate::{cfg::Config, err::Error, filter::BloomFilter, key_range::KeyRange, memtable::InMemoryTable};
 use futures::lock::Mutex;
 use indexmap::IndexMap;
 use std::sync::Arc;
@@ -49,9 +47,7 @@ impl Flusher {
         let flush_data = self;
         let table_lock = table.read().await;
         if table_lock.entries.is_empty() {
-            return Err(Error::FailedToInsertToBucket(
-                "Cannot flush an empty table".to_string(),
-            ));
+            return Err(Error::FailedToInsertToBucket("Cannot flush an empty table".to_string()));
         }
 
         let table_bloom_filter = &mut table_lock.bloom_filter.to_owned();

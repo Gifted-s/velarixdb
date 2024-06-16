@@ -78,8 +78,7 @@ impl Meta {
         let micros_remainder = date_created_in_microseconds % 1_000_000;
 
         // Create a NaiveDateTime from seconds and microseconds
-        let created_utc =
-            DateTime::from_timestamp(seconds.into(), micros_remainder * 1000).unwrap();
+        let created_utc = DateTime::from_timestamp(seconds.into(), micros_remainder * 1000).unwrap();
 
         let mut date_modified_bytes: [u8; 4] = [0; 4];
         file.read_exact(&mut date_modified_bytes)?;
@@ -92,8 +91,7 @@ impl Meta {
 
         // Create a NaiveDateTime from seconds and microseconds
         let modified_date_naive_datetime =
-            DateTime::from_timestamp(date_modified_seconds.into(), micros_remainder * 1000)
-                .unwrap();
+            DateTime::from_timestamp(date_modified_seconds.into(), micros_remainder * 1000).unwrap();
 
         Ok(Self {
             created_at: created_utc,

@@ -73,10 +73,7 @@ pub trait DataFs: Send + Sync + Debug + Clone {
         searched_key: &[u8],
     ) -> Result<Option<(ValOffset, CreationTime, IsDeleted)>, Error>;
 
-    async fn load_entries_within_range(
-        &self,
-        range_offset: RangeOffset,
-    ) -> Result<Vec<Entry<Vec<u8>, usize>>, Error>;
+    async fn load_entries_within_range(&self, range_offset: RangeOffset) -> Result<Vec<Entry<Vec<u8>, usize>>, Error>;
 }
 
 #[async_trait]
@@ -100,8 +97,7 @@ pub trait IndexFs: Send + Sync + Debug + Clone {
 
     async fn get_from_index(&self, searched_key: &[u8]) -> Result<Option<u32>, Error>;
 
-    async fn get_block_range(&self, start_key: &[u8], end_key: &[u8])
-        -> Result<RangeOffset, Error>;
+    async fn get_block_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<RangeOffset, Error>;
 }
 
 #[derive(Debug, Clone)]
@@ -138,20 +134,14 @@ impl FileAsync for FileNode {
         if !dir.exists() {
             return Ok(fs::create_dir_all(&dir)
                 .await
-                .map_err(|err| DirCreationError {
-                    path: dir,
-                    error: err,
-                })?);
+                .map_err(|err| DirCreationError { path: dir, error: err })?);
         }
         Ok(())
     }
 
     async fn metadata(&self) -> Result<Metadata, Error> {
         let file = self.r_lock().await;
-        Ok(file
-            .metadata()
-            .await
-            .map_err(|err| GetFileMetaDataError(err))?)
+        Ok(file.metadata().await.map_err(|err| GetFileMetaDataError(err))?)
     }
 
     async fn open(path: PathBuf) -> Result<File, Error> {
@@ -170,13 +160,10 @@ impl FileAsync for FileNode {
 
     async fn write_all(&self, mut buf: &Buf) -> Result<(), Error> {
         let mut file = self.w_lock().await;
-        Ok(file
-            .write_all(&mut buf)
-            .await
-            .map_err(|err| FileWriteError {
-                path: self.file_path.clone(),
-                error: err,
-            })?)
+        Ok(file.write_all(&mut buf).await.map_err(|err| FileWriteError {
+            path: self.file_path.clone(),
+            error: err,
+        })?)
     }
 
     async fn sync_all(&self) -> Result<(), Error> {
@@ -189,10 +176,7 @@ impl FileAsync for FileNode {
 
     async fn flush(&self) -> Result<(), Error> {
         let mut file = self.w_lock().await;
-        Ok(file
-            .flush()
-            .await
-            .map_err(|err| Error::FileSyncError { error: err })?)
+        Ok(file.flush().await.map_err(|err| Error::FileSyncError { error: err })?)
     }
 
     async fn seek(&self, start_offset: u64) -> Result<u64, Error> {
@@ -335,10 +319,7 @@ impl DataFs for DataFileNode {
         }
     }
 
-    async fn load_entries_within_range(
-        &self,
-        range_offset: RangeOffset,
-    ) -> Result<Vec<Entry<Vec<u8>, usize>>, Error> {
+    async fn load_entries_within_range(&self, range_offset: RangeOffset) -> Result<Vec<Entry<Vec<u8>, usize>>, Error> {
         let mut entries = Vec::new();
         let mut total_bytes_read = 0;
         let path = &self.node.file_path;
@@ -647,11 +628,7 @@ impl IndexFs for IndexFileNode {
         }
     }
 
-    async fn get_block_range(
-        &self,
-        start_key: &[u8],
-        end_key: &[u8],
-    ) -> Result<RangeOffset, Error> {
+    async fn get_block_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<RangeOffset, Error> {
         let path = &self.node.file_path;
         let mut range_offset = RangeOffset::new(0, 0);
         let mut file = self.node.file.write().await;

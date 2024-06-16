@@ -1,7 +1,5 @@
 use crate::bucket::InsertableToBucket;
-use crate::consts::{
-    DEFAULT_FALSE_POSITIVE_RATE, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, WRITE_BUFFER_SIZE,
-};
+use crate::consts::{DEFAULT_FALSE_POSITIVE_RATE, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, WRITE_BUFFER_SIZE};
 use crate::err::Error;
 use crate::filter::BloomFilter;
 //use crate::memtable::val_option::ValueOption;
@@ -20,14 +18,14 @@ pub type InsertionTime = u64;
 pub type IsDeleted = bool;
 
 #[derive(PartialOrd, PartialEq, Copy, Clone, Debug)]
-pub struct Entry<K: Hash + PartialOrd, V> {
+pub struct Entry<K: Hash, V> {
     pub key: K,
     pub val_offset: V,
     pub created_at: u64,
     pub is_tombstone: bool,
 }
 #[derive(Clone, Debug)]
-pub struct InMemoryTable<K: Hash + PartialOrd + cmp::Ord> {
+pub struct InMemoryTable<K: Hash + cmp::Ord> {
     pub entries: Arc<SkipMap<K, (ValOffset, CreationTime, IsTombStone)>>,
     pub bloom_filter: BloomFilter,
     pub false_positive_rate: f64,
@@ -55,12 +53,7 @@ impl InsertableToBucket for InMemoryTable<Key> {
 }
 
 impl Entry<Key, ValOffset> {
-    pub fn new(
-        key: Key,
-        val_offset: ValOffset,
-        created_at: CreationTime,
-        is_tombstone: IsTombStone,
-    ) -> Self {
+    pub fn new(key: Key, val_offset: ValOffset, created_at: CreationTime, is_tombstone: IsTombStone) -> Self {
         Entry {
             key,
             val_offset,
@@ -79,18 +72,10 @@ impl Entry<Key, ValOffset> {
 
 impl InMemoryTable<Key> {
     pub fn new() -> Self {
-        Self::with_specified_capacity_and_rate(
-            SizeUnit::Bytes,
-            WRITE_BUFFER_SIZE,
-            DEFAULT_FALSE_POSITIVE_RATE,
-        )
+        Self::with_specified_capacity_and_rate(SizeUnit::Bytes, WRITE_BUFFER_SIZE, DEFAULT_FALSE_POSITIVE_RATE)
     }
 
-    pub fn with_specified_capacity_and_rate(
-        size_unit: SizeUnit,
-        capacity: usize,
-        false_positive_rate: f64,
-    ) -> Self {
+    pub fn with_specified_capacity_and_rate(size_unit: SizeUnit, capacity: usize, false_positive_rate: f64) -> Self {
         assert!(
             false_positive_rate >= 0.0,
             "False positive rate can not be les than or equal to zero"
@@ -135,10 +120,7 @@ impl InMemoryTable<Key> {
         Ok(())
     }
 
-    pub fn get(
-        &self,
-        key: &Vec<u8>,
-    ) -> Result<Option<(ValOffset, CreationTime, IsTombStone)>, Error> {
+    pub fn get(&self, key: &Vec<u8>) -> Result<Option<(ValOffset, CreationTime, IsTombStone)>, Error> {
         if self.bloom_filter.contains(key) {
             if let Some(entry) = self.entries.get(key) {
                 return Ok(Some(*entry.value())); // returns value offset
@@ -164,11 +146,7 @@ impl InMemoryTable<Key> {
 
     pub fn generate_table_id() -> Vec<u8> {
         let rng = rand::thread_rng();
-        let id: String = rng
-            .sample_iter(&Alphanumeric)
-            .take(10)
-            .map(char::from)
-            .collect();
+        let id: String = rng.sample_iter(&Alphanumeric).take(10).map(char::from).collect();
         id.as_bytes().to_vec()
     }
 

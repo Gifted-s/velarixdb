@@ -107,20 +107,14 @@ pub enum Error {
 
     /// There was an error while atttempting to parse string to UUID
     #[error("Invalid string provided to be parsed to UUID input `{input_string}`: {error}")]
-    InvaidUUIDParseString {
-        input_string: String,
-        error: uuid::Error,
-    },
+    InvaidUUIDParseString { input_string: String, error: uuid::Error },
 
     /// There was an error while atttempting to parse string to UUID
     #[error("Invalid sstable directory error `{input_string}`")]
     InvalidSSTableDirectoryError { input_string: String },
 
     #[error("Invalid string provided to be parsed to UUID input `{input_string}`: {error}")]
-    InvaidSSTable {
-        input_string: String,
-        error: uuid::Error,
-    },
+    InvaidSSTable { input_string: String, error: uuid::Error },
 
     /// Unexpected end of file while reading
     #[error("File read ended unexpectedly")]
@@ -223,6 +217,9 @@ pub enum Error {
     /// Error running GC in an unsurpported operating system
     #[error("Unsuported OS, err message `{0}`")]
     GCErrorUnsupportedPlatform(String),
+
+    #[error("GC Error `{0}`")]
+    GCError(String),
 
     /// Error joining multiple tokio tasks to run concurrently
     #[error("Error joining tokio tasks. error: `{error}`, context: `{context}`")]

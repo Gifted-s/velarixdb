@@ -1,6 +1,4 @@
-use crate::consts::{
-    BUCKET_DIRECTORY_PREFIX, BUCKET_HIGH, BUCKET_LOW, MAX_TRESHOLD, MIN_SSTABLE_SIZE, MIN_TRESHOLD,
-};
+use crate::consts::{BUCKET_DIRECTORY_PREFIX, BUCKET_HIGH, BUCKET_LOW, MAX_TRESHOLD, MIN_SSTABLE_SIZE, MIN_TRESHOLD};
 use crate::err::Error;
 use crate::fs::{FileAsync, FileNode};
 use crate::memtable::{InsertionTime, IsDeleted};
@@ -46,8 +44,7 @@ pub trait InsertableToBucket: Debug + Send + Sync {
 impl Bucket {
     pub async fn new(dir: PathBuf) -> Self {
         let bucket_id = Uuid::new_v4();
-        let bucket_dir =
-            dir.join(BUCKET_DIRECTORY_PREFIX.to_string() + bucket_id.to_string().as_str());
+        let bucket_dir = dir.join(BUCKET_DIRECTORY_PREFIX.to_string() + bucket_id.to_string().as_str());
         let _ = FileNode::create_dir_all(bucket_dir.to_owned()).await;
         Self {
             id: bucket_id,
@@ -81,9 +78,7 @@ impl Bucket {
         }
         let mut all_sstable_size = 0;
         let sst = sstables;
-        let fetch_files_meta = sst
-            .iter()
-            .map(|s| tokio::spawn(fs::metadata(s.data_file.path.clone())));
+        let fetch_files_meta = sst.iter().map(|s| tokio::spawn(fs::metadata(s.data_file.path.clone())));
         for meta_task in fetch_files_meta {
             let meta_data = meta_task
                 .await
@@ -137,9 +132,7 @@ impl BucketMap {
                 && (table.size() < (bucket.avarage_size as f64 * BUCKET_HIGH) as usize)
                 || (table.size() < MIN_SSTABLE_SIZE && bucket.avarage_size < MIN_SSTABLE_SIZE)
             {
-                let sstable_directory = bucket
-                    .dir
-                    .join(format!("sstable_{}", created_at.timestamp_millis()));
+                let sstable_directory = bucket.dir.join(format!("sstable_{}", created_at.timestamp_millis()));
                 let mut sstable = Table::new(sstable_directory).await;
                 sstable.set_entries(table.get_entries());
                 sstable.write_to_file().await?;
@@ -149,8 +142,7 @@ impl BucketMap {
                 //     .iter_mut()
                 //     .for_each(|s| s.increase_hotness());
                 bucket.avarage_size =
-                    Bucket::calculate_buckets_avg_size((&bucket.sstables.read().await).to_vec())
-                        .await?;
+                    Bucket::calculate_buckets_avg_size((&bucket.sstables.read().await).to_vec()).await?;
                 bucket.size = bucket.avarage_size * bucket.sstables.read().await.len();
                 return Ok(sstable);
             }
@@ -159,9 +151,7 @@ impl BucketMap {
         // create a new bucket if none of the condition above was satisfied
         if !added_to_bucket {
             let mut bucket = Bucket::new(self.dir.clone()).await;
-            let sstable_directory = bucket
-                .dir
-                .join(format!("sstable_{}", created_at.timestamp_millis()));
+            let sstable_directory = bucket.dir.join(format!("sstable_{}", created_at.timestamp_millis()));
             let mut sstable = Table::new(sstable_directory).await;
             sstable.set_entries(table.get_entries());
             sstable.write_to_file().await?;
@@ -207,10 +197,7 @@ impl BucketMap {
         return true;
     }
     // NOTE: This should be called only after compaction is complete
-    pub async fn delete_sstables(
-        &mut self,
-        sstables_to_delete: &Vec<(BucketID, Vec<Table>)>,
-    ) -> Result<bool, Error> {
+    pub async fn delete_sstables(&mut self, sstables_to_delete: &Vec<(BucketID, Vec<Table>)>) -> Result<bool, Error> {
         let mut all_sstables_deleted = true;
         let mut buckets_to_delete: Vec<&BucketID> = Vec::new();
         for (bucket_id, sst_paths) in sstables_to_delete {
@@ -219,8 +206,7 @@ impl BucketMap {
                 let b = bucket_clone.sstables.read().await;
                 let sstables_remaining = b.get(sst_paths.len()..).unwrap_or_default();
                 if !sstables_remaining.is_empty() {
-                    let new_average =
-                        Bucket::calculate_buckets_avg_size(sstables_remaining.to_vec()).await?;
+                    let new_average = Bucket::calculate_buckets_avg_size(sstables_remaining.to_vec()).await?;
                     *bucket = Bucket {
                         id: bucket.id,
                         size: new_average * sstables_remaining.len(),
@@ -278,10 +264,7 @@ impl BucketMap {
         for (_, bucket) in &self.buckets {
             if fs::metadata(&bucket.dir).await.is_ok() {
                 if let Err(err) = fs::remove_dir_all(&bucket.dir).await {
-                    error!(
-                        "Err sstable not deleted path={:?}, err={:?} ",
-                        bucket.dir, err
-                    );
+                    error!("Err sstable not deleted path={:?}, err={:?} ", bucket.dir, err);
                 }
             }
         }
