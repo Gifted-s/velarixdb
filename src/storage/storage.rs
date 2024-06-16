@@ -42,7 +42,7 @@ use tokio::{
 #[derive(Debug)]
 pub struct DataStore<'a, K>
 where
-    K: Hash + Ord + Send + Sync + Clone
+    K: Hash + Ord + Send + Sync + Clone,
 {
     pub dir: DirPath,
     pub active_memtable: InMemoryTable<K>,
@@ -626,9 +626,12 @@ impl<'a> DataStore<'a, Key> {
                 created_at: created_at.timestamp_millis() as u64,
                 //TODO// instead of unwrapping this can return a file already exisit error, handle it
                 data_file: DataFile {
-                    file: DataFileNode::new(data_file_path.to_owned(), crate::fs::FileType::SSTable)
-                        .await
-                        .unwrap(),
+                    file: DataFileNode::new(
+                        data_file_path.to_owned(),
+                        crate::fs::FileType::SSTable,
+                    )
+                    .await
+                    .unwrap(),
                     path: data_file_path,
                 },
                 index_file: IndexFile {
