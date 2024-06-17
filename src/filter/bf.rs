@@ -15,7 +15,7 @@ use std::{
 
 #[derive(Debug)]
 pub struct BloomFilter {
-    pub sstable_path: Option<Table>,
+    pub sst: Option<Table>,
     pub no_of_hash_func: usize,
     pub no_of_elements: AtomicU32,
     pub bit_vec: Arc<Mutex<BitVec>>,
@@ -36,7 +36,7 @@ impl BloomFilter {
         Self {
             no_of_elements: AtomicU32::new(0),
             no_of_hash_func,
-            sstable_path: None,
+            sst: None,
             bit_vec: Arc::new(Mutex::new(bv)),
         }
     }
@@ -62,8 +62,8 @@ impl BloomFilter {
         true
     }
 
-    pub fn set_sstable_path(&mut self, sstable_path: Table) {
-        self.sstable_path = Some(sstable_path);
+    pub fn set_sstable(&mut self, sst: Table) {
+        self.sst = Some(sst);
     }
 
     pub fn bloom_filters_within_key_range<'a>(
@@ -73,7 +73,7 @@ impl BloomFilter {
         let mut filtered_bfs = Vec::new();
         paths.into_iter().for_each(|p| {
             bloom_filters.iter().for_each(|b| {
-                if b.get_sstable_path().data_file.path.as_path() == p.as_path() {
+                if b.get_sst().data_file.path.as_path() == p.as_path() {
                     filtered_bfs.push(b)
                 }
             })
@@ -85,8 +85,8 @@ impl BloomFilter {
         let mut sstables: Vec<Table> = Vec::new();
         for bloom_filter in bloom_filters {
             if bloom_filter.contains(key) {
-                if let Some(path) = &bloom_filter.sstable_path {
-                    sstables.push(path.to_owned());
+                if let Some(sst) = &bloom_filter.sst {
+                    sstables.push(sst.to_owned());
                 }
             }
         }
@@ -104,7 +104,7 @@ impl BloomFilter {
         let no_of_hash_func = self.no_of_hash_func;
         let bit_vec = BitVec::from_elem(bits.len(), false);
         Self {
-            sstable_path: None,
+            sst: None,
             no_of_hash_func,
             no_of_elements: AtomicU32::new(0),
             bit_vec: Arc::new(Mutex::new(bit_vec)),
@@ -130,9 +130,9 @@ impl BloomFilter {
     }
 
     /// Get SSTable path
-    pub fn get_sstable_path(&self) -> &Table {
+    pub fn get_sst(&self) -> &Table {
         // Retrieve the element count atomically.
-        self.sstable_path.as_ref().unwrap()
+        self.sst.as_ref().unwrap()
     }
 
     fn calculate_hash<T: Hash>(&self, key: &T, seed: usize) -> u64 {
@@ -157,7 +157,7 @@ impl Clone for BloomFilter {
     fn clone(&self) -> Self {
         // Implement custom logic here if needed
         BloomFilter {
-            sstable_path: self.sstable_path.clone(),
+            sst: self.sst.clone(),
             no_of_hash_func: self.no_of_hash_func,
             no_of_elements: AtomicU32::load(&self.no_of_elements, Ordering::Relaxed).into(),
             bit_vec: self.bit_vec.clone(),

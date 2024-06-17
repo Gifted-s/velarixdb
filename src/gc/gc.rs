@@ -36,7 +36,7 @@ impl DataStore<'static, Key> {
 
         tokio::spawn(async move {
             'runner: loop {
-                sleep_gc_task(DEFAULT_MAJOR_GARBAGE_COLLECTION_INTERVAL_MILLI).await;
+                sleep_gc_task(store.read().await.config.major_garbage_collection_interval).await;
                 let store_clone = store.clone();
                 let invalid_entries = Arc::new(RwLock::new(Vec::new()));
                 let valid_entries = Arc::new(RwLock::new(Vec::new()));

@@ -4,7 +4,7 @@ use crate::err::Error;
 use crate::filter::BloomFilter;
 //use crate::memtable::val_option::ValueOption;
 use crate::storage::SizeUnit;
-use crate::types::{CreationTime, IsTombStone, Key, ValOffset};
+use crate::types::{CreationTime, IsTombStone, Key, SkipMapEntries, ValOffset};
 use chrono::{DateTime, Utc};
 use crossbeam_skiplist::SkipMap;
 use rand::distributions::Alphanumeric;
@@ -26,7 +26,7 @@ pub struct Entry<K: Hash, V> {
 }
 #[derive(Clone, Debug)]
 pub struct InMemoryTable<K: Hash + cmp::Ord> {
-    pub entries: Arc<SkipMap<K, (ValOffset, CreationTime, IsTombStone)>>,
+    pub entries: SkipMapEntries<K>,
     pub bloom_filter: BloomFilter,
     pub false_positive_rate: f64,
     pub size: usize,
@@ -43,11 +43,11 @@ impl InsertableToBucket for InMemoryTable<Key> {
     fn size(&self) -> usize {
         self.size
     }
-    fn find_biggest_key_from_table(&self) -> Result<Key, Error> {
+    fn find_biggest_key(&self) -> Result<Key, Error> {
         self.find_biggest_key()
     }
 
-    fn find_smallest_key_from_table(&self) -> Result<Key, Error> {
+    fn find_smallest_key(&self) -> Result<Key, Error> {
         self.find_smallest_key()
     }
 }

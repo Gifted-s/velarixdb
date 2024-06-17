@@ -19,6 +19,7 @@ pub struct TableInsertor {
     pub(crate) size: usize,
 }
 
+// TODO: This is redundant
 impl InsertableToBucket for TableInsertor {
     fn get_entries(&self) -> Arc<SkipMap<Key, (ValOffset, InsertionTime, IsDeleted)>> {
         Arc::clone(&self.entries)
@@ -26,12 +27,21 @@ impl InsertableToBucket for TableInsertor {
     fn size(&self) -> usize {
         self.size
     }
-    fn find_biggest_key_from_table(&self) -> Result<Vec<u8>, Error> {
-        self.find_biggest_key()
+    fn find_biggest_key(&self) -> Result<Vec<u8>, Error> {
+        let largest_entry = self.entries.iter().next_back();
+        match largest_entry {
+            Some(e) => return Ok(e.key().to_vec()),
+            None => Err(BiggestKeyIndexError),
+        }
     }
 
-    fn find_smallest_key_from_table(&self) -> Result<Vec<u8>, Error> {
-        self.find_smallest_key()
+    // Find the biggest element in the skip list
+    fn find_smallest_key(&self) -> Result<Vec<u8>, Error> {
+        let largest_entry = self.entries.iter().next();
+        match largest_entry {
+            Some(e) => return Ok(e.key().to_vec()),
+            None => Err(LowestKeyIndexError),
+        }
     }
 }
 
@@ -42,23 +52,10 @@ impl TableInsertor {
             size: 0,
         }
     }
-
-    pub fn find_biggest_key(&self) -> Result<Vec<u8>, Error> {
-        let largest_entry = self.entries.iter().next_back();
-        match largest_entry {
-            Some(e) => return Ok(e.key().to_vec()),
-            None => Err(BiggestKeyIndexError),
-        }
+    pub fn from(entries: SkipMapEntries<Key>, size: usize) -> Self {
+        Self { entries, size: 0 }
     }
 
-    // Find the biggest element in the skip list
-    pub fn find_smallest_key(&self) -> Result<Vec<u8>, Error> {
-        let largest_entry = self.entries.iter().next();
-        match largest_entry {
-            Some(e) => return Ok(e.key().to_vec()),
-            None => Err(LowestKeyIndexError),
-        }
-    }
     pub(crate) fn set_entries(&mut self, entries: Arc<SkipMap<Key, (ValOffset, CreationTime, IsTombStone)>>) {
         self.entries = entries;
         self.set_sst_size_from_entries();

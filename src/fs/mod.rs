@@ -13,7 +13,7 @@ use crate::{
     index::RangeOffset,
     load_buffer,
     memtable::{Entry, IsDeleted},
-    types::{self, CreationTime, NoBytesRead, SkipMapEntries, ValOffset},
+    types::{self, CreationTime, Key, NoBytesRead, SkipMapEntries, ValOffset},
     value_log::ValueLogEntry,
 };
 
@@ -65,7 +65,7 @@ pub trait FileAsync: Send + Sync + Debug + Clone {
 #[async_trait]
 pub trait DataFs: Send + Sync + Debug + Clone {
     async fn new(path: PathBuf, file_type: FileType) -> Result<Self, Error>;
-    async fn load_entries(&self) -> Result<(SkipMapEntries, usize), Error>;
+    async fn load_entries(&self) -> Result<(SkipMapEntries<Key>, usize), Error>;
 
     async fn find_entry(
         &self,
@@ -213,7 +213,7 @@ impl DataFs for DataFileNode {
         let node = FileNode::new(path, file_type).await?;
         Ok(DataFileNode { node })
     }
-    async fn load_entries(&self) -> Result<(SkipMapEntries, NoBytesRead), Error> {
+    async fn load_entries(&self) -> Result<(SkipMapEntries<Key>, NoBytesRead), Error> {
         let entries = Arc::new(SkipMap::new());
         let mut total_bytes_read = 0;
         let path = &self.node.file_path;

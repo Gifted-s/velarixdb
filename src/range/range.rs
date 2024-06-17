@@ -234,9 +234,9 @@ impl<'a> DataStore<'a, Key> {
         let sstables_within_range = {
             let mut sstable_path = HashMap::new();
 
-            for b in self.bloom_filters.read().await.to_owned().into_iter() {
+            for b in self.filters.read().await.to_owned().into_iter() {
                 let bf_inner = b.to_owned();
-                let bf_sstable = bf_inner.sstable_path.to_owned().unwrap();
+                let bf_sstable = bf_inner.sst.to_owned().unwrap();
                 let data_path = bf_sstable.data_file.path.to_str().unwrap();
                 if bf_inner.contains(&start.to_vec()) || bf_inner.contains(&end.to_vec()) {
                     // add to sstable path

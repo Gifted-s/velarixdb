@@ -130,7 +130,7 @@ pub enum Error {
 
     /// Partial error occured during compaction
     #[error("Compaction partially failed failed reason : {0}")]
-    CompactionPartiallyFailed(String),
+    CompactionPartiallyFailed(Box<Self>),
 
     /// No SSTable contains the key searched
     #[error("No SS Tables contains the searched key")]
@@ -244,4 +244,10 @@ pub enum Error {
 
     #[error("Serializartion error: {0} ")]
     SerializationError(&'static str),
+
+    #[error("Partial failure, obsolete sstables not deleted but sstable merge was successful")]
+    CompactionCleanupPartialError,
+
+    #[error("Compaction cleanup failed but sstable merge was successful : {0} ")]
+    CompactionCleanupError(Box<Self>),
 }

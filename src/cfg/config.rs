@@ -1,7 +1,7 @@
 use crate::consts::{
-    DEFAULT_ALLOW_PREFETCH, DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MAJOR_GARBAGE_COLLECTION_INTERVAL_MILLI,
-    DEFAULT_MAX_WRITE_BUFFER_NUMBER, DEFAULT_PREFETCH_SIZE, DEFUALT_ENABLE_TTL, ENTRY_TTL, GC_THREAD_COUNT,
-    WRITE_BUFFER_SIZE,
+    DEFAULT_ALLOW_PREFETCH, DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI, DEFAULT_COMPACTION_INTERVAL_MILLI,
+    DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MAJOR_GARBAGE_COLLECTION_INTERVAL_MILLI, DEFAULT_MAX_WRITE_BUFFER_NUMBER,
+    DEFAULT_PREFETCH_SIZE, DEFUALT_ENABLE_TTL, ENTRY_TTL, GC_THREAD_COUNT, WRITE_BUFFER_SIZE,
 };
 
 #[derive(Clone, Debug)]
@@ -30,6 +30,10 @@ pub struct Config {
     pub max_buffer_write_number: usize,
 
     pub major_garbage_collection_interval: u64,
+
+    pub compactor_flush_listener_interval: u64,
+
+    pub background_compaction_interval: u64,
 }
 impl Config {
     pub fn new(
@@ -41,6 +45,8 @@ impl Config {
         write_buffer_size: usize,
         max_buffer_write_number: usize,
         major_garbage_collection_interval: u64,
+        compactor_flush_listener_interval: u64,
+        background_compaction_interval: u64,
     ) -> Self {
         Self {
             false_positive_rate,
@@ -51,6 +57,8 @@ impl Config {
             max_buffer_write_number,
             write_buffer_size,
             major_garbage_collection_interval,
+            compactor_flush_listener_interval,
+            background_compaction_interval,
         }
     }
 }
@@ -66,6 +74,8 @@ impl Default for Config {
             max_buffer_write_number: DEFAULT_MAX_WRITE_BUFFER_NUMBER,
             write_buffer_size: WRITE_BUFFER_SIZE,
             major_garbage_collection_interval: DEFAULT_MAJOR_GARBAGE_COLLECTION_INTERVAL_MILLI,
+            compactor_flush_listener_interval: DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI,
+            background_compaction_interval: DEFAULT_COMPACTION_INTERVAL_MILLI,
         }
     }
 }

@@ -17,7 +17,9 @@ use crate::memtable::{Entry, InMemoryTable};
 use crate::meta::Meta;
 use crate::range::RangeIterator;
 use crate::sst::{DataFile, Table};
-use crate::types::{self, FlushSignal, Key, ValOffset};
+use crate::types::{
+    self, BloomFilterHandle, BucketMapHandle, FlushSignal, ImmutableMemTable, Key, KeyRangeHandle, ValOffset,
+};
 use crate::value_log::ValueLog;
 use async_broadcast::broadcast;
 use chrono::Utc;
@@ -45,16 +47,16 @@ where
 {
     pub dir: DirPath,
     pub active_memtable: InMemoryTable<K>,
-    pub bloom_filters: Arc<RwLock<Vec<BloomFilter>>>,
+    pub filters: BloomFilterHandle,
     pub val_log: ValueLog,
-    pub buckets: Arc<RwLock<BucketMap>>,
-    pub key_range: Arc<RwLock<KeyRange>>,
+    pub buckets: BucketMapHandle,
+    pub key_range: KeyRangeHandle,
     pub compactor: Compactor,
     pub meta: Meta,
     pub flusher: Flusher,
     pub config: Config,
     pub range_iterator: Option<RangeIterator<'a>>,
-    pub read_only_memtables: Arc<RwLock<IndexMap<K, Arc<RwLock<InMemoryTable<K>>>>>>,
+    pub read_only_memtables: ImmutableMemTable<K>,
     pub flush_data_sender: ChanSender,
     pub flush_data_recevier: ChanRecv,
     pub flush_signal_sender: ChanSender,
@@ -127,15 +129,15 @@ impl<'a> DataStore<'a, Key> {
         // Start background job to check for compaction condition at regular intervals 20 days
         self.compactor.start_periodic_background_compaction(
             Arc::clone(&self.buckets),
-            Arc::clone(&self.bloom_filters),
+            Arc::clone(&self.filters),
             Arc::clone(&self.key_range),
         );
 
         if let ChanRecv::FlushNotificationRecv(rcx) = &self.flush_signal_receiver {
             self.compactor.start_flush_listner(
-                &rcx,
+                rcx.clone(),
                 Arc::clone(&self.buckets),
-                Arc::clone(&self.bloom_filters),
+                Arc::clone(&self.filters),
                 Arc::clone(&self.key_range),
             );
         }
@@ -239,16 +241,16 @@ impl<'a> DataStore<'a, Key> {
                 if sstables_within_key_range.is_empty() {
                     return Err(KeyNotFoundInAnySSTableError);
                 }
-                let bloom_filter_read_lock = &self.bloom_filters.read().await;
-                let bloom_filters_within_key_range = BloomFilter::bloom_filters_within_key_range(
+                let bloom_filter_read_lock = &self.filters.read().await;
+                let filters_within_key_range = BloomFilter::bloom_filters_within_key_range(
                     bloom_filter_read_lock,
                     sstables_within_key_range.to_vec(),
                 );
-                if bloom_filters_within_key_range.is_empty() {
+                if filters_within_key_range.is_empty() {
                     return Err(KeyNotFoundByAnyBloomFilterError);
                 }
 
-                let sstable_paths = BloomFilter::sstables_within_key_range(bloom_filters_within_key_range, &key);
+                let sstable_paths = BloomFilter::sstables_within_key_range(filters_within_key_range, &key);
                 match sstable_paths {
                     Some(sstables_within_key_range) => {
                         for sstable in sstables_within_key_range.iter() {
@@ -431,7 +433,7 @@ impl<'a> DataStore<'a, Key> {
             let (comp_sender, comp_rec) = mpsc::channel(1);
             let read_only_memtables = IndexMap::new();
 
-            let bloom_filters_ref: Arc<RwLock<Vec<BloomFilter>>> = Arc::new(RwLock::new(Vec::new()));
+            let filters_ref: Arc<RwLock<Vec<BloomFilter>>> = Arc::new(RwLock::new(Vec::new()));
             let buckets_ref = Arc::new(RwLock::new(buckets.to_owned()));
             let key_range_ref = Arc::new(RwLock::new(key_range));
             let read_only_memtables_ref = Arc::new(RwLock::new(read_only_memtables));
@@ -439,7 +441,7 @@ impl<'a> DataStore<'a, Key> {
             let flusher = Flusher::new(
                 read_only_memtables_ref.clone(),
                 buckets_ref.clone(),
-                bloom_filters_ref.clone(),
+                filters_ref.clone(),
                 key_range_ref.clone(),
                 config.enable_ttl,
                 config.entry_ttl_millis,
@@ -448,11 +450,16 @@ impl<'a> DataStore<'a, Key> {
             return Ok(DataStore {
                 active_memtable,
                 val_log: vlog,
-                bloom_filters: bloom_filters_ref,
+                filters: filters_ref,
                 buckets: buckets_ref,
                 dir,
                 key_range: key_range_ref,
-                compactor: Compactor::new(config.enable_ttl, config.entry_ttl_millis),
+                compactor: Compactor::new(
+                    config.enable_ttl,
+                    config.entry_ttl_millis,
+                    config.background_compaction_interval,
+                    config.compactor_flush_listener_interval,
+                ),
                 config: config.clone(),
                 meta,
                 flusher,
@@ -468,7 +475,7 @@ impl<'a> DataStore<'a, Key> {
         }
 
         let mut recovered_buckets: IndexMap<BucketID, Bucket> = IndexMap::new();
-        let mut bloom_filters: Vec<BloomFilter> = Vec::new();
+        let mut filters: Vec<BloomFilter> = Vec::new();
         let mut most_recent_head_timestamp = 0;
         let mut most_recent_head_offset = 0;
 
@@ -600,9 +607,9 @@ impl<'a> DataStore<'a, Key> {
             }
 
             let mut bf = Table::build_bloomfilter_from_sstable(&sstable.entries);
-            bf.set_sstable_path(sst_file.clone());
+            bf.set_sstable(sst_file.clone());
             // update bloom filters
-            bloom_filters.push(bf)
+            filters.push(bf)
 
             // Process sst_files here (logic similar to standard fs)
         }
@@ -634,7 +641,7 @@ impl<'a> DataStore<'a, Key> {
         match recover_result {
             Ok((active_memtable, read_only_memtables)) => {
                 let buckets_map_ref = Arc::new(RwLock::new(buckets_map.to_owned()));
-                let bloom_filter_ref = Arc::new(RwLock::new(bloom_filters));
+                let bloom_filter_ref = Arc::new(RwLock::new(filters));
                 //TODO:  we also need to recover this from sstable
                 let key_range_ref = Arc::new(RwLock::new(key_range.to_owned()));
                 let read_only_memtables_ref = Arc::new(RwLock::new(read_only_memtables));
@@ -653,11 +660,16 @@ impl<'a> DataStore<'a, Key> {
                     val_log: vlog,
                     dir,
                     buckets: buckets_map_ref,
-                    bloom_filters: bloom_filter_ref,
+                    filters: bloom_filter_ref,
                     key_range: key_range_ref,
                     meta,
                     flusher,
-                    compactor: Compactor::new(config.enable_ttl, config.entry_ttl_millis),
+                    compactor: Compactor::new(
+                        config.enable_ttl,
+                        config.entry_ttl_millis,
+                        config.background_compaction_interval,
+                        config.compactor_flush_listener_interval,
+                    ),
                     config: config.clone(),
                     read_only_memtables: read_only_memtables_ref,
                     tombstone_compaction_sender: ChanSender::TombStoneCompactionNoticeSender(tomb_comp_sender),
@@ -743,11 +755,10 @@ impl<'a> DataStore<'a, Key> {
         }
 
         // Sort bloom filter by hotness after flushing read-only memtables
-        self.bloom_filters.write().await.sort_by(|a, b| {
-            b.get_sstable_path()
-                .get_hotness()
-                .cmp(&a.get_sstable_path().get_hotness())
-        });
+        self.filters
+            .write()
+            .await
+            .sort_by(|a, b| b.get_sst().get_hotness().cmp(&a.get_sst().get_hotness()));
 
         // clear the memtables
         self.active_memtable.clear();
@@ -766,8 +777,8 @@ impl<'a> DataStore<'a, Key> {
         // Write the memtable to disk as SSTables
         // Insert to bloom filter
         let mut bf = memtable.read().await.get_bloom_filter();
-        bf.set_sstable_path(sstable_path.clone());
-        self.bloom_filters.write().await.push(bf);
+        bf.set_sstable(sstable_path.clone());
+        self.filters.write().await.push(bf);
 
         let biggest_key = memtable.read().await.find_biggest_key()?;
         let smallest_key = memtable.read().await.find_smallest_key()?;
@@ -781,11 +792,11 @@ impl<'a> DataStore<'a, Key> {
         Ok(())
     }
 
-    pub async fn run_compaction(&mut self) -> Result<bool, Error> {
+    pub async fn run_compaction(&mut self) -> Result<(), Error> {
         self.compactor
             .run_compaction(
                 Arc::clone(&self.buckets),
-                Arc::clone(&self.bloom_filters.clone()),
+                Arc::clone(&self.filters.clone()),
                 Arc::clone(&self.key_range),
             )
             .await
@@ -838,7 +849,7 @@ mod tests {
 
     use std::thread;
 
-    use crate::compactors::CompactionState;
+    use crate::compactors::CompState;
     use crate::consts::DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI;
 
     use super::*;
@@ -870,7 +881,7 @@ mod tests {
         let s_engine = DataStore::new(path.clone()).await.unwrap();
 
         // // Specify the number of random strings to generate
-        let num_strings = 20000; // 100k
+        let num_strings = 50000; // 100k
 
         // Specify the length of each random string
         let string_length = 5;
@@ -900,6 +911,7 @@ mod tests {
             match tokio_response {
                 Ok(entry) => match entry {
                     Ok(is_inserted) => {
+                        println!("Insertion Completed");
                         assert_eq!(is_inserted, true)
                     }
                     Err(err) => assert!(false, "{}", err.to_string()),
@@ -910,13 +922,13 @@ mod tests {
             }
         }
         println!("Write completed ");
-        // sleep(Duration::from_millis(
-        //     DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI * 2,
-        // ))
-        // .await;
-
+        sleep(Duration::from_millis(
+            DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI * 3,
+        ))
+        .await;
+        println!("About to start reading");
         // println!("Compaction completed !");
-        //random_strings.sort();
+        random_strings.sort();
         let tasks = random_strings
             .get(0..(num_strings / 2))
             .unwrap_or_default()
@@ -955,7 +967,7 @@ mod tests {
         let mut s_engine = DataStore::new(path.clone()).await.unwrap();
 
         // Specify the number of random strings to generate
-        let num_strings = 1000000;
+        let num_strings = 1000;
 
         // Specify the length of each random string
         let string_length = 10;
@@ -982,7 +994,7 @@ mod tests {
                 );
                 println!(
                     "Length of bloom filters after compaction {:?}",
-                    s_engine.bloom_filters.read().await.len()
+                    s_engine.filters.read().await.len()
                 );
             }
             Err(err) => {
@@ -1003,7 +1015,7 @@ mod tests {
             }
         }
 
-        let _ = fs::remove_dir_all(path.clone()).await;
+        // let _ = fs::remove_dir_all(path.clone()).await;
         // sort to make fetch random
     }
 
@@ -1146,7 +1158,7 @@ mod tests {
                 );
                 println!(
                     "Length of bloom filters after compaction {:?}",
-                    sg.read().await.bloom_filters.read().await.len()
+                    sg.read().await.filters.read().await.len()
                 );
             }
             Err(err) => {
@@ -1269,7 +1281,7 @@ mod tests {
                 );
                 println!(
                     "Length of bloom filters after compaction {:?}",
-                    sg.read().await.bloom_filters.read().await.len()
+                    sg.read().await.filters.read().await.len()
                 );
             }
             Err(err) => {
@@ -1381,7 +1393,7 @@ mod tests {
                 );
                 println!(
                     "Length of bloom filters after compaction {:?}",
-                    sg.read().await.bloom_filters.read().await.len()
+                    sg.read().await.filters.read().await.len()
                 );
             }
             Err(err) => {

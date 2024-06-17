@@ -55,17 +55,16 @@ impl Flusher {
         let table_smallest_key = table_lock.find_smallest_key()?;
         let hotness = 1;
         let mut bucket_lock = flush_data.bucket_map.write().await;
-        let sstable_path = bucket_lock
+        let sst = bucket_lock
             .insert_to_appropriate_bucket(Arc::new(Box::new(table_lock.to_owned())), hotness)
             .await?;
-        let data_file_path = sstable_path.get_data_file_path().clone();
-        flush_data.key_range.write().await.set(
-            data_file_path,
-            table_smallest_key,
-            table_biggest_key,
-            sstable_path.clone(),
-        );
-        table_bloom_filter.set_sstable_path(sstable_path);
+        let data_file_path = sst.get_data_file_path().clone();
+        flush_data
+            .key_range
+            .write()
+            .await
+            .set(data_file_path, table_smallest_key, table_biggest_key, sst.clone());
+        table_bloom_filter.set_sstable(sst);
         flush_data
             .bloom_filters
             .write()
@@ -73,11 +72,11 @@ impl Flusher {
             .push(table_bloom_filter.to_owned());
 
         // sort bloom filter by hotness
-        flush_data.bloom_filters.write().await.sort_by(|a, b| {
-            b.get_sstable_path()
-                .get_hotness()
-                .cmp(&a.get_sstable_path().get_hotness())
-        });
+        flush_data
+            .bloom_filters
+            .write()
+            .await
+            .sort_by(|a, b| b.get_sst().get_hotness().cmp(&a.get_sst().get_hotness()));
 
         Ok(())
     }

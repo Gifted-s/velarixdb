@@ -12,7 +12,7 @@ use crate::{
     fs::{DataFileNode, DataFs, FileAsync, FileNode, IndexFileNode, IndexFs},
     index::{Index, IndexFile, RangeOffset},
     memtable::{Entry, InsertionTime, IsDeleted},
-    types::{CreationTime, IsTombStone, Key, ValOffset},
+    types::{CreationTime, IsTombStone, Key, SkipMapEntries, ValOffset},
 };
 
 use Error::*;
@@ -47,18 +47,26 @@ pub struct Table {
 }
 
 impl InsertableToBucket for Table {
-    fn get_entries(&self) -> Arc<SkipMap<Key, (ValOffset, InsertionTime, IsDeleted)>> {
-        Arc::clone(&self.entries)
+    fn get_entries(&self) -> SkipMapEntries<Key> {
+        self.entries.clone()
     }
     fn size(&self) -> usize {
         self.size
     }
-    fn find_biggest_key_from_table(&self) -> Result<Vec<u8>, Error> {
-        self.find_biggest_key()
+    fn find_biggest_key(&self) -> Result<Vec<u8>, Error> {
+        let largest_entry = self.entries.iter().next_back();
+        match largest_entry {
+            Some(e) => return Ok(e.key().to_vec()),
+            None => Err(BiggestKeyIndexError),
+        }
     }
 
-    fn find_smallest_key_from_table(&self) -> Result<Vec<u8>, Error> {
-        self.find_smallest_key()
+    fn find_smallest_key(&self) -> Result<Vec<u8>, Error> {
+        let largest_entry = self.entries.iter().next();
+        match largest_entry {
+            Some(e) => return Ok(e.key().to_vec()),
+            None => Err(LowestKeyIndexError),
+        }
     }
 }
 
@@ -124,22 +132,6 @@ impl Table {
             data_file: self.data_file.to_owned(),
             index_file: self.index_file.to_owned(),
         }))
-    }
-
-    pub fn find_biggest_key(&self) -> Result<Vec<u8>, Error> {
-        let largest_entry = self.entries.iter().next_back();
-        match largest_entry {
-            Some(e) => return Ok(e.key().to_vec()),
-            None => Err(BiggestKeyIndexError),
-        }
-    }
-
-    pub fn find_smallest_key(&self) -> Result<Vec<u8>, Error> {
-        let largest_entry = self.entries.iter().next();
-        match largest_entry {
-            Some(e) => return Ok(e.key().to_vec()),
-            None => Err(LowestKeyIndexError),
-        }
     }
 
     pub(crate) async fn write_to_file(&self) -> Result<(), Error> {
@@ -227,9 +219,6 @@ impl Table {
         self.set_sst_size_from_entries();
     }
 
-    pub(crate) fn get_entries(&self) -> Arc<SkipMap<Key, (ValOffset, CreationTime, IsTombStone)>> {
-        self.entries.clone()
-    }
     pub(crate) fn set_sst_size_from_entries(&mut self) {
         self.size = self
             .entries

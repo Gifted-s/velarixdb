@@ -127,29 +127,8 @@ impl Block {
 
     pub async fn write_to_file(&self, file: FileNode) -> Result<(), Error> {
         for entry in &self.data {
-            let entry_len = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
-            let mut entry_vec = Vec::with_capacity(entry_len);
-            //TODO: serialize
-            //add key len
-            entry_vec.extend_from_slice(&(entry.key_prefix).to_le_bytes());
-
-            //add key
-            entry_vec.extend_from_slice(&entry.key);
-
-            //add value offset
-            entry_vec.extend_from_slice(&(entry.value_offset as u32).to_le_bytes());
-
-            //write date created in milliseconds
-            entry_vec.extend_from_slice(&entry.creation_date.to_le_bytes());
-
-            //write is tombstone to file
-            entry_vec.push(entry.is_tombstone as u8);
-            if entry_len != entry_vec.len() {
-                return Err(SSTableWriteError {
-                    error: io::Error::new(io::ErrorKind::InvalidInput, "Invalid Input"),
-                });
-            }
-            file.write_all(&entry_vec).await?;
+            let serialized_entry = self.serialize(entry)?;
+            file.write_all(&serialized_entry).await?;
         }
         Ok(())
     }
@@ -162,32 +141,31 @@ impl Block {
     /// Retrieves the value associated with the provided key from the Block.
     ///
     /// Returns `Some(value)` if the key is found in the Block, `None` otherwise.
-    // pub(crate) fn get_value(&self, key: &[u8]) -> Option<Vec<u8>> {
-    //     // Check if the key exists in the index.
-    //     if let Some(&offset) = self.index.get(&Arc::new(key.to_owned())) {
-    //         // Calculate the starting position of the value in the data vector.
-    //         let start = offset + SIZE_OF_U32 + key.len();
+    pub(crate) fn serialize(&self, entry: &BlockEntry) -> Result<Vec<u8>, Error> {
+        let entry_len = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
+        let mut entry_vec = Vec::with_capacity(entry_len);
+        //TODO: serialize
+        //add key len
+        entry_vec.extend_from_slice(&(entry.key_prefix).to_le_bytes());
 
-    //         // Extract the bytes representing the length of the value from the data vector.
-    //         let value_len_bytes = &self.data[offset..offset + SIZE_OF_U32];
+        //add key
+        entry_vec.extend_from_slice(&entry.key);
 
-    //         // Convert the value length bytes into a u32 value using little-endian byte order.
-    //         let value_len = u32::from_le_bytes(value_len_bytes.try_into().unwrap()) as usize;
+        //add value offset
+        entry_vec.extend_from_slice(&(entry.value_offset as u32).to_le_bytes());
 
-    //         // Calculate the ending position of the value in the data vector.
-    //         let end = start + value_len;
+        //write date created in milliseconds
+        entry_vec.extend_from_slice(&entry.creation_date.to_le_bytes());
 
-    //         // Extract the value bytes from the data vector and return them as a new Vec<u8>.
-    //         Some(self.data[start..end].to_vec())
-    //     } else {
-    //         // The key was not found in the index, return None.
-    //         None
-    //     }
-    // }
+        //write is tombstone to file
+        entry_vec.push(entry.is_tombstone as u8);
+        if entry_len != entry_vec.len() {
+            return Err(SSTableWriteError {
+                error: io::Error::new(io::ErrorKind::InvalidInput, "Invalid Input"),
+            });
+        }
 
-    /// Returns the number of entries in the Block.
-    pub fn entry_count(&self) -> usize {
-        self.entry_count
+        Ok(entry_vec)
     }
 }
 

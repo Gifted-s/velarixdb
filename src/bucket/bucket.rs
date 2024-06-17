@@ -14,8 +14,8 @@ use tokio::fs;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-type SSTablesToRemove = Vec<(BucketID, Vec<Table>)>;
-type BucketsToCompact = Result<(Vec<Bucket>, SSTablesToRemove), Error>;
+pub type SSTablesToRemove = Vec<(BucketID, Vec<Table>)>;
+pub type BucketsToCompact = Result<(Vec<Bucket>, SSTablesToRemove), Error>;
 pub type BucketID = Uuid;
 
 #[derive(Debug, Clone)]
@@ -37,8 +37,8 @@ use Error::*;
 pub trait InsertableToBucket: Debug + Send + Sync {
     fn get_entries(&self) -> Arc<SkipMap<Key, (ValOffset, InsertionTime, IsDeleted)>>;
     fn size(&self) -> usize;
-    fn find_biggest_key_from_table(&self) -> Result<Vec<u8>, Error>;
-    fn find_smallest_key_from_table(&self) -> Result<Vec<u8>, Error>;
+    fn find_biggest_key(&self) -> Result<Vec<u8>, Error>;
+    fn find_smallest_key(&self) -> Result<Vec<u8>, Error>;
 }
 
 impl Bucket {
