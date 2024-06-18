@@ -13,7 +13,7 @@ use crate::{
     index::RangeOffset,
     load_buffer,
     memtable::{Entry, IsDeleted},
-    types::{self, CreationTime, Key, NoBytesRead, SkipMapEntries, ValOffset},
+    types::{CreationTime, Key, NoBytesRead, SkipMapEntries, ValOffset},
     value_log::ValueLogEntry,
 };
 

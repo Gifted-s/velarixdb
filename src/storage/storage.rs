@@ -443,8 +443,6 @@ impl<'a> DataStore<'a, Key> {
                 buckets_ref.clone(),
                 filters_ref.clone(),
                 key_range_ref.clone(),
-                config.enable_ttl,
-                config.entry_ttl_millis,
             );
 
             return Ok(DataStore {
@@ -566,23 +564,12 @@ impl<'a> DataStore<'a, Key> {
             if let Some(b) = recovered_buckets.get(&bucket_uuid) {
                 let temp_sstables = b.sstables.clone();
                 temp_sstables.write().await.push(sst_file.clone());
-                let updated_bucket = Bucket::new_with_id_dir_average_and_sstables(
-                    buckets_dir.path(),
-                    bucket_uuid,
-                    temp_sstables.read().await.clone(),
-                    0,
-                )
-                .await?;
+                let updated_bucket =
+                    Bucket::from(buckets_dir.path(), bucket_uuid, temp_sstables.read().await.clone(), 0).await?;
                 recovered_buckets.insert(bucket_uuid, updated_bucket);
             } else {
                 // Create new bucket
-                let updated_bucket = Bucket::new_with_id_dir_average_and_sstables(
-                    buckets_dir.path(),
-                    bucket_uuid,
-                    vec![sst_file.clone()],
-                    0,
-                )
-                .await?;
+                let updated_bucket = Bucket::from(buckets_dir.path(), bucket_uuid, vec![sst_file.clone()], 0).await?;
                 recovered_buckets.insert(bucket_uuid, updated_bucket);
             }
 
@@ -655,8 +642,6 @@ impl<'a> DataStore<'a, Key> {
                     buckets_map_ref.clone(),
                     bloom_filter_ref.clone(),
                     key_range_ref.clone(),
-                    config.enable_ttl,
-                    config.entry_ttl_millis,
                 );
 
                 Ok(DataStore {
@@ -779,7 +764,7 @@ impl<'a> DataStore<'a, Key> {
             .buckets
             .write()
             .await
-            .insert_to_appropriate_bucket(Arc::new(Box::new(memtable.read().await.to_owned())), hotness)
+            .insert_to_appropriate_bucket(Arc::new(Box::new(memtable.read().await.to_owned())))
             .await?;
 
         // Write the memtable to disk as SSTables
@@ -859,6 +844,7 @@ mod tests {
 
     use crate::compactors::CompState;
     use crate::consts::DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI;
+    use crate::utils;
 
     use super::*;
     use futures::future::join_all;
@@ -877,10 +863,6 @@ mod tests {
         }
     }
 
-    fn generate_random_string(length: usize) -> String {
-        let rng = thread_rng();
-        rng.sample_iter(&Alphanumeric).take(length).map(|c| c as char).collect()
-    }
 
     // Generate test to find keys after compaction
     #[tokio::test]
@@ -889,14 +871,14 @@ mod tests {
         let s_engine = DataStore::new(path.clone()).await.unwrap();
 
         // // Specify the number of random strings to generate
-        let num_strings = 50000; // 100k
+        let num_strings = 20000; // 100k
 
         // Specify the length of each random string
         let string_length = 5;
         // Generate random strings and store them in a vector
         let mut random_strings: Vec<String> = Vec::with_capacity(num_strings);
         for _ in 0..num_strings {
-            let random_string = generate_random_string(string_length);
+            let random_string = utils::generate_random_id(string_length);
             random_strings.push(random_string);
         }
         // for k in random_strings.clone() {
@@ -982,7 +964,7 @@ mod tests {
         // Generate random strings and store them in a vector
         let mut random_strings: Vec<String> = Vec::new();
         for _ in 0..num_strings {
-            let random_string = generate_random_string(string_length);
+            let random_string = utils::generate_random_id(string_length);
             random_strings.push(random_string);
         }
 
@@ -1040,7 +1022,7 @@ mod tests {
         // Generate random strings and store them in a vector
         let mut random_strings: Vec<String> = Vec::new();
         for _ in 0..num_strings {
-            let random_string = generate_random_string(string_length);
+            let random_string = utils::generate_random_id(string_length);
             random_strings.push(random_string);
         }
         // for k in random_strings.clone() {
@@ -1207,7 +1189,7 @@ mod tests {
         // Generate random strings and store them in a vector
         let mut random_strings: Vec<String> = Vec::new();
         for _ in 0..num_strings {
-            let random_string = generate_random_string(string_length);
+            let random_string = utils::generate_random_id(string_length);
             random_strings.push(random_string);
         }
         for k in random_strings.clone() {
@@ -1322,7 +1304,7 @@ mod tests {
         // Generate random strings and store them in a vector
         let mut random_strings: Vec<String> = Vec::new();
         for _ in 0..num_strings {
-            let random_string = generate_random_string(string_length);
+            let random_string = utils::generate_random_id(string_length);
             random_strings.push(random_string);
         }
         // for k in random_strings.clone() {

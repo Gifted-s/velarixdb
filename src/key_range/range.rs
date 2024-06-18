@@ -1,5 +1,4 @@
 use crate::{
-    fs::FileNode,
     sst::Table,
     types::{self, Key},
 };
@@ -16,14 +15,14 @@ pub struct KeyRange {
 pub struct Range {
     pub smallest_key: SmallestKey,
     pub biggest_key: LargestKey,
-    pub full_sst_path: Table,
+    pub sst: Table,
 }
 impl Range {
-    pub fn new(smallest_key: SmallestKey, biggest_key: LargestKey, full_sst_path: Table) -> Self {
+    pub fn new(smallest_key: SmallestKey, biggest_key: LargestKey, sst: Table) -> Self {
         Self {
             smallest_key,
             biggest_key,
-            full_sst_path,
+            sst,
         }
     }
 }

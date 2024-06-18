@@ -1,7 +1,6 @@
 use chrono::{DateTime, Utc};
 use crossbeam_skiplist::SkipMap;
 use std::{cmp::Ordering, path::PathBuf, sync::Arc};
-use tokio::io;
 
 use crate::{
     block::Block,
@@ -186,9 +185,7 @@ impl Table {
         self.data_file.file.load_entries_within_range(range_offset).await
     }
 
-    pub(crate) fn build_filter_from_sstable(
-        entries: &Arc<SkipMap<Vec<u8>, (ValOffset, CreationTime, IsTombStone)>>,
-    ) -> BloomFilter {
+    pub(crate) fn build_filter_from_sstable(entries: &SkipMapEntries<Key>) -> BloomFilter {
         //TODO: FALSE POSITIVE should be from config
         // Rebuild the bloom filter since a new sstable has been created
         let mut filter = BloomFilter::new(DEFAULT_FALSE_POSITIVE_RATE, entries.len());

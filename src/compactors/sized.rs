@@ -47,7 +47,7 @@ impl<'a> SizedTierRunner<'a> {
         }
     }
     pub async fn fetch_imbalanced_buckets(bucket_map: BucketMapHandle) -> BucketsToCompact {
-        bucket_map.read().await.extract_buckets_to_compact().await
+        bucket_map.read().await.extract_imbalanced_buckets().await
     }
     pub async fn run_compaction(&mut self) -> Result<(), Error> {
         if self.bucket_map.read().await.is_balanced().await {
@@ -76,9 +76,7 @@ impl<'a> SizedTierRunner<'a> {
                     for mut merged_sst in merged_sstables.into_iter() {
                         let mut bucket = buckets.write().await;
                         let table = merged_sst.clone().sstable;
-                        let insert_res = bucket
-                            .insert_to_appropriate_bucket(Arc::new(table), merged_sst.hotness)
-                            .await;
+                        let insert_res = bucket.insert_to_appropriate_bucket(Arc::new(table)).await;
                         drop(bucket);
                         match insert_res {
                             Ok(sst) => {

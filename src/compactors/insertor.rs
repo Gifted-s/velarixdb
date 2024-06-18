@@ -22,7 +22,7 @@ impl InsertableToBucket for TableInsertor {
     fn size(&self) -> usize {
         self.size
     }
-    fn find_biggest_key(&self) -> Result<Vec<u8>, Error> {
+    fn find_biggest_key(&self) -> Result<Key, Error> {
         let largest_entry = self.entries.iter().next_back();
         match largest_entry {
             Some(e) => return Ok(e.key().to_vec()),
@@ -30,8 +30,7 @@ impl InsertableToBucket for TableInsertor {
         }
     }
 
-    // Find the biggest element in the skip list
-    fn find_smallest_key(&self) -> Result<Vec<u8>, Error> {
+    fn find_smallest_key(&self) -> Result<Key, Error> {
         let largest_entry = self.entries.iter().next();
         match largest_entry {
             Some(e) => return Ok(e.key().to_vec()),

@@ -1,7 +1,5 @@
 use crate::storage::SizeUnit;
 
-pub const GC_THREAD_COUNT: u32 = 5;
-
 pub const GC_CHUNK_SIZE: usize = SizeUnit::Kilobytes.to_bytes(1);
 
 pub const WRITE_BUFFER_SIZE: usize = SizeUnit::Kilobytes.to_bytes(50);
@@ -78,9 +76,9 @@ pub const TAIL_ENTRY_KEY: &[u8; 4] = b"tail";
 // 4 bytes to store the head offset
 // 8 bytes to store the head entry creation date
 // 1 byte for tombstone marker
-pub const HEAD_ENTRY_LENGTH: usize = 21;
+// pub const HEAD_ENTRY_LENGTH: usize = 21;
 
-pub const VLOG_TAIL_ENTRY_LENGTH: usize = 21;
+// pub const VLOG_TAIL_ENTRY_LENGTH: usize = 21;
 
 pub const SIZE_OF_USIZE: usize = std::mem::size_of::<usize>();
 

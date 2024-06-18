@@ -1,5 +1,5 @@
 use crate::{
-    consts::{EOF, VLOG_FILE_NAME},
+    consts::{EOF, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, VLOG_FILE_NAME},
     err::Error,
     fs::{FileAsync, FileNode, VLogFileNode, VLogFs},
 };
@@ -108,7 +108,7 @@ impl ValueLog {
     pub async fn clear_all(&mut self) {
         if self.content.file.node.metadata().await.is_ok() {
             if let Err(err) = self.content.file.node.remove_dir_all().await {
-                error!("path: {:?}, err={:?} ", self.content.file.node.file_path, err);
+                log::error!("{}", err);
             }
         }
         self.tail_offset = 0;
@@ -137,12 +137,7 @@ impl ValueLogEntry {
     }
 
     fn serialize(&self) -> Vec<u8> {
-        let entry_len = mem::size_of::<u32>()
-            + mem::size_of::<u32>()
-            + mem::size_of::<u64>()
-            + self.key.len()
-            + self.value.len()
-            + mem::size_of::<u8>();
+        let entry_len = SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + self.key.len() + self.value.len() + SIZE_OF_U8;
 
         let mut serialized_data = Vec::with_capacity(entry_len);
 
