@@ -6,13 +6,16 @@ use tokio::io;
 use crate::{
     block::Block,
     bucket::InsertableToBucket,
-    consts::{DEFAULT_FALSE_POSITIVE_RATE, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, SIZE_OF_USIZE},
+    consts::{
+        DEFAULT_FALSE_POSITIVE_RATE, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8,
+        SIZE_OF_USIZE,
+    },
     err::Error,
     filter::BloomFilter,
     fs::{DataFileNode, DataFs, FileAsync, FileNode, IndexFileNode, IndexFs},
     index::{Index, IndexFile, RangeOffset},
     memtable::{Entry, InsertionTime, IsDeleted},
-    types::{CreationTime, IsTombStone, Key, ValOffset},
+    types::{CreationTime, IsTombStone, Key, SkipMapEntries, ValOffset},
 };
 
 use Error::*;
@@ -43,22 +46,31 @@ pub struct Table {
     pub(crate) created_at: CreationTime,
     pub(crate) data_file: DataFile<DataFileNode>,
     pub(crate) index_file: IndexFile<IndexFileNode>,
-    pub(crate) entries: Arc<SkipMap<Key, (ValOffset, InsertionTime, IsDeleted)>>,
+    pub(crate) entries:
+        Arc<SkipMap<Key, (ValOffset, InsertionTime, IsDeleted)>>,
 }
 
 impl InsertableToBucket for Table {
-    fn get_entries(&self) -> Arc<SkipMap<Key, (ValOffset, InsertionTime, IsDeleted)>> {
-        Arc::clone(&self.entries)
+    fn get_entries(&self) -> SkipMapEntries<Key> {
+        self.entries.clone()
     }
     fn size(&self) -> usize {
         self.size
     }
-    fn find_biggest_key_from_table(&self) -> Result<Vec<u8>, Error> {
-        self.find_biggest_key()
+    fn find_biggest_key(&self) -> Result<Vec<u8>, Error> {
+        let largest_entry = self.entries.iter().next_back();
+        match largest_entry {
+            Some(e) => return Ok(e.key().to_vec()),
+            None => Err(BiggestKeyIndexError),
+        }
     }
 
-    fn find_smallest_key_from_table(&self) -> Result<Vec<u8>, Error> {
-        self.find_smallest_key()
+    fn find_smallest_key(&self) -> Result<Vec<u8>, Error> {
+        let largest_entry = self.entries.iter().next();
+        match largest_entry {
+            Some(e) => return Ok(e.key().to_vec()),
+            None => Err(LowestKeyIndexError),
+        }
     }
 }
 
@@ -67,12 +79,18 @@ impl Table {
         //TODO: handle error during file creation
         let (data_file_path, index_file_path, creation_time) =
             Table::generate_file_path(dir.to_owned()).await.unwrap();
-        let data_file = DataFileNode::new(data_file_path.to_owned(), crate::fs::FileType::SSTable)
-            .await
-            .unwrap();
-        let index_file = IndexFileNode::new(index_file_path.to_owned(), crate::fs::FileType::Index)
-            .await
-            .unwrap();
+        let data_file = DataFileNode::new(
+            data_file_path.to_owned(),
+            crate::fs::FileType::SSTable,
+        )
+        .await
+        .unwrap();
+        let index_file = IndexFileNode::new(
+            index_file_path.to_owned(),
+            crate::fs::FileType::Index,
+        )
+        .await
+        .unwrap();
 
         Self {
             dir,
@@ -100,8 +118,10 @@ impl Table {
     ) -> Result<(PathBuf, PathBuf, DateTime<Utc>), Error> {
         let created_at = Utc::now();
         let _ = FileNode::create_dir_all(dir.to_owned()).await?;
-        let data_file_name = format!("sstable_{}_.db", created_at.timestamp_millis());
-        let index_file_name = format!("index_{}_.db", created_at.timestamp_millis());
+        let data_file_name =
+            format!("sstable_{}_.db", created_at.timestamp_millis());
+        let index_file_name =
+            format!("index_{}_.db", created_at.timestamp_millis());
 
         let data_file_path = dir.join(data_file_name.to_owned());
         let index_file_path = dir.join(index_file_name.to_owned());
@@ -119,7 +139,9 @@ impl Table {
             .await
     }
 
-    pub(crate) async fn from_file(&self) -> Result<Option<Table>, Error> {
+    pub(crate) async fn load_entries_from_file(
+        &self,
+    ) -> Result<Option<Table>, Error> {
         let (entries, bytes_read) = self.data_file.file.load_entries().await?;
         Ok(Some(Table {
             entries,
@@ -132,32 +154,26 @@ impl Table {
         }))
     }
 
-    pub fn find_biggest_key(&self) -> Result<Vec<u8>, Error> {
-        let largest_entry = self.entries.iter().next_back();
-        match largest_entry {
-            Some(e) => return Ok(e.key().to_vec()),
-            None => Err(BiggestKeyIndexError),
-        }
-    }
-
-    pub fn find_smallest_key(&self) -> Result<Vec<u8>, Error> {
-        let largest_entry = self.entries.iter().next();
-        match largest_entry {
-            Some(e) => return Ok(e.key().to_vec()),
-            None => Err(LowestKeyIndexError),
-        }
-    }
-
     pub(crate) async fn write_to_file(&self) -> Result<(), Error> {
         let index_file = &self.index_file;
         let mut blocks: Vec<Block> = Vec::new();
-        let mut table_index = Index::new(self.index_file.path.clone(), index_file.file.clone());
+        let mut table_index =
+            Index::new(self.index_file.path.clone(), index_file.file.clone());
         let mut current_block = Block::new();
 
         for e in self.entries.iter() {
-            let entry = Entry::new(e.key().clone(), e.value().0, e.value().1, e.value().2);
+            let entry = Entry::new(
+                e.key().clone(),
+                e.value().0,
+                e.value().1,
+                e.value().2,
+            );
             //TODO: reorder  key length(used during fetch) + key len(actual key length) + value length(4 bytes) + date in milliseconds(8 bytes)
-            let entry_size = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
+            let entry_size = entry.key.len()
+                + SIZE_OF_U32
+                + SIZE_OF_U32
+                + SIZE_OF_U64
+                + SIZE_OF_U8;
             if current_block.is_full(entry_size) {
                 blocks.push(current_block);
                 current_block = Block::new();
@@ -185,12 +201,20 @@ impl Table {
         Ok(())
     }
 
-    async fn write_block(&self, block: &Block, table_index: &mut Index) -> Result<(), Error> {
+    async fn write_block(
+        &self,
+        block: &Block,
+        table_index: &mut Index,
+    ) -> Result<(), Error> {
         // Get the current offset before writing (this will be the offset of the value stored in the sparse index)
         let offset = self.data_file.file.node.size().await;
         let first_entry = block.get_first_entry();
         // Store initial entry key and its sstable file offset in sparse index
-        table_index.insert(first_entry.key_prefix, first_entry.key, offset as u32);
+        table_index.insert(
+            first_entry.key_prefix,
+            first_entry.key,
+            offset as u32,
+        );
 
         block
             .write_to_file(self.data_file.file.node.clone())
@@ -208,14 +232,15 @@ impl Table {
             .await
     }
 
-    pub(crate) fn build_bloomfilter_from_sstable(
+    pub(crate) fn build_filter_from_sstable(
         entries: &Arc<SkipMap<Vec<u8>, (ValOffset, CreationTime, IsTombStone)>>,
     ) -> BloomFilter {
         //TODO: FALSE POSITIVE should be from config
         // Rebuild the bloom filter since a new sstable has been created
-        let mut new_bloom_filter = BloomFilter::new(DEFAULT_FALSE_POSITIVE_RATE, entries.len());
-        entries.iter().for_each(|e| new_bloom_filter.set(e.key()));
-        new_bloom_filter
+        let mut filter =
+            BloomFilter::new(DEFAULT_FALSE_POSITIVE_RATE, entries.len());
+        entries.iter().for_each(|e| filter.set(e.key()));
+        filter
     }
 
     pub(crate) fn get_value_from_entries(
@@ -247,9 +272,6 @@ impl Table {
         self.set_sst_size_from_entries();
     }
 
-    pub(crate) fn get_entries(&self) -> Arc<SkipMap<Key, (ValOffset, CreationTime, IsTombStone)>> {
-        self.entries.clone()
-    }
     pub(crate) fn set_sst_size_from_entries(&mut self) {
         self.size = self
             .entries

@@ -13,7 +13,7 @@ use crate::{
     index::RangeOffset,
     load_buffer,
     memtable::{Entry, IsDeleted},
-    types::{self, CreationTime, NoBytesRead, SkipMapEntries, ValOffset},
+    types::{self, CreationTime, Key, NoBytesRead, SkipMapEntries, ValOffset},
     value_log::ValueLogEntry,
 };
 
@@ -65,7 +65,8 @@ pub trait FileAsync: Send + Sync + Debug + Clone {
 #[async_trait]
 pub trait DataFs: Send + Sync + Debug + Clone {
     async fn new(path: PathBuf, file_type: FileType) -> Result<Self, Error>;
-    async fn load_entries(&self) -> Result<(SkipMapEntries, usize), Error>;
+    async fn load_entries(&self)
+        -> Result<(SkipMapEntries<Key>, usize), Error>;
 
     async fn find_entry(
         &self,
@@ -83,9 +84,15 @@ pub trait DataFs: Send + Sync + Debug + Clone {
 pub trait VLogFs: Send + Sync + Debug + Clone {
     async fn new(path: PathBuf, file_type: FileType) -> Result<Self, Error>;
 
-    async fn get(&self, start_offset: usize) -> Result<Option<(Vec<u8>, bool)>, Error>;
+    async fn get(
+        &self,
+        start_offset: usize,
+    ) -> Result<Option<(Vec<u8>, bool)>, Error>;
 
-    async fn recover(&self, start_offset: usize) -> Result<Vec<ValueLogEntry>, Error>;
+    async fn recover(
+        &self,
+        start_offset: usize,
+    ) -> Result<Vec<ValueLogEntry>, Error>;
 
     async fn read_chunk_to_garbage_collect(
         &self,
@@ -98,10 +105,16 @@ pub trait VLogFs: Send + Sync + Debug + Clone {
 pub trait IndexFs: Send + Sync + Debug + Clone {
     async fn new(path: PathBuf, file_type: FileType) -> Result<Self, Error>;
 
-    async fn get_from_index(&self, searched_key: &[u8]) -> Result<Option<u32>, Error>;
+    async fn get_from_index(
+        &self,
+        searched_key: &[u8],
+    ) -> Result<Option<u32>, Error>;
 
-    async fn get_block_range(&self, start_key: &[u8], end_key: &[u8])
-        -> Result<RangeOffset, Error>;
+    async fn get_block_range(
+        &self,
+        start_key: &[u8],
+        end_key: &[u8],
+    ) -> Result<RangeOffset, Error>;
 }
 
 #[derive(Debug, Clone)]
@@ -112,7 +125,10 @@ pub struct FileNode {
 }
 
 impl FileNode {
-    pub async fn new(path: PathBuf, file_type: FileType) -> Result<Self, Error> {
+    pub async fn new(
+        path: PathBuf,
+        file_type: FileType,
+    ) -> Result<Self, Error> {
         let file = FileNode::create(path.to_owned()).await?;
         return Ok(Self {
             file_type,
@@ -136,12 +152,12 @@ impl FileAsync for FileNode {
 
     async fn create_dir_all(dir: PathBuf) -> Result<(), Error> {
         if !dir.exists() {
-            return Ok(fs::create_dir_all(&dir)
-                .await
-                .map_err(|err| DirCreationError {
+            return Ok(fs::create_dir_all(&dir).await.map_err(|err| {
+                DirCreationError {
                     path: dir,
                     error: err,
-                })?);
+                }
+            })?);
         }
         Ok(())
     }
@@ -225,11 +241,16 @@ pub struct DataFileNode {
 
 #[async_trait]
 impl DataFs for DataFileNode {
-    async fn new(path: PathBuf, file_type: FileType) -> Result<DataFileNode, Error> {
+    async fn new(
+        path: PathBuf,
+        file_type: FileType,
+    ) -> Result<DataFileNode, Error> {
         let node = FileNode::new(path, file_type).await?;
         Ok(DataFileNode { node })
     }
-    async fn load_entries(&self) -> Result<(SkipMapEntries, NoBytesRead), Error> {
+    async fn load_entries(
+        &self,
+    ) -> Result<(SkipMapEntries<Key>, NoBytesRead), Error> {
         let entries = Arc::new(SkipMap::new());
         let mut total_bytes_read = 0;
         let path = &self.node.file_path;
@@ -240,7 +261,8 @@ impl DataFs for DataFileNode {
 
         loop {
             let mut key_len_bytes = [0; SIZE_OF_U32];
-            let mut bytes_read = load_buffer!(file, &mut key_len_bytes, path.to_owned())?;
+            let mut bytes_read =
+                load_buffer!(file, &mut key_len_bytes, path.to_owned())?;
             total_bytes_read += bytes_read;
             if bytes_read == 0 {
                 break;
@@ -255,21 +277,24 @@ impl DataFs for DataFileNode {
             }
 
             let mut val_offset_bytes = [0; SIZE_OF_U32];
-            bytes_read = load_buffer!(file, &mut val_offset_bytes, path.to_owned())?;
+            bytes_read =
+                load_buffer!(file, &mut val_offset_bytes, path.to_owned())?;
             total_bytes_read += bytes_read;
             if bytes_read == 0 {
                 return Err(FileNode::unexpected_eof());
             }
 
             let mut created_at_bytes = [0; SIZE_OF_U64];
-            bytes_read = load_buffer!(file, &mut created_at_bytes, path.to_owned())?;
+            bytes_read =
+                load_buffer!(file, &mut created_at_bytes, path.to_owned())?;
             total_bytes_read += bytes_read;
             if bytes_read == 0 {
                 return Err(FileNode::unexpected_eof());
             }
 
             let mut is_tombstone_byte = [0; SIZE_OF_U8];
-            bytes_read = load_buffer!(file, &mut is_tombstone_byte, path.to_owned())?;
+            bytes_read =
+                load_buffer!(file, &mut is_tombstone_byte, path.to_owned())?;
             total_bytes_read += bytes_read;
             if bytes_read == 0 {
                 return Err(FileNode::unexpected_eof());
@@ -278,7 +303,8 @@ impl DataFs for DataFileNode {
             let created_at = u64::from_le_bytes(created_at_bytes);
             let value_offset = u32::from_le_bytes(val_offset_bytes);
             let is_tombstone = is_tombstone_byte[0] == 1;
-            entries.insert(key, (value_offset as usize, created_at, is_tombstone));
+            entries
+                .insert(key, (value_offset as usize, created_at, is_tombstone));
         }
         return Ok((entries, total_bytes_read));
     }
@@ -296,7 +322,8 @@ impl DataFs for DataFileNode {
 
         loop {
             let mut key_len_bytes = [0; SIZE_OF_U32];
-            let mut bytes_read = load_buffer!(file, &mut key_len_bytes, path.to_owned())?;
+            let mut bytes_read =
+                load_buffer!(file, &mut key_len_bytes, path.to_owned())?;
             if bytes_read == 0 {
                 return Ok(None);
             }
@@ -309,19 +336,22 @@ impl DataFs for DataFileNode {
             }
 
             let mut val_offset_bytes = [0; SIZE_OF_U32];
-            bytes_read = load_buffer!(file, &mut val_offset_bytes, path.to_owned())?;
+            bytes_read =
+                load_buffer!(file, &mut val_offset_bytes, path.to_owned())?;
             if bytes_read == 0 {
                 return Err(FileNode::unexpected_eof());
             }
 
             let mut created_at_bytes = [0; SIZE_OF_U64];
-            bytes_read = load_buffer!(file, &mut created_at_bytes, path.to_owned())?;
+            bytes_read =
+                load_buffer!(file, &mut created_at_bytes, path.to_owned())?;
             if bytes_read == 0 {
                 return Err(FileNode::unexpected_eof());
             }
 
             let mut is_tombstone_byte = [0; SIZE_OF_U8];
-            bytes_read = load_buffer!(file, &mut is_tombstone_byte, path.to_owned())?;
+            bytes_read =
+                load_buffer!(file, &mut is_tombstone_byte, path.to_owned())?;
             if bytes_read == 0 {
                 return Err(FileNode::unexpected_eof());
             }
@@ -330,7 +360,11 @@ impl DataFs for DataFileNode {
             let value_offset = u32::from_le_bytes(val_offset_bytes);
             let is_tombstone = is_tombstone_byte[0] == 1;
             if key == searched_key {
-                return Ok(Some((value_offset as usize, created_at, is_tombstone)));
+                return Ok(Some((
+                    value_offset as usize,
+                    created_at,
+                    is_tombstone,
+                )));
             }
         }
     }
@@ -349,7 +383,8 @@ impl DataFs for DataFileNode {
 
         loop {
             let mut key_len_bytes = [0; SIZE_OF_U32];
-            let mut bytes_read = load_buffer!(file, &mut key_len_bytes, path.to_owned())?;
+            let mut bytes_read =
+                load_buffer!(file, &mut key_len_bytes, path.to_owned())?;
             total_bytes_read += bytes_read;
             if bytes_read == 0 {
                 return Ok(entries);
@@ -364,21 +399,24 @@ impl DataFs for DataFileNode {
             }
 
             let mut val_offset_bytes = [0; SIZE_OF_U32];
-            bytes_read = load_buffer!(file, &mut val_offset_bytes, path.to_owned())?;
+            bytes_read =
+                load_buffer!(file, &mut val_offset_bytes, path.to_owned())?;
             total_bytes_read += bytes_read;
             if bytes_read == 0 {
                 return Err(FileNode::unexpected_eof());
             }
 
             let mut created_at_bytes = [0; SIZE_OF_U64];
-            bytes_read = load_buffer!(file, &mut created_at_bytes, path.to_owned())?;
+            bytes_read =
+                load_buffer!(file, &mut created_at_bytes, path.to_owned())?;
             total_bytes_read += bytes_read;
             if bytes_read == 0 {
                 return Err(FileNode::unexpected_eof());
             }
 
             let mut is_tombstone_byte = [0; SIZE_OF_U8];
-            bytes_read = load_buffer!(file, &mut is_tombstone_byte, path.to_owned())?;
+            bytes_read =
+                load_buffer!(file, &mut is_tombstone_byte, path.to_owned())?;
             total_bytes_read += bytes_read;
             if bytes_read == 0 {
                 return Err(FileNode::unexpected_eof());
@@ -387,7 +425,12 @@ impl DataFs for DataFileNode {
             let created_at = u64::from_le_bytes(created_at_bytes);
             let value_offset = u32::from_le_bytes(val_offset_bytes) as usize;
             let is_tombstone = is_tombstone_byte[0] == 1;
-            entries.push(Entry::new(key, value_offset, created_at, is_tombstone));
+            entries.push(Entry::new(
+                key,
+                value_offset,
+                created_at,
+                is_tombstone,
+            ));
 
             if total_bytes_read as u32 >= range_offset.end_offset {
                 return Ok(entries);
@@ -403,11 +446,17 @@ pub struct VLogFileNode {
 
 #[async_trait]
 impl VLogFs for VLogFileNode {
-    async fn new(path: PathBuf, file_type: FileType) -> Result<VLogFileNode, Error> {
+    async fn new(
+        path: PathBuf,
+        file_type: FileType,
+    ) -> Result<VLogFileNode, Error> {
         let node = FileNode::new(path, file_type).await?;
         Ok(VLogFileNode { node })
     }
-    async fn get(&self, start_offset: usize) -> Result<Option<(Vec<u8>, bool)>, Error> {
+    async fn get(
+        &self,
+        start_offset: usize,
+    ) -> Result<Option<(Vec<u8>, bool)>, Error> {
         let path = &self.node.file_path;
         let mut file = self.node.file.write().await;
         file.seek(std::io::SeekFrom::Start((start_offset) as u64))
@@ -415,7 +464,8 @@ impl VLogFs for VLogFileNode {
             .map_err(|err| FileSeekError(err))?;
 
         let mut key_len_bytes = [0; SIZE_OF_U32];
-        let mut bytes_read = load_buffer!(file, &mut key_len_bytes, path.to_owned())?;
+        let mut bytes_read =
+            load_buffer!(file, &mut key_len_bytes, path.to_owned())?;
         if bytes_read == 0 {
             return Ok(None);
         }
@@ -429,14 +479,16 @@ impl VLogFs for VLogFileNode {
 
         let val_len = u32::from_le_bytes(val_len_bytes);
         let mut creation_date_bytes = [0; SIZE_OF_U64];
-        bytes_read = load_buffer!(file, &mut creation_date_bytes, path.to_owned())?;
+        bytes_read =
+            load_buffer!(file, &mut creation_date_bytes, path.to_owned())?;
         if bytes_read == 0 {
             return Err(FileNode::unexpected_eof());
         }
 
         let _ = u64::from_le_bytes(creation_date_bytes);
         let mut istombstone_bytes = [0; SIZE_OF_U8];
-        let mut bytes_read = load_buffer!(file, &mut istombstone_bytes, path.to_owned())?;
+        let mut bytes_read =
+            load_buffer!(file, &mut istombstone_bytes, path.to_owned())?;
         if bytes_read == 0 {
             return Err(FileNode::unexpected_eof());
         }
@@ -456,7 +508,10 @@ impl VLogFs for VLogFileNode {
         Ok(Some((value, is_tombstone)))
     }
 
-    async fn recover(&self, start_offset: usize) -> Result<Vec<ValueLogEntry>, Error> {
+    async fn recover(
+        &self,
+        start_offset: usize,
+    ) -> Result<Vec<ValueLogEntry>, Error> {
         let path = &self.node.file_path;
         let mut entries = Vec::new();
         let mut file = self.node.file.write().await;
@@ -466,28 +521,32 @@ impl VLogFs for VLogFileNode {
 
         loop {
             let mut key_len_bytes = [0; SIZE_OF_U32];
-            let mut bytes_read = load_buffer!(file, &mut key_len_bytes, path.to_owned())?;
+            let mut bytes_read =
+                load_buffer!(file, &mut key_len_bytes, path.to_owned())?;
             if bytes_read == 0 {
                 return Ok(entries);
             }
 
             let key_len = u32::from_le_bytes(key_len_bytes);
             let mut val_len_bytes = [0; SIZE_OF_U32];
-            bytes_read = load_buffer!(file, &mut val_len_bytes, path.to_owned())?;
+            bytes_read =
+                load_buffer!(file, &mut val_len_bytes, path.to_owned())?;
             if bytes_read == 0 {
                 return Err(FileNode::unexpected_eof());
             }
 
             let val_len = u32::from_le_bytes(val_len_bytes);
             let mut creation_date_bytes = [0; SIZE_OF_U64];
-            bytes_read = load_buffer!(file, &mut creation_date_bytes, path.to_owned())?;
+            bytes_read =
+                load_buffer!(file, &mut creation_date_bytes, path.to_owned())?;
             if bytes_read == 0 {
                 return Err(FileNode::unexpected_eof());
             }
 
             let created_at = u64::from_le_bytes(creation_date_bytes);
             let mut istombstone_bytes = [0; SIZE_OF_U8];
-            let mut bytes_read = load_buffer!(file, &mut istombstone_bytes, path.to_owned())?;
+            let mut bytes_read =
+                load_buffer!(file, &mut istombstone_bytes, path.to_owned())?;
             if bytes_read == 0 {
                 return Err(FileNode::unexpected_eof());
             }
@@ -529,7 +588,8 @@ impl VLogFs for VLogFileNode {
         let mut total_bytes_read: usize = 0;
         loop {
             let mut key_len_bytes = [0; SIZE_OF_U32];
-            let mut bytes_read = load_buffer!(file, &mut key_len_bytes, path.to_owned())?;
+            let mut bytes_read =
+                load_buffer!(file, &mut key_len_bytes, path.to_owned())?;
             total_bytes_read += bytes_read;
             if bytes_read == 0 {
                 return Ok((entries, total_bytes_read));
@@ -537,7 +597,8 @@ impl VLogFs for VLogFileNode {
 
             let key_len = u32::from_le_bytes(key_len_bytes);
             let mut val_len_bytes = [0; SIZE_OF_U32];
-            bytes_read = load_buffer!(file, &mut val_len_bytes, path.to_owned())?;
+            bytes_read =
+                load_buffer!(file, &mut val_len_bytes, path.to_owned())?;
             total_bytes_read += bytes_read;
             if bytes_read == 0 {
                 return Err(FileNode::unexpected_eof());
@@ -545,7 +606,8 @@ impl VLogFs for VLogFileNode {
 
             let val_len = u32::from_le_bytes(val_len_bytes);
             let mut creation_date_bytes = [0; SIZE_OF_U64];
-            bytes_read = load_buffer!(file, &mut creation_date_bytes, path.to_owned())?;
+            bytes_read =
+                load_buffer!(file, &mut creation_date_bytes, path.to_owned())?;
             total_bytes_read += bytes_read;
             if bytes_read == 0 {
                 return Err(FileNode::unexpected_eof());
@@ -553,7 +615,8 @@ impl VLogFs for VLogFileNode {
 
             let created_at = u64::from_le_bytes(creation_date_bytes);
             let mut istombstone_bytes = [0; SIZE_OF_U8];
-            let mut bytes_read = load_buffer!(file, &mut istombstone_bytes, path.to_owned())?;
+            let mut bytes_read =
+                load_buffer!(file, &mut istombstone_bytes, path.to_owned())?;
             total_bytes_read += bytes_read;
             if bytes_read == 0 {
                 return Err(FileNode::unexpected_eof());
@@ -596,11 +659,17 @@ pub struct IndexFileNode {
 }
 #[async_trait]
 impl IndexFs for IndexFileNode {
-    async fn new(path: PathBuf, file_type: FileType) -> Result<IndexFileNode, Error> {
+    async fn new(
+        path: PathBuf,
+        file_type: FileType,
+    ) -> Result<IndexFileNode, Error> {
         let node = FileNode::new(path, file_type).await?;
         Ok(IndexFileNode { node })
     }
-    async fn get_from_index(&self, searched_key: &[u8]) -> Result<Option<u32>, Error> {
+    async fn get_from_index(
+        &self,
+        searched_key: &[u8],
+    ) -> Result<Option<u32>, Error> {
         let path = &self.node.file_path;
         let mut block_offset: i32 = -1;
         let mut file = self.node.file.write().await;
@@ -610,7 +679,8 @@ impl IndexFs for IndexFileNode {
 
         loop {
             let mut key_len_bytes = [0; SIZE_OF_U32];
-            let mut bytes_read = load_buffer!(file, &mut key_len_bytes, path.to_owned())?;
+            let mut bytes_read =
+                load_buffer!(file, &mut key_len_bytes, path.to_owned())?;
             if bytes_read == 0 {
                 if block_offset == -1 {
                     return Ok(None);
@@ -626,7 +696,8 @@ impl IndexFs for IndexFileNode {
             }
 
             let mut key_offset_bytes = [0; SIZE_OF_U32];
-            bytes_read = load_buffer!(file, &mut key_offset_bytes, path.to_owned())?;
+            bytes_read =
+                load_buffer!(file, &mut key_offset_bytes, path.to_owned())?;
             if bytes_read == 0 {
                 return Err(FileNode::unexpected_eof());
             }
@@ -661,7 +732,8 @@ impl IndexFs for IndexFileNode {
 
         loop {
             let mut key_len_bytes = [0; SIZE_OF_U32];
-            let mut bytes_read = load_buffer!(file, &mut key_len_bytes, path.to_owned())?;
+            let mut bytes_read =
+                load_buffer!(file, &mut key_len_bytes, path.to_owned())?;
             if bytes_read == 0 {
                 return Ok(range_offset);
             }
@@ -674,13 +746,15 @@ impl IndexFs for IndexFileNode {
             }
 
             let mut key_offset_bytes = [0; SIZE_OF_U32];
-            bytes_read = load_buffer!(file, &mut key_offset_bytes, path.to_owned())?;
+            bytes_read =
+                load_buffer!(file, &mut key_offset_bytes, path.to_owned())?;
             if bytes_read == 0 {
                 return Err(FileNode::unexpected_eof());
             }
             let offset = u32::from_le_bytes(key_offset_bytes);
             match key.cmp(&start_key.to_vec()) {
-                std::cmp::Ordering::Greater => match key.cmp(&end_key.to_vec()) {
+                std::cmp::Ordering::Greater => match key.cmp(&end_key.to_vec())
+                {
                     std::cmp::Ordering::Greater => {
                         range_offset.end_offset = offset;
                         return Ok(range_offset);
@@ -695,6 +769,9 @@ impl IndexFs for IndexFileNode {
 
 impl FileNode {
     fn unexpected_eof() -> Error {
-        return UnexpectedEOF(io::Error::new(io::ErrorKind::UnexpectedEof, EOF));
+        return UnexpectedEOF(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            EOF,
+        ));
     }
 }

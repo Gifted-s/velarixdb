@@ -132,11 +132,11 @@ pub enum Error {
 
     /// Error occured during compaction
     #[error("Compaction failed reason : {0}")]
-    CompactionFailed(String),
+    CompactionFailed(Box<Self>),
 
     /// Partial error occured during compaction
     #[error("Compaction partially failed failed reason : {0}")]
-    CompactionPartiallyFailed(String),
+    CompactionPartiallyFailed(Box<Self>),
 
     /// No SSTable contains the key searched
     #[error("No SS Tables contains the searched key")]
@@ -224,8 +224,13 @@ pub enum Error {
     #[error("Unsuported OS, err message `{0}`")]
     GCErrorUnsupportedPlatform(String),
 
+    #[error("GC Error `{0}`")]
+    GCError(String),
+
     /// Error joining multiple tokio tasks to run concurrently
-    #[error("Error joining tokio tasks. error: `{error}`, context: `{context}`")]
+    #[error(
+        "Error joining tokio tasks. error: `{error}`, context: `{context}`"
+    )]
     TokioTaskJoinError { error: JoinError, context: String },
 
     /// Error invalid lock type
@@ -247,4 +252,18 @@ pub enum Error {
 
     #[error("Serializartion error: {0} ")]
     SerializationError(&'static str),
+
+    #[error("Partial failure, obsolete sstables not deleted but sstable merge was successful")]
+    CompactionCleanupPartialError,
+
+    #[error(
+        "Compaction cleanup failed but sstable merge was successful : {0} "
+    )]
+    CompactionCleanupError(Box<Self>),
+
+    #[error("Cannot remove obsolete sstables from disk because not every merged sstable was written to disk")]
+    CannotRemoveObsoleteSSTError,
+
+    #[error("Error, merged sstables has empty entries")]
+    MergeSSTContainsZeroEntries,
 }

@@ -93,7 +93,10 @@ impl Index {
         Ok(entry_vec)
     }
 
-    pub(crate) async fn get(&self, searched_key: &[u8]) -> Result<Option<u32>, Error> {
+    pub(crate) async fn get(
+        &self,
+        searched_key: &[u8],
+    ) -> Result<Option<u32>, Error> {
         self.file.file.get_from_index(searched_key).await
     }
 

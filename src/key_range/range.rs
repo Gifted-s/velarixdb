@@ -19,7 +19,11 @@ pub struct Range {
     pub full_sst_path: Table,
 }
 impl Range {
-    pub fn new(smallest_key: SmallestKey, biggest_key: LargestKey, full_sst_path: Table) -> Self {
+    pub fn new(
+        smallest_key: SmallestKey,
+        biggest_key: LargestKey,
+        full_sst_path: Table,
+    ) -> Self {
         Self {
             smallest_key,
             biggest_key,
@@ -66,7 +70,11 @@ impl KeyRange {
     }
 
     // Returns SSTables whose keys overlap with the key range supplied
-    pub fn range_scan(&self, start_key: &SmallestKey, end_key: &LargestKey) -> Vec<&Range> {
+    pub fn range_scan(
+        &self,
+        start_key: &SmallestKey,
+        end_key: &LargestKey,
+    ) -> Vec<&Range> {
         self.key_ranges
             .iter()
             .filter(|(_, range)| {

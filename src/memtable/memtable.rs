@@ -1,12 +1,13 @@
 use crate::bucket::InsertableToBucket;
 use crate::consts::{
-    DEFAULT_FALSE_POSITIVE_RATE, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, WRITE_BUFFER_SIZE,
+    DEFAULT_FALSE_POSITIVE_RATE, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8,
+    WRITE_BUFFER_SIZE,
 };
 use crate::err::Error;
 use crate::filter::BloomFilter;
 //use crate::memtable::val_option::ValueOption;
 use crate::storage::SizeUnit;
-use crate::types::{CreationTime, IsTombStone, Key, ValOffset};
+use crate::types::{CreationTime, IsTombStone, Key, SkipMapEntries, ValOffset};
 use chrono::{DateTime, Utc};
 use crossbeam_skiplist::SkipMap;
 use rand::distributions::Alphanumeric;
@@ -20,15 +21,15 @@ pub type InsertionTime = u64;
 pub type IsDeleted = bool;
 
 #[derive(PartialOrd, PartialEq, Copy, Clone, Debug)]
-pub struct Entry<K: Hash + PartialOrd, V> {
+pub struct Entry<K: Hash, V> {
     pub key: K,
     pub val_offset: V,
     pub created_at: u64,
     pub is_tombstone: bool,
 }
 #[derive(Clone, Debug)]
-pub struct InMemoryTable<K: Hash + PartialOrd + cmp::Ord> {
-    pub entries: Arc<SkipMap<K, (ValOffset, CreationTime, IsTombStone)>>,
+pub struct InMemoryTable<K: Hash + cmp::Ord> {
+    pub entries: SkipMapEntries<K>,
     pub bloom_filter: BloomFilter,
     pub false_positive_rate: f64,
     pub size: usize,
@@ -39,17 +40,19 @@ pub struct InMemoryTable<K: Hash + PartialOrd + cmp::Ord> {
 }
 
 impl InsertableToBucket for InMemoryTable<Key> {
-    fn get_entries(&self) -> Arc<SkipMap<Key, (ValOffset, InsertionTime, IsDeleted)>> {
+    fn get_entries(
+        &self,
+    ) -> Arc<SkipMap<Key, (ValOffset, InsertionTime, IsDeleted)>> {
         Arc::clone(&self.entries)
     }
     fn size(&self) -> usize {
         self.size
     }
-    fn find_biggest_key_from_table(&self) -> Result<Key, Error> {
+    fn find_biggest_key(&self) -> Result<Key, Error> {
         self.find_biggest_key()
     }
 
-    fn find_smallest_key_from_table(&self) -> Result<Key, Error> {
+    fn find_smallest_key(&self) -> Result<Key, Error> {
         self.find_smallest_key()
     }
 }
@@ -115,8 +118,12 @@ impl InMemoryTable<Key> {
         }
     }
 
-    pub fn insert(&mut self, entry: &Entry<Key, ValOffset>) -> Result<(), Error> {
-        let entry_length_byte = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
+    pub fn insert(
+        &mut self,
+        entry: &Entry<Key, ValOffset>,
+    ) -> Result<(), Error> {
+        let entry_length_byte =
+            entry.key.len() + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
         if !self.bloom_filter.contains(&entry.key) {
             self.bloom_filter.set(&entry.key.clone());
             self.entries.insert(
@@ -147,7 +154,10 @@ impl InMemoryTable<Key> {
         Ok(None)
     }
 
-    pub fn update(&mut self, entry: &Entry<Key, ValOffset>) -> Result<(), Error> {
+    pub fn update(
+        &mut self,
+        entry: &Entry<Key, ValOffset>,
+    ) -> Result<(), Error> {
         if !self.bloom_filter.contains(&entry.key) {
             return Err(KeyNotFoundInMemTable);
         }
@@ -158,7 +168,10 @@ impl InMemoryTable<Key> {
         Ok(())
     }
 
-    pub fn upsert(&mut self, entry: &Entry<Vec<u8>, usize>) -> Result<(), Error> {
+    pub fn upsert(
+        &mut self,
+        entry: &Entry<Vec<u8>, usize>,
+    ) -> Result<(), Error> {
         self.insert(&entry)
     }
 
@@ -172,7 +185,10 @@ impl InMemoryTable<Key> {
         id.as_bytes().to_vec()
     }
 
-    pub fn delete(&mut self, entry: &Entry<Key, ValOffset>) -> Result<(), Error> {
+    pub fn delete(
+        &mut self,
+        entry: &Entry<Key, ValOffset>,
+    ) -> Result<(), Error> {
         if !self.bloom_filter.contains(&entry.key) {
             return Err(KeyNotFoundInMemTable);
         }
@@ -190,7 +206,8 @@ impl InMemoryTable<Key> {
     }
 
     pub fn is_full(&mut self, key_len: usize) -> bool {
-        self.size + key_len + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8 >= self.capacity()
+        self.size + key_len + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8
+            >= self.capacity()
     }
 
     // Find the biggest element in the skip list
@@ -212,7 +229,10 @@ impl InMemoryTable<Key> {
     }
 
     pub fn is_entry_within_range<'a>(
-        e: &crossbeam_skiplist::map::Entry<Key, (ValOffset, CreationTime, IsTombStone)>,
+        e: &crossbeam_skiplist::map::Entry<
+            Key,
+            (ValOffset, CreationTime, IsTombStone),
+        >,
         start: &'a [u8],
         end: &'a [u8],
     ) -> bool {
@@ -229,7 +249,9 @@ impl InMemoryTable<Key> {
         self.size
     }
 
-    pub fn get_index(self) -> Arc<SkipMap<Vec<u8>, (ValOffset, CreationTime, IsTombStone)>> {
+    pub fn get_index(
+        self,
+    ) -> Arc<SkipMap<Vec<u8>, (ValOffset, CreationTime, IsTombStone)>> {
         self.entries.clone()
     }
 
@@ -255,7 +277,8 @@ impl InMemoryTable<Key> {
 
         self.entries.clear();
         self.size = 0;
-        self.bloom_filter = BloomFilter::new(self.false_positive_rate, max_no_of_entries);
+        self.bloom_filter =
+            BloomFilter::new(self.false_positive_rate, max_no_of_entries);
     }
 }
 
