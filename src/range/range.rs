@@ -3,7 +3,9 @@
 // each identified SSTable might still contain data outside your desired range. For heavily range query-focused workloads, LCS or TWSC should be considered
 // Although this stratedy is not available for now, It will be implmented in the future
 
-use crate::consts::{DEFAULT_ALLOW_PREFETCH, DEFAULT_PREFETCH_SIZE, HEAD_ENTRY_KEY};
+use crate::consts::{
+    DEFAULT_ALLOW_PREFETCH, DEFAULT_PREFETCH_SIZE, HEAD_ENTRY_KEY,
+};
 use crate::err::Error;
 use crate::index::Index;
 use crate::memtable::{Entry, InMemoryTable};
@@ -101,7 +103,9 @@ impl<'a> RangeIterator<'a> {
     pub async fn prefetch_entries(&mut self) -> Result<(), Error> {
         let keys: Vec<Entry<Key, ValOffset>>;
         if self.current + self.prefetch_entries_size <= self.keys.len() {
-            keys = (&self.keys[self.current..self.current + self.prefetch_entries_size]).to_vec();
+            keys = (&self.keys
+                [self.current..self.current + self.prefetch_entries_size])
+                .to_vec();
         } else {
             keys = (&self.keys[self.current..]).to_vec();
         }
@@ -137,7 +141,9 @@ impl<'a> RangeIterator<'a> {
                 let entry_from_vlog = v_log.get(entry.val_offset).await;
                 match entry_from_vlog {
                     Ok(val_opt) => match val_opt {
-                        Some((val, is_deleted)) => return Ok((entry.key, val, is_deleted)),
+                        Some((val, is_deleted)) => {
+                            return Ok((entry.key, val, is_deleted))
+                        }
                         None => {
                             return Err(Error::KeyNotFoundInValueLogError);
                         }
@@ -173,7 +179,11 @@ impl<'a> RangeIterator<'a> {
 
 impl<'a> DataStore<'a, Key> {
     // Start if the range query
-    pub async fn seek(&self, start: &'a [u8], end: &'a [u8]) -> Result<RangeIterator, Error> {
+    pub async fn seek(
+        &self,
+        start: &'a [u8],
+        end: &'a [u8],
+    ) -> Result<RangeIterator, Error> {
         let mut merger = Merger::new();
         // check entries within active memtable
         // if !self.active_memtable.index.is_empty() {
@@ -238,19 +248,31 @@ impl<'a> DataStore<'a, Key> {
                 let bf_inner = b.to_owned();
                 let bf_sstable = bf_inner.sst.to_owned().unwrap();
                 let data_path = bf_sstable.data_file.path.to_str().unwrap();
-                if bf_inner.contains(&start.to_vec()) || bf_inner.contains(&end.to_vec()) {
+                if bf_inner.contains(&start.to_vec())
+                    || bf_inner.contains(&end.to_vec())
+                {
                     // add to sstable path
-                    sstable_path.insert(data_path.to_owned(), bf_sstable.to_owned());
+                    sstable_path
+                        .insert(data_path.to_owned(), bf_sstable.to_owned());
                 }
             }
 
             let key_range = self.key_range.read().await;
-            let paths_from_key_range = key_range.range_scan(&start.to_vec(), &end.to_vec());
+            let paths_from_key_range =
+                key_range.range_scan(&start.to_vec(), &end.to_vec());
             if !paths_from_key_range.is_empty() {
                 for range in paths_from_key_range.iter() {
-                    if !sstable_path.contains_key(range.full_sst_path.data_file.path.to_str().unwrap()) {
+                    if !sstable_path.contains_key(
+                        range.full_sst_path.data_file.path.to_str().unwrap(),
+                    ) {
                         sstable_path.insert(
-                            range.full_sst_path.data_file.path.to_str().unwrap().to_owned(),
+                            range
+                                .full_sst_path
+                                .data_file
+                                .path
+                                .to_str()
+                                .unwrap()
+                                .to_owned(),
                             range.full_sst_path.to_owned(),
                         );
                     }
@@ -295,7 +317,9 @@ pub struct Merger {
 
 impl Merger {
     fn new() -> Self {
-        Self { entries: Vec::new() }
+        Self {
+            entries: Vec::new(),
+        }
     }
     // merge entries in sorted order
     fn merge_entries(&mut self, entries_to_merge: Vec<Entry<Key, ValOffset>>) {
@@ -341,7 +365,11 @@ impl Merger {
         self.entries = merged_indexes;
     }
 
-    fn head_entry_checker(&self, entry: &Entry<Key, ValOffset>, merged_indexes: &mut Vec<Entry<Key, ValOffset>>) {
+    fn head_entry_checker(
+        &self,
+        entry: &Entry<Key, ValOffset>,
+        merged_indexes: &mut Vec<Entry<Key, ValOffset>>,
+    ) {
         if entry.key != HEAD_ENTRY_KEY {
             merged_indexes.push(entry.to_owned());
         }

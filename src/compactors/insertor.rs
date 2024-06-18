@@ -6,22 +6,17 @@ use crate::{
 };
 use crossbeam_skiplist::SkipMap;
 //TODO this should be from the types module not memtable
-use crate::{
-    bucket::InsertableToBucket,
-    err::Error,
-    memtable::{InsertionTime, IsDeleted},
-    types::*,
-};
+use crate::{bucket::InsertableToBucket, err::Error, types::*};
 
 #[derive(Debug, Clone)]
 pub struct TableInsertor {
-    pub(crate) entries: Arc<SkipMap<Key, (ValOffset, InsertionTime, IsDeleted)>>,
+    pub(crate) entries: SkipMapEntries<Key>,
     pub(crate) size: usize,
 }
 
 // TODO: This is redundant
 impl InsertableToBucket for TableInsertor {
-    fn get_entries(&self) -> Arc<SkipMap<Key, (ValOffset, InsertionTime, IsDeleted)>> {
+    fn get_entries(&self) -> SkipMapEntries<Key> {
         Arc::clone(&self.entries)
     }
     fn size(&self) -> usize {
@@ -52,11 +47,15 @@ impl TableInsertor {
             size: 0,
         }
     }
-    pub fn from(entries: SkipMapEntries<Key>, size: usize) -> Self {
-        Self { entries, size: 0 }
+    pub fn from(entries: SkipMapEntries<Key>) -> Self {
+        let size = entries
+            .iter()
+            .map(|e| e.key().len() + SIZE_OF_USIZE + SIZE_OF_U64 + SIZE_OF_U8)
+            .sum::<usize>();
+        Self { entries, size }
     }
 
-    pub(crate) fn set_entries(&mut self, entries: Arc<SkipMap<Key, (ValOffset, CreationTime, IsTombStone)>>) {
+    pub(crate) fn set_entries(&mut self, entries: SkipMapEntries<Key>) {
         self.entries = entries;
         self.set_sst_size_from_entries();
     }

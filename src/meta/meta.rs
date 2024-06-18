@@ -41,9 +41,13 @@ impl Meta {
         // store head in file
         meta_entry.extend_from_slice(&(self.v_log_head.to_le_bytes()));
 
-        meta_entry.extend_from_slice(&(self.created_at.timestamp_micros().to_le_bytes()));
+        meta_entry.extend_from_slice(
+            &(self.created_at.timestamp_micros().to_le_bytes()),
+        );
 
-        meta_entry.extend_from_slice(&(self.last_modified.timestamp_micros().to_le_bytes()));
+        meta_entry.extend_from_slice(
+            &(self.last_modified.timestamp_micros().to_le_bytes()),
+        );
         // Write the bytes to the file
         file.write_all(&meta_entry)?;
 
@@ -70,7 +74,8 @@ impl Meta {
         //TODO:  Abstract date conversion to a seperate function
         let mut date_created_bytes: [u8; 4] = [0; 4];
         file.read_exact(&mut date_created_bytes)?;
-        let date_created_in_microseconds = u32::from_le_bytes(date_created_bytes);
+        let date_created_in_microseconds =
+            u32::from_le_bytes(date_created_bytes);
         // Convert microseconds to seconds
         let seconds = date_created_in_microseconds / 1_000_000;
 
@@ -78,11 +83,14 @@ impl Meta {
         let micros_remainder = date_created_in_microseconds % 1_000_000;
 
         // Create a NaiveDateTime from seconds and microseconds
-        let created_utc = DateTime::from_timestamp(seconds.into(), micros_remainder * 1000).unwrap();
+        let created_utc =
+            DateTime::from_timestamp(seconds.into(), micros_remainder * 1000)
+                .unwrap();
 
         let mut date_modified_bytes: [u8; 4] = [0; 4];
         file.read_exact(&mut date_modified_bytes)?;
-        let date_modified_in_microseconds = u32::from_le_bytes(date_modified_bytes);
+        let date_modified_in_microseconds =
+            u32::from_le_bytes(date_modified_bytes);
         // Convert microseconds to seconds
         let date_modified_seconds = date_modified_in_microseconds / 1_000_000;
 
@@ -90,8 +98,11 @@ impl Meta {
         let micros_remainder = date_modified_in_microseconds % 1_000_000;
 
         // Create a NaiveDateTime from seconds and microseconds
-        let modified_date_naive_datetime =
-            DateTime::from_timestamp(date_modified_seconds.into(), micros_remainder * 1000).unwrap();
+        let modified_date_naive_datetime = DateTime::from_timestamp(
+            date_modified_seconds.into(),
+            micros_remainder * 1000,
+        )
+        .unwrap();
 
         Ok(Self {
             created_at: created_utc,

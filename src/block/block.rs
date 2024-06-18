@@ -102,7 +102,8 @@ impl Block {
     ) -> Result<(), Error> {
         // Calculate the total size of the entry, including the key, value, and the size of the length prefix.
         // Key + Key Prefix + Value Offset +  Creation Date + Tombstone Marker
-        let entry_size = key.len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
+        let entry_size =
+            key.len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
 
         // Check if the Block is already full and cannot accommodate the new entry.
         if self.is_full(entry_size) {
@@ -141,8 +142,15 @@ impl Block {
     /// Retrieves the value associated with the provided key from the Block.
     ///
     /// Returns `Some(value)` if the key is found in the Block, `None` otherwise.
-    pub(crate) fn serialize(&self, entry: &BlockEntry) -> Result<Vec<u8>, Error> {
-        let entry_len = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
+    pub(crate) fn serialize(
+        &self,
+        entry: &BlockEntry,
+    ) -> Result<Vec<u8>, Error> {
+        let entry_len = entry.key.len()
+            + SIZE_OF_U32
+            + SIZE_OF_U32
+            + SIZE_OF_U64
+            + SIZE_OF_U8;
         let mut entry_vec = Vec::with_capacity(entry_len);
         //TODO: serialize
         //add key len
@@ -161,7 +169,10 @@ impl Block {
         entry_vec.push(entry.is_tombstone as u8);
         if entry_len != entry_vec.len() {
             return Err(SSTableWriteError {
-                error: io::Error::new(io::ErrorKind::InvalidInput, "Invalid Input"),
+                error: io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Invalid Input",
+                ),
             });
         }
 
