@@ -3,17 +3,18 @@ use crate::err::Error;
 use crate::fs::{FileAsync, FileNode};
 use crate::memtable::{InsertionTime, IsDeleted};
 use crate::sst::Table;
-use crate::types::{Key, ValOffset};
+use crate::types::{Bool, Key, ValOffset};
 use chrono::Utc;
 use crossbeam_skiplist::SkipMap;
 use indexmap::IndexMap;
-use log::{error, info};
 use std::fmt::Debug;
 use std::{path::PathBuf, sync::Arc};
 use tokio::fs;
 use tokio::sync::RwLock;
 use uuid::Uuid;
+use Error::*;
 
+static SST_PREFIX: &str = "sstable_";
 pub type SSTablesToRemove = Vec<(BucketID, Vec<Table>)>;
 pub type BucketsToCompact = Result<(Vec<Bucket>, SSTablesToRemove), Error>;
 pub type BucketID = Uuid;
@@ -32,8 +33,6 @@ pub struct Bucket {
     pub(crate) sstables: Arc<RwLock<Vec<Table>>>,
 }
 
-use Error::*;
-
 pub trait InsertableToBucket: Debug + Send + Sync {
     fn get_entries(&self) -> Arc<SkipMap<Key, (ValOffset, InsertionTime, IsDeleted)>>;
     fn size(&self) -> usize;
@@ -43,25 +42,25 @@ pub trait InsertableToBucket: Debug + Send + Sync {
 
 impl Bucket {
     pub async fn new(dir: PathBuf) -> Self {
-        let bucket_id = Uuid::new_v4();
-        let bucket_dir = dir.join(BUCKET_DIRECTORY_PREFIX.to_string() + bucket_id.to_string().as_str());
-        let _ = FileNode::create_dir_all(bucket_dir.to_owned()).await;
+        let id = Uuid::new_v4();
+        let dir = dir.join(BUCKET_DIRECTORY_PREFIX.to_string() + id.to_string().as_str());
+        let _ = FileNode::create_dir_all(dir.to_owned()).await;
         Self {
-            id: bucket_id,
-            dir: bucket_dir,
+            id,
+            dir,
             size: 0,
             avarage_size: 0,
             sstables: Arc::new(RwLock::new(Vec::new())),
         }
     }
-    pub async fn new_with_id_dir_average_and_sstables(
+    pub async fn from(
         dir: PathBuf,
         id: BucketID,
         sstables: Vec<Table>,
         mut avarage_size: usize,
     ) -> Result<Bucket, Error> {
         if avarage_size == 0 {
-            avarage_size = Bucket::calculate_buckets_avg_size(sstables.clone()).await?;
+            avarage_size = Bucket::cal_average_size(sstables.clone()).await?;
         }
         Ok(Self {
             id,
@@ -72,7 +71,7 @@ impl Bucket {
         })
     }
 
-    async fn calculate_buckets_avg_size(sstables: Vec<Table>) -> Result<usize, Error> {
+    async fn cal_average_size(sstables: Vec<Table>) -> Result<usize, Error> {
         if sstables.is_empty() {
             return Ok(0);
         }
@@ -100,7 +99,7 @@ impl Bucket {
             .get(0..MAX_TRESHOLD)
             .unwrap_or(&self.sstables.read().await.clone())
             .to_vec();
-        let average = Bucket::calculate_buckets_avg_size(extracted_sstables.clone()).await?;
+        let average = Bucket::cal_average_size(extracted_sstables.clone()).await?;
         Ok((extracted_sstables, average))
     }
 
@@ -123,70 +122,78 @@ impl BucketMap {
     pub async fn insert_to_appropriate_bucket<T: InsertableToBucket + ?Sized>(
         &mut self,
         table: Arc<Box<T>>,
-        hotness: u64,
     ) -> Result<Table, Error> {
         let added_to_bucket = false;
         let created_at = Utc::now();
-        for (_, bucket) in &mut self.buckets {
-            if (bucket.avarage_size as f64 * BUCKET_LOW < table.size() as f64)
-                && (table.size() < (bucket.avarage_size as f64 * BUCKET_HIGH) as usize)
-                || (table.size() < MIN_SSTABLE_SIZE && bucket.avarage_size < MIN_SSTABLE_SIZE)
-            {
-                let sstable_directory = bucket.dir.join(format!("sstable_{}", created_at.timestamp_millis()));
-                let mut sstable = Table::new(sstable_directory).await;
-                sstable.set_entries(table.get_entries());
-                sstable.write_to_file().await?;
-                bucket.sstables.write().await.push(sstable.clone());
-                // bucket
-                //     .sstables
-                //     .iter_mut()
-                //     .for_each(|s| s.increase_hotness());
-                bucket.avarage_size =
-                    Bucket::calculate_buckets_avg_size((&bucket.sstables.read().await).to_vec()).await?;
+        for (_, bucket) in &mut self.buckets.clone() {
+            if self.table_fits_into_bucket(bucket, table.clone()) {
+                let sst_dir = bucket
+                    .dir
+                    .join(format!("{}{}", SST_PREFIX, created_at.timestamp_millis()));
+                let mut sst = Table::new(sst_dir).await;
+                sst.set_entries(table.get_entries());
+                sst.write_to_file().await?;
+                bucket.sstables.write().await.push(sst.clone());
+                bucket
+                    .sstables
+                    .write()
+                    .await
+                    .iter_mut()
+                    .for_each(|s| s.increase_hotness());
+                bucket.avarage_size = Bucket::cal_average_size((&bucket.sstables.read().await).to_vec()).await?;
                 bucket.size = bucket.avarage_size * bucket.sstables.read().await.len();
-                return Ok(sstable);
+                return Ok(sst);
             }
         }
 
         // create a new bucket if none of the condition above was satisfied
         if !added_to_bucket {
             let mut bucket = Bucket::new(self.dir.clone()).await;
-            let sstable_directory = bucket.dir.join(format!("sstable_{}", created_at.timestamp_millis()));
-            let mut sstable = Table::new(sstable_directory).await;
-            sstable.set_entries(table.get_entries());
-            sstable.write_to_file().await?;
-
-            bucket.sstables.write().await.push(sstable.clone());
-            bucket.avarage_size = fs::metadata(sstable.clone().data_file.path)
+            let sst_dir = bucket
+                .dir
+                .join(format!("{}{}", SST_PREFIX, created_at.timestamp_millis()));
+            let mut sst = Table::new(sst_dir).await;
+            sst.set_entries(table.get_entries());
+            sst.write_to_file().await?;
+            bucket.sstables.write().await.push(sst.clone());
+            bucket.avarage_size = fs::metadata(sst.clone().data_file.path)
                 .await
                 .map_err(|err| GetFileMetaDataError(err))?
                 .len() as usize;
             self.buckets.insert(bucket.id, bucket.clone());
-            println!("insert was successful 1234");
-            return Ok(sstable);
+            return Ok(sst);
         }
 
         Err(FailedToInsertSSTableToBucketError)
     }
 
-    pub async fn extract_buckets_to_compact(&self) -> BucketsToCompact {
-        let mut sstables_to_delete: Vec<(BucketID, Vec<Table>)> = Vec::new();
-        let mut buckets_to_compact: Vec<Bucket> = Vec::new();
+    pub fn table_fits_into_bucket<T: InsertableToBucket + ?Sized>(
+        &mut self,
+        bucket: &mut Bucket,
+        table: Arc<Box<T>>,
+    ) -> Bool {
+        (bucket.avarage_size as f64 * BUCKET_LOW < table.size() as f64)
+            && (table.size() < (bucket.avarage_size as f64 * BUCKET_HIGH) as usize)
+            || (table.size() < MIN_SSTABLE_SIZE && bucket.avarage_size < MIN_SSTABLE_SIZE)
+    }
 
+    pub async fn extract_imbalanced_buckets(&self) -> BucketsToCompact {
+        let mut ssts_to_delete: Vec<(BucketID, Vec<Table>)> = Vec::new();
+        let mut imbalanced_buckets: Vec<Bucket> = Vec::new();
         for (_, (bucket_id, bucket)) in self.buckets.iter().enumerate() {
-            let (extracted_sstables, average) = Bucket::extract_sstables(&bucket).await?;
-            if !extracted_sstables.is_empty() {
-                sstables_to_delete.push((*bucket_id, extracted_sstables.clone()));
-                buckets_to_compact.push(Bucket {
-                    size: average * extracted_sstables.len(),
-                    sstables: Arc::new(RwLock::new(extracted_sstables)),
+            let (ssts, avg) = Bucket::extract_sstables(&bucket).await?;
+            if !ssts.is_empty() {
+                ssts_to_delete.push((*bucket_id, ssts.clone()));
+                imbalanced_buckets.push(Bucket {
+                    size: avg * ssts.len(),
+                    sstables: Arc::new(RwLock::new(ssts)),
                     id: *bucket_id,
                     dir: bucket.dir.to_owned(),
-                    avarage_size: average,
+                    avarage_size: avg,
                 });
             }
         }
-        Ok((buckets_to_compact, sstables_to_delete))
+        Ok((imbalanced_buckets, ssts_to_delete))
     }
     pub async fn is_balanced(&self) -> bool {
         for (_, bucket) in self.buckets.iter() {
@@ -197,22 +204,22 @@ impl BucketMap {
         return true;
     }
     // NOTE: This should be called only after compaction is complete
-    pub async fn delete_ssts(&mut self, sstables_to_delete: &Vec<(BucketID, Vec<Table>)>) -> Result<bool, Error> {
-        let mut all_sstables_deleted = true;
+    pub async fn delete_ssts(&mut self, ssts_to_delete: &SSTablesToRemove) -> Result<bool, Error> {
+        let mut all_ssts_deleted = true;
         let mut buckets_to_delete: Vec<&BucketID> = Vec::new();
-        for (bucket_id, sst_paths) in sstables_to_delete {
+        for (bucket_id, ssts) in ssts_to_delete {
             if let Some(bucket) = self.buckets.get_mut(bucket_id) {
                 let bucket_clone = bucket.clone();
                 let b = bucket_clone.sstables.read().await;
-                let sstables_remaining = b.get(sst_paths.len()..).unwrap_or_default();
-                if !sstables_remaining.is_empty() {
-                    let new_average = Bucket::calculate_buckets_avg_size(sstables_remaining.to_vec()).await?;
+                let ssts_remaining = b.get(ssts.len()..).unwrap_or_default();
+                if !ssts_remaining.is_empty() {
+                    let new_average = Bucket::cal_average_size(ssts_remaining.to_vec()).await?;
                     *bucket = Bucket {
                         id: bucket.id,
-                        size: new_average * sstables_remaining.len(),
+                        size: new_average * ssts_remaining.len(),
                         dir: bucket.dir.clone(),
                         avarage_size: new_average,
-                        sstables: Arc::new(RwLock::new(sstables_remaining.to_vec())),
+                        sstables: Arc::new(RwLock::new(ssts_remaining.to_vec())),
                     };
                 } else {
                     *bucket = Bucket {
@@ -222,41 +229,32 @@ impl BucketMap {
                         avarage_size: 0,
                         sstables: Arc::new(RwLock::new(vec![])),
                     };
-                    //REMOVE
+
                     buckets_to_delete.push(bucket_id);
-                    //REMOVE
+
+                    // TODO: Investigate deletion, is it possible that a new flush has happened to the bucket we are about to delete?
+                    // This will lead to a fatal issue so we have to lock the bucket and check if a flush has happened before deletion
                     if let Err(err) = fs::remove_dir_all(&bucket.dir).await {
-                        error!(
-                            "Bucket directory deletion error: bucket id={}, path={:?}, err={:?} ",
-                            bucket_id, bucket.dir, err
-                        );
-                    } else {
-                        info!("Bucket successfully removed with bucket id {}", bucket_id);
+                        log::error!("{}", DirDeleteError(err));
                     }
                 }
             }
-
-            for sst in sst_paths {
+            for sst in ssts {
                 if fs::metadata(&sst.dir).await.is_ok() {
                     if let Err(err) = fs::remove_dir_all(&sst.dir).await {
-                        all_sstables_deleted = false;
-                        error!(
-                            "SStable directory not successfully deleted path={:?}, err={:?} ",
-                            sst.data_file.path, err
-                        );
-                    } else {
-                        info!("SS Table directory deleted successfully.");
+                        all_ssts_deleted = false;
+                        log::error!("{}", DirDeleteError(err));
                     }
                 }
             }
         }
-        //REMOVE
+        // Same: Verify that a new sstable has not been added to this bucket before deletion
         if !buckets_to_delete.is_empty() {
             buckets_to_delete.iter().for_each(|&bucket_id| {
                 self.buckets.shift_remove(bucket_id);
             });
         }
-        Ok(all_sstables_deleted)
+        Ok(all_ssts_deleted)
     }
 
     // CAUTION: This removes all sstables and buckets and should only be used for total cleanup
@@ -264,7 +262,7 @@ impl BucketMap {
         for (_, bucket) in &self.buckets {
             if fs::metadata(&bucket.dir).await.is_ok() {
                 if let Err(err) = fs::remove_dir_all(&bucket.dir).await {
-                    error!("Err sstable not deleted path={:?}, err={:?} ", bucket.dir, err);
+                    log::error!("{}", FileDeleteError(err));
                 }
             }
         }

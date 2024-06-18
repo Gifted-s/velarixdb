@@ -1,10 +1,9 @@
-use crate::consts::{EOF, SIZE_OF_U32};
+use crate::consts::SIZE_OF_U32;
 use crate::err::Error;
-use crate::fs::{FileAsync, FileNode, IndexFileNode, IndexFs};
+use crate::fs::{FileAsync, IndexFileNode, IndexFs};
 use crate::types::Key;
 use std::path::PathBuf;
 
-use tokio::io::{self};
 use Error::*;
 type Offset = u32;
 
@@ -97,7 +96,7 @@ impl Index {
         self.file.file.get_from_index(searched_key).await
     }
 
-    pub(crate) async fn get_block_offset_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<RangeOffset, Error> {
-        self.file.file.get_block_range(start_key, end_key).await
-    }
+    // pub(crate) async fn get_block_offset_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<RangeOffset, Error> {
+    //     self.file.file.get_block_range(start_key, end_key).await
+    // }
 }

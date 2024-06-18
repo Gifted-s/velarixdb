@@ -3,9 +3,7 @@
 
 extern crate libc;
 extern crate nix;
-use crate::consts::{
-    DEFAULT_MAJOR_GARBAGE_COLLECTION_INTERVAL_MILLI, GC_CHUNK_SIZE, TAIL_ENTRY_KEY, TOMB_STONE_MARKER,
-};
+use crate::consts::{GC_CHUNK_SIZE, TAIL_ENTRY_KEY, TOMB_STONE_MARKER};
 use crate::types::{Key, ValOffset, Value};
 use crate::value_log::ValueLogEntry;
 use crate::{err, types};
@@ -21,7 +19,7 @@ use std::{io, str};
 use tokio::sync::RwLock;
 use tokio::time::sleep;
 type K = types::Key;
-type V = types::Value;
+//type V = types::Value;
 
 extern "C" {
     fn fallocate(fd: libc::c_int, mode: c_int, offset: off_t, len: off_t) -> c_int;
@@ -74,8 +72,8 @@ impl DataStore<'static, Key> {
                             })
                         });
                         let all_results = join_all(tasks).await;
-                        for tokio_response in all_results {
-                            match tokio_response {
+                        for res in all_results {
+                            match res {
                                 Ok(entry) => match entry {
                                     Err(err) => {
                                         log::error!("{}", err);

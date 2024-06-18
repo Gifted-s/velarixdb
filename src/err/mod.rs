@@ -94,6 +94,10 @@ pub enum Error {
     #[error("Directory deletion error")]
     DirDeleteError(#[source] io::Error),
 
+    /// There was an error while atttempting to delete a file
+    #[error("File deletion error")]
+    FileDeleteError(#[source] io::Error),
+
     /// There was an error inserting entry to memtable
     #[error("Error occured while inserting entry to memtable value  Key: `{key}` Value: `{value_offset}`")]
     InsertToMemTableFailedError { key: String, value_offset: usize },
@@ -244,6 +248,9 @@ pub enum Error {
 
     #[error("Serializartion error: {0} ")]
     SerializationError(&'static str),
+
+    #[error("Flush error: {0} ")]
+    FlushError(Box<Self>),
 
     #[error("Partial failure, obsolete sstables not deleted but sstable merge was successful")]
     CompactionCleanupPartialError,

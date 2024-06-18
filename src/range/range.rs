@@ -248,10 +248,10 @@ impl<'a> DataStore<'a, Key> {
             let paths_from_key_range = key_range.range_scan(&start.to_vec(), &end.to_vec());
             if !paths_from_key_range.is_empty() {
                 for range in paths_from_key_range.iter() {
-                    if !sstable_path.contains_key(range.full_sst_path.data_file.path.to_str().unwrap()) {
+                    if !sstable_path.contains_key(range.sst.data_file.path.to_str().unwrap()) {
                         sstable_path.insert(
-                            range.full_sst_path.data_file.path.to_str().unwrap().to_owned(),
-                            range.full_sst_path.to_owned(),
+                            range.sst.data_file.path.to_str().unwrap().to_owned(),
+                            range.sst.to_owned(),
                         );
                     }
                 }
