@@ -2,11 +2,9 @@ use crate::bucket::{Bucket, BucketID, BucketMap};
 use crate::cfg::Config;
 use crate::compactors::{self, Compactor};
 use crate::consts::{
-    BUCKETS_DIRECTORY_NAME, DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI,
-    DEFAULT_FLUSH_DATA_CHANNEL_SIZE, DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE,
-    HEAD_ENTRY_KEY, META_DIRECTORY_NAME, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8,
-    TAIL_ENTRY_KEY, TOMB_STONE_MARKER, VALUE_LOG_DIRECTORY_NAME,
-    WRITE_BUFFER_SIZE,
+    BUCKETS_DIRECTORY_NAME, DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI, DEFAULT_FLUSH_DATA_CHANNEL_SIZE,
+    DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE, HEAD_ENTRY_KEY, META_DIRECTORY_NAME, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8,
+    TAIL_ENTRY_KEY, TOMB_STONE_MARKER, VALUE_LOG_DIRECTORY_NAME, WRITE_BUFFER_SIZE,
 };
 use crate::err::Error;
 use crate::err::Error::*;
@@ -20,8 +18,7 @@ use crate::meta::Meta;
 use crate::range::RangeIterator;
 use crate::sst::{DataFile, Table};
 use crate::types::{
-    self, BloomFilterHandle, BucketMapHandle, FlushSignal, ImmutableMemTable,
-    Key, KeyRangeHandle, ValOffset,
+    self, BloomFilterHandle, BucketMapHandle, FlushSignal, ImmutableMemTable, Key, KeyRangeHandle, ValOffset,
 };
 use crate::value_log::ValueLog;
 use async_broadcast::broadcast;
@@ -80,9 +77,7 @@ pub enum ChanSender {
 #[derive(Debug)]
 pub enum ChanRecv {
     FlushDataRecv(Arc<RwLock<tokio::sync::mpsc::Receiver<FlushDataMemTable>>>),
-    TombStoneCompactionNoticeRcv(
-        Arc<RwLock<tokio::sync::mpsc::Receiver<BucketMap>>>,
-    ),
+    TombStoneCompactionNoticeRcv(Arc<RwLock<tokio::sync::mpsc::Receiver<BucketMap>>>),
     FlushNotificationRecv(async_broadcast::Receiver<FlushSignal>),
 }
 
@@ -119,29 +114,16 @@ impl<'a> DataStore<'a, Key> {
         return Ok(store);
     }
 
-    pub async fn new_with_custom_config(
-        dir: PathBuf,
-        config: Config,
-    ) -> Result<DataStore<'a, Key>, Error> {
+    pub async fn new_with_custom_config(dir: PathBuf, config: Config) -> Result<DataStore<'a, Key>, Error> {
         let dir = DirPath::build(dir);
-        DataStore::with_default_capacity_and_config(
-            dir.clone(),
-            SizeUnit::Bytes,
-            WRITE_BUFFER_SIZE,
-            config,
-        )
-        .await
+        DataStore::with_default_capacity_and_config(dir.clone(), SizeUnit::Bytes, WRITE_BUFFER_SIZE, config).await
     }
 
     pub fn trigger_background_tasks(&self) -> Result<bool, Error> {
         // Start background job to check for tombstone compaction condition at regular intervals 20 days
-        if let ChanRecv::TombStoneCompactionNoticeRcv(rcx) =
-            &self.tombstone_compaction_rcv
-        {
+        if let ChanRecv::TombStoneCompactionNoticeRcv(rcx) = &self.tombstone_compaction_rcv {
             self.compactor
-                .tombstone_compaction_condition_background_checker(Arc::clone(
-                    rcx,
-                ));
+                .tombstone_compaction_condition_background_checker(Arc::clone(rcx));
         }
 
         // Start background job to check for compaction condition at regular intervals 20 days
@@ -151,9 +133,7 @@ impl<'a> DataStore<'a, Key> {
             Arc::clone(&self.key_range),
         );
 
-        if let ChanRecv::FlushNotificationRecv(rcx) =
-            &self.flush_signal_receiver
-        {
+        if let ChanRecv::FlushNotificationRecv(rcx) = &self.flush_signal_receiver {
             self.compactor.start_flush_listner(
                 rcx.clone(),
                 Arc::clone(&self.buckets),
@@ -166,12 +146,7 @@ impl<'a> DataStore<'a, Key> {
     }
 
     /// A Result indicating success or an `Error` if an error occurred.
-    pub async fn put(
-        &mut self,
-        key: &str,
-        value: &str,
-        existing_v_offset: Option<ValOffset>,
-    ) -> Result<bool, Error> {
+    pub async fn put(&mut self, key: &str, value: &str, existing_v_offset: Option<ValOffset>) -> Result<bool, Error> {
         // Convert the key and value into Vec<u8> from given &str.
         let key = &key.as_bytes().to_vec();
         let value = &value.as_bytes().to_vec();
@@ -181,26 +156,17 @@ impl<'a> DataStore<'a, Key> {
         if let Some(v_off) = existing_v_offset {
             v_offset = v_off;
         } else {
-            v_offset = self
-                .val_log
-                .append(key, value, created_at, is_tombstone)
-                .await?;
+            v_offset = self.val_log.append(key, value, created_at, is_tombstone).await?;
         }
 
         if self.active_memtable.is_full(HEAD_ENTRY_KEY.len()) {
             let capacity = self.active_memtable.capacity();
             let size_unit = self.active_memtable.size_unit();
-            let false_positive_rate =
-                self.active_memtable.false_positive_rate();
-            let head_offset = self
-                .active_memtable
-                .entries
-                .iter()
-                .max_by_key(|e| e.value().0);
+            let false_positive_rate = self.active_memtable.false_positive_rate();
+            let head_offset = self.active_memtable.entries.iter().max_by_key(|e| e.value().0);
 
             // reset head in vLog
-            self.val_log
-                .set_head(head_offset.to_owned().unwrap().value().0);
+            self.val_log.set_head(head_offset.to_owned().unwrap().value().0);
             let head_entry = Entry::new(
                 HEAD_ENTRY_KEY.to_vec(),
                 head_offset.unwrap().value().0,
@@ -215,9 +181,7 @@ impl<'a> DataStore<'a, Key> {
                 Arc::new(RwLock::new(self.active_memtable.to_owned())),
             );
 
-            if self.read_only_memtables.read().await.len()
-                >= self.config.max_buffer_write_number
-            {
+            if self.read_only_memtables.read().await.len() >= self.config.max_buffer_write_number {
                 let rd_table = self.read_only_memtables.read().await;
                 for (table_id, table_to_flush) in rd_table.iter() {
                     let table = Arc::clone(table_to_flush);
@@ -228,29 +192,17 @@ impl<'a> DataStore<'a, Key> {
                     let flush_signal_clone = self.flush_signal_sender.clone();
                     // Prevent write block
                     spawn(async move {
-                        if let ChanSender::FlushNotificationSender(
-                            signal_sender,
-                        ) = flush_signal_clone
-                        {
-                            flusher.flush_handler(
-                                table_id_clone.to_owned(),
-                                table.to_owned(),
-                                signal_sender.clone(),
-                            );
+                        if let ChanSender::FlushNotificationSender(signal_sender) = flush_signal_clone {
+                            flusher.flush_handler(table_id_clone.to_owned(), table.to_owned(), signal_sender.clone());
                         }
                     });
                 }
             }
 
             self.active_memtable =
-                InMemoryTable::with_specified_capacity_and_rate(
-                    size_unit,
-                    capacity,
-                    false_positive_rate,
-                );
+                InMemoryTable::with_specified_capacity_and_rate(size_unit, capacity, false_positive_rate);
         }
-        let entry =
-            Entry::new(key.to_vec(), v_offset, created_at, is_tombstone);
+        let entry = Entry::new(key.to_vec(), v_offset, created_at, is_tombstone);
         self.active_memtable.insert(&entry)?;
         Ok(true)
     }
@@ -262,9 +214,7 @@ impl<'a> DataStore<'a, Key> {
         let mut most_recent_insert_time = 0;
 
         //Step 1 > Check the active memtable
-        if let Ok(Some((value_offset, creation_date, is_tombstone))) =
-            self.active_memtable.get(&key)
-        {
+        if let Ok(Some((value_offset, creation_date, is_tombstone))) = self.active_memtable.get(&key) {
             offset = value_offset;
             most_recent_insert_time = creation_date;
             if is_tombstone {
@@ -274,9 +224,7 @@ impl<'a> DataStore<'a, Key> {
             //Step 2 > Check the read only memtable
             let mut is_deleted = false;
             for (_, m_table) in self.read_only_memtables.read().await.iter() {
-                if let Ok(Some((value_offset, creation_date, is_tombstone))) =
-                    m_table.read().await.get(&key)
-                {
+                if let Ok(Some((value_offset, creation_date, is_tombstone))) = m_table.read().await.get(&key) {
                     if creation_date > most_recent_insert_time {
                         offset = value_offset;
                         most_recent_insert_time = creation_date;
@@ -289,49 +237,35 @@ impl<'a> DataStore<'a, Key> {
             } else if most_recent_insert_time == 0 {
                 //Step 3 > Check the sstables
                 let key_range_r_lock = &self.key_range.read().await;
-                let sstables_within_key_range =
-                    key_range_r_lock.filter_sstables_by_biggest_key(&key);
+                let sstables_within_key_range = key_range_r_lock.filter_sstables_by_biggest_key(&key);
                 if sstables_within_key_range.is_empty() {
                     return Err(KeyNotFoundInAnySSTableError);
                 }
                 let bloom_filter_read_lock = &self.filters.read().await;
-                let filters_within_key_range =
-                    BloomFilter::bloom_filters_within_key_range(
-                        bloom_filter_read_lock,
-                        sstables_within_key_range.to_vec(),
-                    );
+                let filters_within_key_range = BloomFilter::bloom_filters_within_key_range(
+                    bloom_filter_read_lock,
+                    sstables_within_key_range.to_vec(),
+                );
                 if filters_within_key_range.is_empty() {
                     return Err(KeyNotFoundByAnyBloomFilterError);
                 }
 
-                let sstable_paths = BloomFilter::sstables_within_key_range(
-                    filters_within_key_range,
-                    &key,
-                );
+                let sstable_paths = BloomFilter::sstables_within_key_range(filters_within_key_range, &key);
                 match sstable_paths {
                     Some(sstables_within_key_range) => {
                         for sstable in sstables_within_key_range.iter() {
-                            let sparse_index = Index::new(
-                                sstable.index_file.path.clone(),
-                                sstable.index_file.file.clone(),
-                            );
+                            let sparse_index =
+                                Index::new(sstable.index_file.path.clone(), sstable.index_file.file.clone());
                             let block_offset_res = sparse_index.get(&key).await;
                             match block_offset_res {
                                 Ok(None) => continue,
                                 Ok(result) => {
                                     if let Some(block_offset) = result {
-                                        let sst_res = sstable
-                                            .get(block_offset, &key)
-                                            .await;
+                                        let sst_res = sstable.get(block_offset, &key).await;
                                         match sst_res {
                                             Ok(None) => continue,
                                             Ok(result) => {
-                                                if let Some((
-                                                    value_offset,
-                                                    created_at,
-                                                    is_tombstone,
-                                                )) = result
-                                                {
+                                                if let Some((value_offset, created_at, is_tombstone)) = result {
                                                     if created_at > most_recent_insert_time {
                                                         offset = value_offset;
                                                         most_recent_insert_time = created_at;
@@ -383,22 +317,14 @@ impl<'a> DataStore<'a, Key> {
         let created_at = Utc::now().timestamp_millis() as u64;
         let is_tombstone = true;
 
-        let v_offset = self
-            .val_log
-            .append(key, value, created_at, is_tombstone)
-            .await?;
+        let v_offset = self.val_log.append(key, value, created_at, is_tombstone).await?;
 
         // then check if memtable is full
         if self.active_memtable.is_full(HEAD_ENTRY_KEY.len()) {
             let capacity = self.active_memtable.capacity();
             let size_unit = self.active_memtable.size_unit();
-            let false_positive_rate =
-                self.active_memtable.false_positive_rate();
-            let head_offset = self
-                .active_memtable
-                .entries
-                .iter()
-                .max_by_key(|e| e.value().0);
+            let false_positive_rate = self.active_memtable.false_positive_rate();
+            let head_offset = self.active_memtable.entries.iter().max_by_key(|e| e.value().0);
             let head_entry = Entry::new(
                 HEAD_ENTRY_KEY.to_vec(),
                 head_offset.unwrap().value().0,
@@ -412,65 +338,37 @@ impl<'a> DataStore<'a, Key> {
                 Arc::new(RwLock::new(self.active_memtable.to_owned())),
             );
 
-            if self.read_only_memtables.read().await.len()
-                >= self.config.max_buffer_write_number
-            {
+            if self.read_only_memtables.read().await.len() >= self.config.max_buffer_write_number {
                 let rd_table = self.read_only_memtables.read().await;
                 for (table_id, table_to_flush) in rd_table.iter() {
                     let table = Arc::clone(table_to_flush);
                     let table_id_clone = table_id.clone();
-                    let flush_data_sender_clone =
-                        self.flush_data_sender.clone();
+                    let flush_data_sender_clone = self.flush_data_sender.clone();
                     // Prevent write block
                     spawn(async move {
-                        if let ChanSender::FlushDataSender(sender) =
-                            flush_data_sender_clone
-                        {
-                            if let Err(err) = sender
-                                .write()
-                                .await
-                                .send((table_id_clone, table))
-                                .await
-                            {
-                                println!(
-                                    "Could not send flush data to channel {:?}",
-                                    err
-                                );
+                        if let ChanSender::FlushDataSender(sender) = flush_data_sender_clone {
+                            if let Err(err) = sender.write().await.send((table_id_clone, table)).await {
+                                println!("Could not send flush data to channel {:?}", err);
                             }
                         }
                     });
                 }
             }
             self.active_memtable =
-                InMemoryTable::with_specified_capacity_and_rate(
-                    size_unit,
-                    capacity,
-                    false_positive_rate,
-                );
+                InMemoryTable::with_specified_capacity_and_rate(size_unit, capacity, false_positive_rate);
         }
 
-        let entry = Entry::new(
-            key.to_vec(),
-            v_offset.try_into().unwrap(),
-            created_at,
-            is_tombstone,
-        );
+        let entry = Entry::new(key.to_vec(), v_offset.try_into().unwrap(), created_at, is_tombstone);
         self.active_memtable.insert(&entry)?;
         Ok(true)
     }
 
-    pub async fn update(
-        &mut self,
-        key: &str,
-        value: &str,
-    ) -> Result<bool, Error> {
+    pub async fn update(&mut self, key: &str, value: &str) -> Result<bool, Error> {
         // Call set method defined in DataStore.
         self.put(key, value, None).await
     }
 
-    pub async fn clear(
-        &'a mut self,
-    ) -> Result<DataStore<'a, types::Key>, Error> {
+    pub async fn clear(&'a mut self) -> Result<DataStore<'a, types::Key>, Error> {
         let capacity = self.active_memtable.capacity();
 
         let size_unit = self.active_memtable.size_unit();
@@ -481,13 +379,7 @@ impl<'a> DataStore<'a, Key> {
 
         self.val_log.clear_all().await;
 
-        DataStore::with_capacity_and_rate(
-            self.dir.clone(),
-            size_unit,
-            capacity,
-            self.config.to_owned(),
-        )
-        .await
+        DataStore::with_capacity_and_rate(self.dir.clone(), size_unit, capacity, self.config.to_owned()).await
     }
 
     async fn with_default_capacity_and_config(
@@ -508,22 +400,13 @@ impl<'a> DataStore<'a, Key> {
         let vlog_path = &dir.clone().val_log;
         let buckets_path = dir.buckets.clone();
         let vlog_exit = vlog_path.exists();
-        let vlog_empty = !vlog_exit
-            || fs::metadata(vlog_path)
-                .await
-                .map_err(GetFileMetaDataError)?
-                .len()
-                == 0;
+        let vlog_empty = !vlog_exit || fs::metadata(vlog_path).await.map_err(GetFileMetaDataError)?.len() == 0;
         let key_range = KeyRange::new();
         let mut vlog = ValueLog::new(vlog_path).await?;
         let meta = Meta::new(&dir.meta);
         if vlog_empty {
             let mut active_memtable =
-                InMemoryTable::with_specified_capacity_and_rate(
-                    size_unit,
-                    capacity,
-                    config.false_positive_rate,
-                );
+                InMemoryTable::with_specified_capacity_and_rate(size_unit, capacity, config.false_positive_rate);
 
             // if ValueLog is empty then we want to insert both tail and head
             let created_at = Utc::now().timestamp_millis() as u64;
@@ -531,22 +414,12 @@ impl<'a> DataStore<'a, Key> {
             let tail_offset = vlog
                 .append(&TAIL_ENTRY_KEY.to_vec(), &vec![], created_at, false)
                 .await?;
-            let tail_entry = Entry::new(
-                TAIL_ENTRY_KEY.to_vec(),
-                tail_offset,
-                created_at,
-                false,
-            );
+            let tail_entry = Entry::new(TAIL_ENTRY_KEY.to_vec(), tail_offset, created_at, false);
 
             let head_offset = vlog
                 .append(&HEAD_ENTRY_KEY.to_vec(), &vec![], created_at, false)
                 .await?;
-            let head_entry = Entry::new(
-                HEAD_ENTRY_KEY.to_vec(),
-                head_offset,
-                created_at,
-                false,
-            );
+            let head_entry = Entry::new(HEAD_ENTRY_KEY.to_vec(), head_offset, created_at, false);
 
             vlog.set_head(head_offset);
             vlog.set_tail(tail_offset);
@@ -555,19 +428,15 @@ impl<'a> DataStore<'a, Key> {
             active_memtable.insert(&tail_entry.to_owned())?;
             active_memtable.insert(&head_entry.to_owned())?;
             let buckets = BucketMap::new(buckets_path);
-            let (flush_data_sender, flush_data_rec) =
-                mpsc::channel(DEFAULT_FLUSH_DATA_CHANNEL_SIZE);
-            let (flush_signal_sender, flush_signal_rec) =
-                broadcast(DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE);
+            let (flush_data_sender, flush_data_rec) = mpsc::channel(DEFAULT_FLUSH_DATA_CHANNEL_SIZE);
+            let (flush_signal_sender, flush_signal_rec) = broadcast(DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE);
             let (comp_sender, comp_rec) = mpsc::channel(1);
             let read_only_memtables = IndexMap::new();
 
-            let filters_ref: Arc<RwLock<Vec<BloomFilter>>> =
-                Arc::new(RwLock::new(Vec::new()));
+            let filters_ref: Arc<RwLock<Vec<BloomFilter>>> = Arc::new(RwLock::new(Vec::new()));
             let buckets_ref = Arc::new(RwLock::new(buckets.to_owned()));
             let key_range_ref = Arc::new(RwLock::new(key_range));
-            let read_only_memtables_ref =
-                Arc::new(RwLock::new(read_only_memtables));
+            let read_only_memtables_ref = Arc::new(RwLock::new(read_only_memtables));
 
             let flusher = Flusher::new(
                 read_only_memtables_ref.clone(),
@@ -599,25 +468,13 @@ impl<'a> DataStore<'a, Key> {
                 meta,
                 flusher,
                 read_only_memtables: read_only_memtables_ref,
-                tombstone_compaction_sender:
-                    ChanSender::TombStoneCompactionNoticeSender(comp_sender),
-                tombstone_compaction_rcv:
-                    ChanRecv::TombStoneCompactionNoticeRcv(Arc::new(
-                        RwLock::new(comp_rec),
-                    )),
+                tombstone_compaction_sender: ChanSender::TombStoneCompactionNoticeSender(comp_sender),
+                tombstone_compaction_rcv: ChanRecv::TombStoneCompactionNoticeRcv(Arc::new(RwLock::new(comp_rec))),
                 range_iterator: None,
-                flush_data_sender: ChanSender::FlushDataSender(Arc::new(
-                    RwLock::new(flush_data_sender),
-                )),
-                flush_data_recevier: ChanRecv::FlushDataRecv(Arc::new(
-                    RwLock::new(flush_data_rec),
-                )),
-                flush_signal_sender: ChanSender::FlushNotificationSender(
-                    flush_signal_sender,
-                ),
-                flush_signal_receiver: ChanRecv::FlushNotificationRecv(
-                    flush_signal_rec,
-                ),
+                flush_data_sender: ChanSender::FlushDataSender(Arc::new(RwLock::new(flush_data_sender))),
+                flush_data_recevier: ChanRecv::FlushDataRecv(Arc::new(RwLock::new(flush_data_rec))),
+                flush_signal_sender: ChanSender::FlushNotificationSender(flush_signal_sender),
+                flush_signal_receiver: ChanRecv::FlushNotificationRecv(flush_signal_rec),
             });
         }
 
@@ -656,8 +513,7 @@ impl<'a> DataStore<'a, Key> {
 
             for mut entry in sstable_stream.into_iter() {
                 // Use for loop directly on the stream
-                let file_path =
-                    entry.next_entry().await.unwrap().unwrap().path();
+                let file_path = entry.next_entry().await.unwrap().unwrap().path();
 
                 if file_path.is_file() {
                     sst_files.push(file_path);
@@ -667,18 +523,12 @@ impl<'a> DataStore<'a, Key> {
             // Can't guarantee order that the files are retrived so sort for order
             sst_files.sort();
             // Extract bucket id
-            let bucket_id = Self::get_bucket_id_from_full_bucket_path(
-                sstable_path.to_owned().as_path().to_owned(),
-            );
+            let bucket_id = Self::get_bucket_id_from_full_bucket_path(sstable_path.to_owned().as_path().to_owned());
 
             // We expect two files, data file and index file
             if sst_files.len() < 2 {
                 return Err(InvalidSSTableDirectoryError {
-                    input_string: sstable_path
-                        .as_path()
-                        .to_owned()
-                        .to_string_lossy()
-                        .to_string(),
+                    input_string: sstable_path.as_path().to_owned().to_string_lossy().to_string(),
                 });
             }
             let data_file_path = sst_files[1].to_owned();
@@ -693,57 +543,46 @@ impl<'a> DataStore<'a, Key> {
                 created_at: created_at.timestamp_millis() as u64,
                 //TODO// instead of unwrapping this can return a file already exisit error, handle it
                 data_file: DataFile {
-                    file: DataFileNode::new(
-                        data_file_path.to_owned(),
-                        crate::fs::FileType::SSTable,
-                    )
-                    .await
-                    .unwrap(),
+                    file: DataFileNode::new(data_file_path.to_owned(), crate::fs::FileType::SSTable)
+                        .await
+                        .unwrap(),
                     path: data_file_path,
                 },
                 index_file: IndexFile {
-                    file: IndexFileNode::new(
-                        index_file_path.to_owned(),
-                        crate::fs::FileType::Index,
-                    )
-                    .await
-                    .unwrap(),
+                    file: IndexFileNode::new(index_file_path.to_owned(), crate::fs::FileType::Index)
+                        .await
+                        .unwrap(),
                     path: index_file_path,
                 },
                 size: 0, // TODO
                 entries: Arc::new(SkipMap::new()),
             };
 
-            let bucket_uuid =
-                uuid::Uuid::parse_str(&bucket_id).map_err(|err| {
-                    InvaidUUIDParseString {
-                        input_string: bucket_id,
-                        error: err,
-                    }
-                })?;
+            let bucket_uuid = uuid::Uuid::parse_str(&bucket_id).map_err(|err| InvaidUUIDParseString {
+                input_string: bucket_id,
+                error: err,
+            })?;
             // If bucket already exist in recovered bucket then just append sstable to its sstables vector
             if let Some(b) = recovered_buckets.get(&bucket_uuid) {
                 let temp_sstables = b.sstables.clone();
                 temp_sstables.write().await.push(sst_file.clone());
-                let updated_bucket =
-                    Bucket::new_with_id_dir_average_and_sstables(
-                        buckets_dir.path(),
-                        bucket_uuid,
-                        temp_sstables.read().await.clone(),
-                        0,
-                    )
-                    .await?;
+                let updated_bucket = Bucket::new_with_id_dir_average_and_sstables(
+                    buckets_dir.path(),
+                    bucket_uuid,
+                    temp_sstables.read().await.clone(),
+                    0,
+                )
+                .await?;
                 recovered_buckets.insert(bucket_uuid, updated_bucket);
             } else {
                 // Create new bucket
-                let updated_bucket =
-                    Bucket::new_with_id_dir_average_and_sstables(
-                        buckets_dir.path(),
-                        bucket_uuid,
-                        vec![sst_file.clone()],
-                        0,
-                    )
-                    .await?;
+                let updated_bucket = Bucket::new_with_id_dir_average_and_sstables(
+                    buckets_dir.path(),
+                    bucket_uuid,
+                    vec![sst_file.clone()],
+                    0,
+                )
+                .await?;
                 recovered_buckets.insert(bucket_uuid, updated_bucket);
             }
 
@@ -781,8 +620,7 @@ impl<'a> DataStore<'a, Key> {
 
         let mut buckets_map = BucketMap::new(buckets_path.clone());
         for (bucket_id, b) in recovered_buckets.iter() {
-            let mut bucket_map_with_reference: IndexMap<BucketID, Bucket> =
-                IndexMap::new();
+            let mut bucket_map_with_reference: IndexMap<BucketID, Bucket> = IndexMap::new();
             bucket_map_with_reference.insert(*bucket_id, b.clone());
             buckets_map.set_buckets(bucket_map_with_reference);
         }
@@ -801,20 +639,16 @@ impl<'a> DataStore<'a, Key> {
         )
         .await;
 
-        let (flush_data_sender, flush_data_rec) =
-            mpsc::channel(DEFAULT_FLUSH_DATA_CHANNEL_SIZE);
-        let (flush_signal_sender, flush_signal_rec) =
-            broadcast(DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE);
+        let (flush_data_sender, flush_data_rec) = mpsc::channel(DEFAULT_FLUSH_DATA_CHANNEL_SIZE);
+        let (flush_signal_sender, flush_signal_rec) = broadcast(DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE);
         let (tomb_comp_sender, tomb_comp_rec) = mpsc::channel(1);
         match recover_result {
             Ok((active_memtable, read_only_memtables)) => {
-                let buckets_map_ref =
-                    Arc::new(RwLock::new(buckets_map.to_owned()));
+                let buckets_map_ref = Arc::new(RwLock::new(buckets_map.to_owned()));
                 let bloom_filter_ref = Arc::new(RwLock::new(filters));
                 //TODO:  we also need to recover this from sstable
                 let key_range_ref = Arc::new(RwLock::new(key_range.to_owned()));
-                let read_only_memtables_ref =
-                    Arc::new(RwLock::new(read_only_memtables));
+                let read_only_memtables_ref = Arc::new(RwLock::new(read_only_memtables));
 
                 let flusher = Flusher::new(
                     read_only_memtables_ref.clone(),
@@ -846,27 +680,15 @@ impl<'a> DataStore<'a, Key> {
                     ),
                     config: config.clone(),
                     read_only_memtables: read_only_memtables_ref,
-                    tombstone_compaction_sender:
-                        ChanSender::TombStoneCompactionNoticeSender(
-                            tomb_comp_sender,
-                        ),
+                    tombstone_compaction_sender: ChanSender::TombStoneCompactionNoticeSender(tomb_comp_sender),
                     range_iterator: None,
-                    tombstone_compaction_rcv:
-                        ChanRecv::TombStoneCompactionNoticeRcv(Arc::new(
-                            RwLock::new(tomb_comp_rec),
-                        )),
-                    flush_data_sender: ChanSender::FlushDataSender(Arc::new(
-                        RwLock::new(flush_data_sender),
-                    )),
-                    flush_data_recevier: ChanRecv::FlushDataRecv(Arc::new(
-                        RwLock::new(flush_data_rec),
-                    )),
-                    flush_signal_sender: ChanSender::FlushNotificationSender(
-                        flush_signal_sender,
-                    ),
-                    flush_signal_receiver: ChanRecv::FlushNotificationRecv(
-                        flush_signal_rec,
-                    ),
+                    tombstone_compaction_rcv: ChanRecv::TombStoneCompactionNoticeRcv(Arc::new(RwLock::new(
+                        tomb_comp_rec,
+                    ))),
+                    flush_data_sender: ChanSender::FlushDataSender(Arc::new(RwLock::new(flush_data_sender))),
+                    flush_data_recevier: ChanRecv::FlushDataRecv(Arc::new(RwLock::new(flush_data_rec))),
+                    flush_signal_sender: ChanSender::FlushNotificationSender(flush_signal_sender),
+                    flush_signal_receiver: ChanRecv::FlushNotificationRecv(flush_signal_rec),
                 })
             }
             Err(err) => Err(MemTableRecoveryError(Box::new(err))),
@@ -885,28 +707,16 @@ impl<'a> DataStore<'a, Key> {
         ),
         Error,
     > {
-        let mut read_only_memtables: IndexMap<
-            Vec<u8>,
-            Arc<RwLock<InMemoryTable<Vec<u8>>>>,
-        > = IndexMap::new();
+        let mut read_only_memtables: IndexMap<Vec<u8>, Arc<RwLock<InMemoryTable<Vec<u8>>>>> = IndexMap::new();
         let mut active_memtable =
-            InMemoryTable::with_specified_capacity_and_rate(
-                size_unit,
-                capacity,
-                false_positive_rate,
-            );
+            InMemoryTable::with_specified_capacity_and_rate(size_unit, capacity, false_positive_rate);
 
         let mut vlog = ValueLog::new(&vlog_path.clone()).await?;
         let mut most_recent_offset = head_offset;
         let entries = vlog.recover(head_offset).await?;
 
         for e in entries {
-            let entry = Entry::new(
-                e.key.to_owned(),
-                most_recent_offset,
-                e.created_at,
-                e.is_tombstone,
-            );
+            let entry = Entry::new(e.key.to_owned(), most_recent_offset, e.created_at, e.is_tombstone);
             // Since the most recent offset is the offset we start reading entries from in value log
             // and we retrieved this from the sstable, therefore should not re-write the initial entry in
             // memtable since it's already in the sstable
@@ -919,11 +729,7 @@ impl<'a> DataStore<'a, Key> {
                         Arc::new(RwLock::new(active_memtable.to_owned())),
                     );
                     active_memtable =
-                        InMemoryTable::with_specified_capacity_and_rate(
-                            size_unit,
-                            capacity,
-                            false_positive_rate,
-                        );
+                        InMemoryTable::with_specified_capacity_and_rate(size_unit, capacity, false_positive_rate);
                 }
                 active_memtable.insert(&entry)?;
             }
@@ -941,11 +747,8 @@ impl<'a> DataStore<'a, Key> {
     pub async fn flush_all_memtables(&mut self) -> Result<(), Error> {
         // Flush active memtable
         let hotness = 1;
-        self.flush_memtable(
-            Arc::new(RwLock::new(self.active_memtable.to_owned())),
-            hotness,
-        )
-        .await?;
+        self.flush_memtable(Arc::new(RwLock::new(self.active_memtable.to_owned())), hotness)
+            .await?;
 
         // Flush all read-only memtables
         let memtable_lock = self.read_only_memtables.read().await;
@@ -960,9 +763,10 @@ impl<'a> DataStore<'a, Key> {
         }
 
         // Sort bloom filter by hotness after flushing read-only memtables
-        self.filters.write().await.sort_by(|a, b| {
-            b.get_sst().get_hotness().cmp(&a.get_sst().get_hotness())
-        });
+        self.filters
+            .write()
+            .await
+            .sort_by(|a, b| b.get_sst().get_hotness().cmp(&a.get_sst().get_hotness()));
 
         // clear the memtables
         self.active_memtable.clear();
@@ -970,19 +774,12 @@ impl<'a> DataStore<'a, Key> {
         Ok(())
     }
 
-    async fn flush_memtable(
-        &mut self,
-        memtable: Arc<RwLock<InMemoryTable<Key>>>,
-        hotness: u64,
-    ) -> Result<(), Error> {
+    async fn flush_memtable(&mut self, memtable: Arc<RwLock<InMemoryTable<Key>>>, hotness: u64) -> Result<(), Error> {
         let sstable_path = self
             .buckets
             .write()
             .await
-            .insert_to_appropriate_bucket(
-                Arc::new(Box::new(memtable.read().await.to_owned())),
-                hotness,
-            )
+            .insert_to_appropriate_bucket(Arc::new(Box::new(memtable.read().await.to_owned())), hotness)
             .await?;
 
         // Write the memtable to disk as SSTables
@@ -1082,10 +879,7 @@ mod tests {
 
     fn generate_random_string(length: usize) -> String {
         let rng = thread_rng();
-        rng.sample_iter(&Alphanumeric)
-            .take(length)
-            .map(|c| c as char)
-            .collect()
+        rng.sample_iter(&Alphanumeric).take(length).map(|c| c as char).collect()
     }
 
     // Generate test to find keys after compaction
@@ -1341,10 +1135,7 @@ mod tests {
                 assert!(false, "Should not be found after compaction")
             }
             Err(err) => {
-                assert_eq!(
-                    Error::KeyFoundAsTombstoneInMemtableError.to_string(),
-                    err.to_string()
-                )
+                assert_eq!(Error::KeyFoundAsTombstoneInMemtableError.to_string(), err.to_string())
             }
         }
 
@@ -1358,10 +1149,7 @@ mod tests {
                 assert!(false, "Should not be found after compaction")
             }
             Err(err) => {
-                assert_eq!(
-                    Error::KeyFoundAsTombstoneInSSTableError.to_string(),
-                    err.to_string()
-                )
+                assert_eq!(Error::KeyFoundAsTombstoneInSSTableError.to_string(), err.to_string())
             }
         }
 
@@ -1395,10 +1183,8 @@ mod tests {
 
             Err(err) => {
                 println!("{}", err);
-                if err.to_string()
-                    != KeyFoundAsTombstoneInSSTableError.to_string()
-                    && err.to_string()
-                        != KeyNotFoundInAnySSTableError.to_string()
+                if err.to_string() != KeyFoundAsTombstoneInSSTableError.to_string()
+                    && err.to_string() != KeyNotFoundInAnySSTableError.to_string()
                 {
                     println!("{}", err);
                     assert!(false, "Key should be mapped to tombstone or deleted from all sstables")
@@ -1579,10 +1365,7 @@ mod tests {
                 assert_eq!(value, "boyode".as_bytes().to_vec());
             }
             Err(err) => {
-                assert_ne!(
-                    key.as_bytes().to_vec(),
-                    err.to_string().as_bytes().to_vec()
-                );
+                assert_ne!(key.as_bytes().to_vec(), err.to_string().as_bytes().to_vec());
             }
         }
 
@@ -1604,10 +1387,7 @@ mod tests {
                 assert!(false, "Should not be executed")
             }
             Err(err) => {
-                assert_eq!(
-                    KeyFoundAsTombstoneInSSTableError.to_string(),
-                    err.to_string()
-                )
+                assert_eq!(KeyFoundAsTombstoneInSSTableError.to_string(), err.to_string())
             }
         }
 
@@ -1637,10 +1417,8 @@ mod tests {
                 assert!(false, "Should not ne executed")
             }
             Err(err) => {
-                if err.to_string()
-                    != KeyFoundAsTombstoneInSSTableError.to_string()
-                    && err.to_string()
-                        != KeyNotFoundInAnySSTableError.to_string()
+                if err.to_string() != KeyFoundAsTombstoneInSSTableError.to_string()
+                    && err.to_string() != KeyNotFoundInAnySSTableError.to_string()
                 {
                     assert!(false, "Key should be mapped to tombstone or deleted from all sstables")
                 }

@@ -93,18 +93,11 @@ impl Index {
         Ok(entry_vec)
     }
 
-    pub(crate) async fn get(
-        &self,
-        searched_key: &[u8],
-    ) -> Result<Option<u32>, Error> {
+    pub(crate) async fn get(&self, searched_key: &[u8]) -> Result<Option<u32>, Error> {
         self.file.file.get_from_index(searched_key).await
     }
 
-    pub(crate) async fn get_block_offset_range(
-        &self,
-        start_key: &[u8],
-        end_key: &[u8],
-    ) -> Result<RangeOffset, Error> {
+    pub(crate) async fn get_block_offset_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<RangeOffset, Error> {
         self.file.file.get_block_range(start_key, end_key).await
     }
 }

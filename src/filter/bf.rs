@@ -27,17 +27,10 @@ impl BloomFilter {
             false_positive_rate >= 0.0,
             "False positive rate can not be les than or equal to zero"
         );
-        assert!(
-            no_of_elements > 0,
-            "No of elements should be greater than 0"
-        );
+        assert!(no_of_elements > 0, "No of elements should be greater than 0");
 
-        let no_of_bits =
-            Self::calculate_no_of_bits(no_of_elements, false_positive_rate);
-        let no_of_hash_func = Self::calculate_no_of_hash_function(
-            no_of_bits,
-            no_of_elements as u32,
-        ) as usize;
+        let no_of_bits = Self::calculate_no_of_bits(no_of_elements, false_positive_rate);
+        let no_of_hash_func = Self::calculate_no_of_hash_function(no_of_bits, no_of_elements as u32) as usize;
         let bv = BitVec::from_elem(no_of_bits as usize, false);
 
         Self {
@@ -88,10 +81,7 @@ impl BloomFilter {
         filtered_bfs
     }
 
-    pub fn sstables_within_key_range<T: Hash>(
-        bloom_filters: Vec<&BloomFilter>,
-        key: &T,
-    ) -> Option<Vec<Table>> {
+    pub fn sstables_within_key_range<T: Hash>(bloom_filters: Vec<&BloomFilter>, key: &T) -> Option<Vec<Table>> {
         let mut sstables: Vec<Table> = Vec::new();
         for bloom_filter in bloom_filters {
             if bloom_filter.contains(key) {
@@ -152,22 +142,13 @@ impl BloomFilter {
         hasher.finish()
     }
 
-    fn calculate_no_of_bits(
-        no_of_elements: usize,
-        false_positive_rate: f64,
-    ) -> u32 {
-        let no_bits = -((no_of_elements as f64 * false_positive_rate.ln())
-            / ((2_f64.ln()).powi(2)))
-        .ceil();
+    fn calculate_no_of_bits(no_of_elements: usize, false_positive_rate: f64) -> u32 {
+        let no_bits = -((no_of_elements as f64 * false_positive_rate.ln()) / ((2_f64.ln()).powi(2))).ceil();
         no_bits as u32
     }
 
-    fn calculate_no_of_hash_function(
-        no_of_bits: u32,
-        no_of_elements: u32,
-    ) -> u32 {
-        let no_hash_func =
-            (no_of_bits as f64 / no_of_elements as f64) * (2_f64.ln()).ceil();
+    fn calculate_no_of_hash_function(no_of_bits: u32, no_of_elements: u32) -> u32 {
+        let no_hash_func = (no_of_bits as f64 / no_of_elements as f64) * (2_f64.ln()).ceil();
         no_hash_func as u32
     }
 }
@@ -178,11 +159,7 @@ impl Clone for BloomFilter {
         BloomFilter {
             sst: self.sst.clone(),
             no_of_hash_func: self.no_of_hash_func,
-            no_of_elements: AtomicU32::load(
-                &self.no_of_elements,
-                Ordering::Relaxed,
-            )
-            .into(),
+            no_of_elements: AtomicU32::load(&self.no_of_elements, Ordering::Relaxed).into(),
             bit_vec: self.bit_vec.clone(),
         }
     }
@@ -198,22 +175,15 @@ mod tests {
     fn test_set_and_contain() {
         let false_positive_rate = 0.01;
         let no_of_elements: usize = 10;
-        let mut bloom_filter =
-            BloomFilter::new(false_positive_rate, no_of_elements);
+        let mut bloom_filter = BloomFilter::new(false_positive_rate, no_of_elements);
 
-        let no_bits = -((no_of_elements as f64 * false_positive_rate.ln())
-            / ((2_f64.ln()).powi(2)))
-        .ceil();
+        let no_bits = -((no_of_elements as f64 * false_positive_rate.ln()) / ((2_f64.ln()).powi(2))).ceil();
 
-        let expected_no_hash_func =
-            ((no_bits / no_of_elements as f64) * (2_f64.ln()).ceil()) as usize;
+        let expected_no_hash_func = ((no_bits / no_of_elements as f64) * (2_f64.ln()).ceil()) as usize;
 
         assert_eq!(bloom_filter.num_elements(), 0);
         assert_eq!(bloom_filter.no_of_hash_func, expected_no_hash_func);
-        assert_eq!(
-            bloom_filter.bit_vec.lock().unwrap().len(),
-            no_bits as usize
-        );
+        assert_eq!(bloom_filter.bit_vec.lock().unwrap().len(), no_bits as usize);
         let k = &vec![1, 2, 3, 4];
         bloom_filter.set(k);
         assert_eq!(bloom_filter.num_elements(), 1);
@@ -224,8 +194,7 @@ mod tests {
     fn test_number_of_elements() {
         let false_positive_rate = 0.01;
         let no_of_elements: usize = 10;
-        let mut bloom_filter =
-            BloomFilter::new(false_positive_rate, no_of_elements);
+        let mut bloom_filter = BloomFilter::new(false_positive_rate, no_of_elements);
 
         for i in 0..10 {
             bloom_filter.set(&i)
@@ -262,13 +231,11 @@ mod tests {
         }
 
         // Calculate the observed false positive rate.
-        let observed_false_positive_rate =
-            false_positives as f64 / num_tested_elements as f64;
+        let observed_false_positive_rate = false_positives as f64 / num_tested_elements as f64;
 
         // Allow for a small margin (10%) of error due to the probabilistic nature of Bloom filters.
         // Maximum Allowed False Positive Rate = False Positive Rate + (False Positive Rate * Tolerance)
-        let max_allowed_false_positive_rate =
-            false_positive_rate + (false_positive_rate * 0.1);
+        let max_allowed_false_positive_rate = false_positive_rate + (false_positive_rate * 0.1);
 
         assert!(
             observed_false_positive_rate <= max_allowed_false_positive_rate,
@@ -306,13 +273,11 @@ mod tests {
         }
 
         // Calculate the observed false positive rate.
-        let observed_false_positive_rate =
-            false_positives as f64 / num_tested_elements as f64;
+        let observed_false_positive_rate = false_positives as f64 / num_tested_elements as f64;
 
         // Allow for a small margin (10%) of error due to the probabilistic nature of Bloom filters.
         // Maximum Allowed False Positive Rate = False Positive Rate + (False Positive Rate * Tolerance)
-        let max_allowed_false_positive_rate =
-            false_positive_rate + (false_positive_rate * 0.1);
+        let max_allowed_false_positive_rate = false_positive_rate + (false_positive_rate * 0.1);
 
         assert!(
             observed_false_positive_rate <= max_allowed_false_positive_rate,
@@ -350,13 +315,11 @@ mod tests {
         }
 
         // Calculate the observed false positive rate.
-        let observed_false_positive_rate =
-            false_positives as f64 / num_tested_elements as f64;
+        let observed_false_positive_rate = false_positives as f64 / num_tested_elements as f64;
 
         // Allow for a small margin (10%) of error due to the probabilistic nature of Bloom filters.
         // Maximum Allowed False Positive Rate = False Positive Rate + (False Positive Rate * Tolerance)
-        let max_allowed_false_positive_rate =
-            false_positive_rate + (false_positive_rate * 0.1);
+        let max_allowed_false_positive_rate = false_positive_rate + (false_positive_rate * 0.1);
 
         assert!(
             observed_false_positive_rate <= max_allowed_false_positive_rate,
