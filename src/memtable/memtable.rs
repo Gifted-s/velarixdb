@@ -1,8 +1,5 @@
 use crate::bucket::InsertableToBucket;
-use crate::consts::{
-    DEFAULT_FALSE_POSITIVE_RATE, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8,
-    WRITE_BUFFER_SIZE,
-};
+use crate::consts::{DEFAULT_FALSE_POSITIVE_RATE, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, WRITE_BUFFER_SIZE};
 use crate::err::Error;
 use crate::filter::BloomFilter;
 //use crate::memtable::val_option::ValueOption;
@@ -40,9 +37,7 @@ pub struct InMemoryTable<K: Hash + cmp::Ord> {
 }
 
 impl InsertableToBucket for InMemoryTable<Key> {
-    fn get_entries(
-        &self,
-    ) -> Arc<SkipMap<Key, (ValOffset, InsertionTime, IsDeleted)>> {
+    fn get_entries(&self) -> Arc<SkipMap<Key, (ValOffset, InsertionTime, IsDeleted)>> {
         Arc::clone(&self.entries)
     }
     fn size(&self) -> usize {
@@ -58,12 +53,7 @@ impl InsertableToBucket for InMemoryTable<Key> {
 }
 
 impl Entry<Key, ValOffset> {
-    pub fn new(
-        key: Key,
-        val_offset: ValOffset,
-        created_at: CreationTime,
-        is_tombstone: IsTombStone,
-    ) -> Self {
+    pub fn new(key: Key, val_offset: ValOffset, created_at: CreationTime, is_tombstone: IsTombStone) -> Self {
         Entry {
             key,
             val_offset,
@@ -82,18 +72,10 @@ impl Entry<Key, ValOffset> {
 
 impl InMemoryTable<Key> {
     pub fn new() -> Self {
-        Self::with_specified_capacity_and_rate(
-            SizeUnit::Bytes,
-            WRITE_BUFFER_SIZE,
-            DEFAULT_FALSE_POSITIVE_RATE,
-        )
+        Self::with_specified_capacity_and_rate(SizeUnit::Bytes, WRITE_BUFFER_SIZE, DEFAULT_FALSE_POSITIVE_RATE)
     }
 
-    pub fn with_specified_capacity_and_rate(
-        size_unit: SizeUnit,
-        capacity: usize,
-        false_positive_rate: f64,
-    ) -> Self {
+    pub fn with_specified_capacity_and_rate(size_unit: SizeUnit, capacity: usize, false_positive_rate: f64) -> Self {
         assert!(
             false_positive_rate >= 0.0,
             "False positive rate can not be les than or equal to zero"
@@ -118,12 +100,8 @@ impl InMemoryTable<Key> {
         }
     }
 
-    pub fn insert(
-        &mut self,
-        entry: &Entry<Key, ValOffset>,
-    ) -> Result<(), Error> {
-        let entry_length_byte =
-            entry.key.len() + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
+    pub fn insert(&mut self, entry: &Entry<Key, ValOffset>) -> Result<(), Error> {
+        let entry_length_byte = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
         if !self.bloom_filter.contains(&entry.key) {
             self.bloom_filter.set(&entry.key.clone());
             self.entries.insert(
@@ -142,10 +120,7 @@ impl InMemoryTable<Key> {
         Ok(())
     }
 
-    pub fn get(
-        &self,
-        key: &Vec<u8>,
-    ) -> Result<Option<(ValOffset, CreationTime, IsTombStone)>, Error> {
+    pub fn get(&self, key: &Vec<u8>) -> Result<Option<(ValOffset, CreationTime, IsTombStone)>, Error> {
         if self.bloom_filter.contains(key) {
             if let Some(entry) = self.entries.get(key) {
                 return Ok(Some(*entry.value())); // returns value offset
@@ -154,10 +129,7 @@ impl InMemoryTable<Key> {
         Ok(None)
     }
 
-    pub fn update(
-        &mut self,
-        entry: &Entry<Key, ValOffset>,
-    ) -> Result<(), Error> {
+    pub fn update(&mut self, entry: &Entry<Key, ValOffset>) -> Result<(), Error> {
         if !self.bloom_filter.contains(&entry.key) {
             return Err(KeyNotFoundInMemTable);
         }
@@ -168,27 +140,17 @@ impl InMemoryTable<Key> {
         Ok(())
     }
 
-    pub fn upsert(
-        &mut self,
-        entry: &Entry<Vec<u8>, usize>,
-    ) -> Result<(), Error> {
+    pub fn upsert(&mut self, entry: &Entry<Vec<u8>, usize>) -> Result<(), Error> {
         self.insert(&entry)
     }
 
     pub fn generate_table_id() -> Vec<u8> {
         let rng = rand::thread_rng();
-        let id: String = rng
-            .sample_iter(&Alphanumeric)
-            .take(10)
-            .map(char::from)
-            .collect();
+        let id: String = rng.sample_iter(&Alphanumeric).take(10).map(char::from).collect();
         id.as_bytes().to_vec()
     }
 
-    pub fn delete(
-        &mut self,
-        entry: &Entry<Key, ValOffset>,
-    ) -> Result<(), Error> {
+    pub fn delete(&mut self, entry: &Entry<Key, ValOffset>) -> Result<(), Error> {
         if !self.bloom_filter.contains(&entry.key) {
             return Err(KeyNotFoundInMemTable);
         }
@@ -206,8 +168,7 @@ impl InMemoryTable<Key> {
     }
 
     pub fn is_full(&mut self, key_len: usize) -> bool {
-        self.size + key_len + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8
-            >= self.capacity()
+        self.size + key_len + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8 >= self.capacity()
     }
 
     // Find the biggest element in the skip list
@@ -229,10 +190,7 @@ impl InMemoryTable<Key> {
     }
 
     pub fn is_entry_within_range<'a>(
-        e: &crossbeam_skiplist::map::Entry<
-            Key,
-            (ValOffset, CreationTime, IsTombStone),
-        >,
+        e: &crossbeam_skiplist::map::Entry<Key, (ValOffset, CreationTime, IsTombStone)>,
         start: &'a [u8],
         end: &'a [u8],
     ) -> bool {
@@ -249,9 +207,7 @@ impl InMemoryTable<Key> {
         self.size
     }
 
-    pub fn get_index(
-        self,
-    ) -> Arc<SkipMap<Vec<u8>, (ValOffset, CreationTime, IsTombStone)>> {
+    pub fn get_index(self) -> Arc<SkipMap<Vec<u8>, (ValOffset, CreationTime, IsTombStone)>> {
         self.entries.clone()
     }
 
@@ -277,8 +233,7 @@ impl InMemoryTable<Key> {
 
         self.entries.clear();
         self.size = 0;
-        self.bloom_filter =
-            BloomFilter::new(self.false_positive_rate, max_no_of_entries);
+        self.bloom_filter = BloomFilter::new(self.false_positive_rate, max_no_of_entries);
     }
 }
 

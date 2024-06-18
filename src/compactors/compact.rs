@@ -8,10 +8,7 @@ use super::TableInsertor;
 /// Unexpired Tombstones: If a tombstone is not expired, it means the data it shadows might still be relevant on other tiers.  In
 /// this case, VikingsDB keeps both the tombstone and the data in the new SSTable. This ensures consistency across the tiers and allows for repairs if needed.
 use crate::bucket::{BucketMap, InsertableToBucket};
-use crate::types::{
-    BloomFilterHandle, Bool, BucketMapHandle, Duration, FlushReceiver,
-    KeyRangeHandle,
-};
+use crate::types::{BloomFilterHandle, Bool, BucketMapHandle, Duration, FlushReceiver, KeyRangeHandle};
 use crate::{err::Error, filter::BloomFilter};
 use futures::lock::Mutex;
 use std::sync::Arc;
@@ -103,10 +100,7 @@ pub struct WriteTracker {
 }
 impl WriteTracker {
     pub fn new(expected: usize) -> Self {
-        Self {
-            actual: 0,
-            expected,
-        }
+        Self { actual: 0, expected }
     }
 }
 
@@ -147,11 +141,7 @@ impl Clone for MergedSSTable {
 }
 
 impl MergedSSTable {
-    pub fn new(
-        sstable: Box<dyn InsertableToBucket>,
-        filter: BloomFilter,
-        hotness: u64,
-    ) -> Self {
+    pub fn new(sstable: Box<dyn InsertableToBucket>, filter: BloomFilter, hotness: u64) -> Self {
         Self {
             sstable,
             hotness,
@@ -186,17 +176,13 @@ impl Compactor {
         }
     }
     /// FUTURE: Maybe trigger tombstone compaction on interval in addtion to normal periodic sstable compaction
-    pub fn tombstone_compaction_condition_background_checker(
-        &self,
-        rcx: Arc<RwLock<Receiver<BucketMap>>>,
-    ) {
+    pub fn tombstone_compaction_condition_background_checker(&self, rcx: Arc<RwLock<Receiver<BucketMap>>>) {
         let receiver = Arc::clone(&rcx);
         let cfg = self.config.to_owned();
         tokio::spawn(async move {
             loop {
                 let _ = receiver.write().await.try_recv();
-                Compactor::sleep_compaction(cfg.tombstone_compaction_interval)
-                    .await;
+                Compactor::sleep_compaction(cfg.tombstone_compaction_interval).await;
             }
         });
     }
@@ -232,18 +218,10 @@ impl Compactor {
                     }
                     *state = CompState::Active;
                     drop(state);
-                    if let Err(err) = Compactor::handle_compaction(
-                        bucket_map.clone(),
-                        filter.clone(),
-                        key_range.clone(),
-                        &cfg,
-                    )
-                    .await
+                    if let Err(err) =
+                        Compactor::handle_compaction(bucket_map.clone(), filter.clone(), key_range.clone(), &cfg).await
                     {
-                        log::info!(
-                            "{}",
-                            Error::CompactionFailed(Box::new(err))
-                        );
+                        log::info!("{}", Error::CompactionFailed(Box::new(err)));
                         continue;
                     }
                     let mut state = comp_state.lock().await;
@@ -293,12 +271,8 @@ impl Compactor {
     ) -> Result<(), Error> {
         match cfg.strategy {
             Strategy::STCS => {
-                let mut runner = SizedTierRunner::new(
-                    Arc::clone(&buckets),
-                    Arc::clone(&filter),
-                    Arc::clone(&key_range),
-                    cfg,
-                );
+                let mut runner =
+                    SizedTierRunner::new(Arc::clone(&buckets), Arc::clone(&filter), Arc::clone(&key_range), cfg);
                 return runner.run_compaction().await;
             }
             Strategy::LCS => {

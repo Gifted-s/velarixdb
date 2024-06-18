@@ -4,8 +4,7 @@
 extern crate libc;
 extern crate nix;
 use crate::consts::{
-    DEFAULT_MAJOR_GARBAGE_COLLECTION_INTERVAL_MILLI, GC_CHUNK_SIZE,
-    TAIL_ENTRY_KEY, TOMB_STONE_MARKER,
+    DEFAULT_MAJOR_GARBAGE_COLLECTION_INTERVAL_MILLI, GC_CHUNK_SIZE, TAIL_ENTRY_KEY, TOMB_STONE_MARKER,
 };
 use crate::types::{Key, ValOffset, Value};
 use crate::value_log::ValueLogEntry;
@@ -25,12 +24,7 @@ type K = types::Key;
 type V = types::Value;
 
 extern "C" {
-    fn fallocate(
-        fd: libc::c_int,
-        mode: c_int,
-        offset: off_t,
-        len: off_t,
-    ) -> c_int;
+    fn fallocate(fd: libc::c_int, mode: c_int, offset: off_t, len: off_t) -> c_int;
 }
 
 const FALLOC_FL_PUNCH_HOLE: c_int = 0x2;
@@ -42,18 +36,14 @@ impl DataStore<'static, Key> {
 
         tokio::spawn(async move {
             'runner: loop {
-                sleep_gc_task(
-                    store.read().await.config.major_garbage_collection_interval,
-                )
-                .await;
+                sleep_gc_task(store.read().await.config.major_garbage_collection_interval).await;
                 let store_clone = store.clone();
                 let invalid_entries = Arc::new(RwLock::new(Vec::new()));
                 let valid_entries = Arc::new(RwLock::new(Vec::new()));
                 let synced_entries = Arc::new(RwLock::new(Vec::new()));
 
                 let store_read_lock = store_clone.read().await;
-                let punch_hole_start_offset =
-                    store_read_lock.val_log.tail_offset.to_owned();
+                let punch_hole_start_offset = store_read_lock.val_log.tail_offset.to_owned();
                 let chunk_res = store_read_lock
                     .val_log
                     .read_chunk_to_garbage_collect(GC_CHUNK_SIZE)
@@ -62,44 +52,24 @@ impl DataStore<'static, Key> {
                 match chunk_res {
                     Ok((entries, total_bytes_read)) => {
                         let tasks = entries.into_iter().map(|entry| {
-                            let invalid_entries_clone =
-                                Arc::clone(&invalid_entries);
-                            let valid_entries_clone =
-                                Arc::clone(&valid_entries);
+                            let invalid_entries_clone = Arc::clone(&invalid_entries);
+                            let valid_entries_clone = Arc::clone(&valid_entries);
                             let s_engine = store.clone();
                             tokio::spawn(async move {
                                 let s = s_engine.read().await;
-                                let most_recent_value = s
-                                    .get(str::from_utf8(&entry.key).unwrap())
-                                    .await;
+                                let most_recent_value = s.get(str::from_utf8(&entry.key).unwrap()).await;
                                 match most_recent_value {
                                     Ok((value, creation_time)) => {
                                         if entry.created_at != creation_time
-                                            || value
-                                                == TOMB_STONE_MARKER
-                                                    .to_le_bytes()
-                                                    .to_vec()
+                                            || value == TOMB_STONE_MARKER.to_le_bytes().to_vec()
                                         {
-                                            invalid_entries_clone
-                                                .write()
-                                                .await
-                                                .push(entry);
+                                            invalid_entries_clone.write().await.push(entry);
                                         } else {
-                                            valid_entries_clone
-                                                .write()
-                                                .await
-                                                .push((entry.key, value));
+                                            valid_entries_clone.write().await.push((entry.key, value));
                                         }
                                         Ok(())
                                     }
-                                    Err(err) => {
-                                        s.handle_deleted_entries(
-                                            invalid_entries_clone,
-                                            entry,
-                                            err,
-                                        )
-                                        .await
-                                    }
+                                    Err(err) => s.handle_deleted_entries(invalid_entries_clone, entry, err).await,
                                 }
                             })
                         });
@@ -119,14 +89,8 @@ impl DataStore<'static, Key> {
                                 }
                             }
                         }
-                        let new_tail_offset =
-                            store.read().await.val_log.tail_offset
-                                + total_bytes_read;
-                        let append_res = DataStore::update_tail(
-                            store.clone(),
-                            new_tail_offset,
-                        )
-                        .await;
+                        let new_tail_offset = store.read().await.val_log.tail_offset + total_bytes_read;
+                        let append_res = DataStore::update_tail(store.clone(), new_tail_offset).await;
 
                         match append_res {
                             Ok(v_offset) => {
@@ -136,32 +100,22 @@ impl DataStore<'static, Key> {
                                     v_offset,
                                 ));
 
-                                if let Err(err) =
-                                    DataStore::write_valid_entries_to_vlog(
-                                        store.clone(),
-                                        valid_entries,
-                                        synced_entries.to_owned(),
-                                    )
-                                    .await
+                                if let Err(err) = DataStore::write_valid_entries_to_vlog(
+                                    store.clone(),
+                                    valid_entries,
+                                    synced_entries.to_owned(),
+                                )
+                                .await
                                 {
                                     log::error!("{}", GCError(err.to_string()));
                                     continue 'runner;
                                 }
 
                                 // call fsync on vlog to guarantee persistence to disk
-                                let sync_res = store
-                                    .write()
-                                    .await
-                                    .val_log
-                                    .sync_to_disk()
-                                    .await;
+                                let sync_res = store.write().await.val_log.sync_to_disk().await;
                                 match sync_res {
                                     Ok(_) => {
-                                        store
-                                            .write()
-                                            .await
-                                            .val_log
-                                            .set_tail(new_tail_offset);
+                                        store.write().await.val_log.set_tail(new_tail_offset);
                                         if let Err(err) = DataStore::write_valid_entries_to_store(
                                             store.clone(),
                                             synced_entries.to_owned(),
@@ -174,28 +128,18 @@ impl DataStore<'static, Key> {
                                         let remove_res = store
                                             .write()
                                             .await
-                                            .remove_unsed(
-                                                invalid_entries,
-                                                punch_hole_start_offset,
-                                                total_bytes_read,
-                                            )
+                                            .remove_unsed(invalid_entries, punch_hole_start_offset, total_bytes_read)
                                             .await;
                                         match remove_res {
                                             Err(err) => {
-                                                log::error!(
-                                                    "{}",
-                                                    GCError(err.to_string())
-                                                );
+                                                log::error!("{}", GCError(err.to_string()));
                                                 continue 'runner;
                                             }
                                             _ => {}
                                         }
                                     }
                                     Err(err) => {
-                                        log::error!(
-                                            "{}",
-                                            GCError(err.to_string())
-                                        );
+                                        log::error!("{}", GCError(err.to_string()));
                                         continue 'runner;
                                     }
                                 }
@@ -275,9 +219,7 @@ impl DataStore<'static, Key> {
         store: Arc<RwLock<&mut DataStore<'_, K>>>,
         valid_entries: Arc<RwLock<Vec<(Key, Value, ValOffset)>>>,
     ) -> Result<(), Error> {
-        for (key, value, existing_v_offset) in
-            valid_entries.to_owned().read().await.iter()
-        {
+        for (key, value, existing_v_offset) in valid_entries.to_owned().read().await.iter() {
             let put_res = store
                 .write()
                 .await
@@ -304,21 +246,15 @@ impl DataStore<'static, Key> {
         for (key, value) in valid_entries.to_owned().read().await.iter() {
             let append_res = store
                 .val_log
-                .append(
-                    &key,
-                    &value,
-                    Utc::now().timestamp_millis() as u64,
-                    false,
-                )
+                .append(&key, &value, Utc::now().timestamp_millis() as u64, false)
                 .await;
 
             match append_res {
                 Ok(v_offset) => {
-                    synced_entries.write().await.push((
-                        key.to_owned(),
-                        value.to_owned(),
-                        v_offset,
-                    ));
+                    synced_entries
+                        .write()
+                        .await
+                        .push((key.to_owned(), value.to_owned(), v_offset));
                 }
                 Err(err) => {
                     return Err(err);
@@ -356,12 +292,7 @@ impl DataStore<'static, Key> {
         }
     }
 
-    pub async fn punch_holes(
-        &self,
-        file_path: &str,
-        offset: off_t,
-        length: off_t,
-    ) -> std::result::Result<(), Error> {
+    pub async fn punch_holes(&self, file_path: &str, offset: off_t, length: off_t) -> std::result::Result<(), Error> {
         let file = tokio::fs::File::open(file_path)
             .await
             .map_err(|err| Error::ValueLogFileReadError { error: err })?;
@@ -369,12 +300,7 @@ impl DataStore<'static, Key> {
         let fd = file.as_raw_fd();
 
         unsafe {
-            let result = fallocate(
-                fd,
-                FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
-                offset,
-                length,
-            );
+            let result = fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, offset, length);
             // 0 return means the punch was successful
             if result == 0 {
                 Ok(())
