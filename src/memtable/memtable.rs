@@ -37,7 +37,7 @@ pub struct InMemoryTable<K: Hash + cmp::Ord> {
 }
 
 impl InsertableToBucket for InMemoryTable<Key> {
-    fn get_entries(&self) -> Arc<SkipMap<Key, (ValOffset, InsertionTime, IsDeleted)>> {
+    fn get_entries(&self) -> SkipMapEntries<Key> {
         Arc::clone(&self.entries)
     }
     fn size(&self) -> usize {
@@ -207,7 +207,7 @@ impl InMemoryTable<Key> {
         self.size
     }
 
-    pub fn get_index(self) -> Arc<SkipMap<Vec<u8>, (ValOffset, CreationTime, IsTombStone)>> {
+    pub fn get_index(self) -> SkipMapEntries<Key> {
         self.entries.clone()
     }
 

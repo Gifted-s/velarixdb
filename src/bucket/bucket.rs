@@ -3,7 +3,7 @@ use crate::err::Error;
 use crate::fs::{FileAsync, FileNode};
 use crate::memtable::{InsertionTime, IsDeleted};
 use crate::sst::Table;
-use crate::types::{Bool, Key, ValOffset};
+use crate::types::{Bool, Key, SkipMapEntries, ValOffset};
 use chrono::Utc;
 use crossbeam_skiplist::SkipMap;
 use indexmap::IndexMap;
@@ -14,7 +14,7 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 use Error::*;
 
-static SST_PREFIX: &str = "sstable_";
+static SST_PREFIX: &str = "sstable";
 pub type SSTablesToRemove = Vec<(BucketID, Vec<Table>)>;
 pub type BucketsToCompact = Result<(Vec<Bucket>, SSTablesToRemove), Error>;
 pub type BucketID = Uuid;
@@ -34,10 +34,10 @@ pub struct Bucket {
 }
 
 pub trait InsertableToBucket: Debug + Send + Sync {
-    fn get_entries(&self) -> Arc<SkipMap<Key, (ValOffset, InsertionTime, IsDeleted)>>;
+    fn get_entries(&self) -> SkipMapEntries<Key>;
     fn size(&self) -> usize;
-    fn find_biggest_key(&self) -> Result<Vec<u8>, Error>;
-    fn find_smallest_key(&self) -> Result<Vec<u8>, Error>;
+    fn find_biggest_key(&self) -> Result<Key, Error>;
+    fn find_smallest_key(&self) -> Result<Key, Error>;
 }
 
 impl Bucket {
@@ -71,7 +71,7 @@ impl Bucket {
         })
     }
 
-    async fn cal_average_size(sstables: Vec<Table>) -> Result<usize, Error> {
+    pub async fn cal_average_size(sstables: Vec<Table>) -> Result<usize, Error> {
         if sstables.is_empty() {
             return Ok(0);
         }
@@ -88,7 +88,7 @@ impl Bucket {
         Ok(all_sstable_size / sst.len() as u64 as usize)
     }
 
-    async fn extract_sstables(&self) -> Result<(Vec<Table>, usize), Error> {
+    pub(crate) async fn extract_sstables(&self) -> Result<(Vec<Table>, usize), Error> {
         if self.sstables.read().await.len() < MIN_TRESHOLD {
             return Ok((vec![], 0));
         }
@@ -103,7 +103,7 @@ impl Bucket {
         Ok((extracted_sstables, average))
     }
 
-    async fn sstable_count_exceeds_threshhold(&self) -> bool {
+    pub async fn sstable_count_exceeds_threshhold(&self) -> bool {
         self.sstables.read().await.len() >= MIN_TRESHOLD
     }
 }
@@ -129,10 +129,11 @@ impl BucketMap {
             if self.table_fits_into_bucket(bucket, table.clone()) {
                 let sst_dir = bucket
                     .dir
-                    .join(format!("{}{}", SST_PREFIX, created_at.timestamp_millis()));
+                    .join(format!("{}_{}", SST_PREFIX, created_at.timestamp_millis()));
                 let mut sst = Table::new(sst_dir).await;
                 sst.set_entries(table.get_entries());
                 sst.write_to_file().await?;
+                println!("====={:?}====  ", sst.data_file.path);
                 bucket.sstables.write().await.push(sst.clone());
                 bucket
                     .sstables
@@ -151,7 +152,7 @@ impl BucketMap {
             let mut bucket = Bucket::new(self.dir.clone()).await;
             let sst_dir = bucket
                 .dir
-                .join(format!("{}{}", SST_PREFIX, created_at.timestamp_millis()));
+                .join(format!("{}_{}", SST_PREFIX, created_at.timestamp_millis()));
             let mut sst = Table::new(sst_dir).await;
             sst.set_entries(table.get_entries());
             sst.write_to_file().await?;

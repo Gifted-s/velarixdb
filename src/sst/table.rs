@@ -42,7 +42,7 @@ pub struct Table {
     pub(crate) created_at: CreationTime,
     pub(crate) data_file: DataFile<DataFileNode>,
     pub(crate) index_file: IndexFile<IndexFileNode>,
-    pub(crate) entries: Arc<SkipMap<Key, (ValOffset, InsertionTime, IsDeleted)>>,
+    pub(crate) entries: SkipMapEntries<Key>,
 }
 
 impl InsertableToBucket for Table {
@@ -104,7 +104,7 @@ impl Table {
     pub async fn generate_file_path(dir: PathBuf) -> Result<(PathBuf, PathBuf, DateTime<Utc>), Error> {
         let created_at = Utc::now();
         let _ = FileNode::create_dir_all(dir.to_owned()).await?;
-        let data_file_name = format!("sstable_{}_.db", created_at.timestamp_millis());
+        let data_file_name = format!("data_{}_.db", created_at.timestamp_millis());
         let index_file_name = format!("index_{}_.db", created_at.timestamp_millis());
 
         let data_file_path = dir.join(data_file_name.to_owned());
@@ -162,7 +162,7 @@ impl Table {
         }
 
         // Incase we have some entries in current block, write them to disk
-        if current_block.data.len() > 0 {
+        if current_block.entries.len() > 0 {
             self.write_block(&current_block, &mut table_index).await?;
         }
 
@@ -173,9 +173,10 @@ impl Table {
     async fn write_block(&self, block: &Block, table_index: &mut Index) -> Result<(), Error> {
         // Get the current offset before writing (this will be the offset of the value stored in the sparse index)
         let offset = self.data_file.file.node.size().await;
-        let first_entry = block.get_first_entry();
-        // Store initial entry key and its sstable file offset in sparse index
-        table_index.insert(first_entry.key_prefix, first_entry.key, offset as u32);
+        let last_entry = block.get_last_entry();
+
+        // Store last entry key and its sstable file offset in sparse index
+        table_index.insert(last_entry.key_prefix, last_entry.key, offset as u32);
 
         block.write_to_file(self.data_file.file.node.clone()).await?;
         Ok(())

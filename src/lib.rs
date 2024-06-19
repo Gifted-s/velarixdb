@@ -16,6 +16,7 @@ mod meta;
 mod range;
 mod sst;
 pub mod storage;
+mod tests;
 mod types;
 mod utils;
 mod value_log;

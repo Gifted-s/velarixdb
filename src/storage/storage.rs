@@ -863,7 +863,6 @@ mod tests {
         }
     }
 
-
     // Generate test to find keys after compaction
     #[tokio::test]
     async fn datastore_create_asynchronous() {
