@@ -34,7 +34,7 @@ impl Flusher {
         }
     }
 
-    pub async fn flush(&mut self, table: Arc<RwLock<InMemoryTable<K>>>) -> Result<(), Error> {
+    pub async fn flush(&mut self, table: InActiveMemtable) -> Result<(), Error> {
         let flush_data = self;
         let table_lock = table.read().await;
         if table_lock.entries.is_empty() {
@@ -71,7 +71,7 @@ impl Flusher {
     pub fn flush_handler(
         &mut self,
         table_id: Vec<u8>,
-        table_to_flush: Arc<RwLock<InMemoryTable<K>>>,
+        table_to_flush: InActiveMemtable,
         flush_tx: async_broadcast::Sender<FlushSignal>,
     ) {
         let tx = flush_tx.clone();
