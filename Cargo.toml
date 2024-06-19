@@ -18,6 +18,7 @@ futures = "0.3.30"
 indexmap = "2.2.5"
 libc = "0.2.153"
 log = "0.4.21"
+mockall = "0.12.1"
 nix = "0.28.0"
 num-traits = "0.2.17"
 pretty_env_logger = "0.5.0"
@@ -26,6 +27,7 @@ regex = "1.10.3"
 serde = { version = "1.0.195", features = ["derive"] }
 serde_json = "1.0.111"
 skip-list = "0.1.3"
+tempfile = "3.10.1"
 thiserror = "1.0.57"
 tokio = { version = "1.38.0", features = ["full"] }
 uuid = { version = "0.8", features = ["serde", "v4"] }

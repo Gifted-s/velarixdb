@@ -1,4 +1,3 @@
-
 use rand::{distributions::Alphanumeric, Rng};
 
 #[allow(dead_code)]

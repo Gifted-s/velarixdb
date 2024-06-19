@@ -613,16 +613,14 @@ impl IndexFs for IndexFileNode {
             }
             let offset = u32::from_le_bytes(key_offset_bytes);
             match key.cmp(&searched_key.to_vec()) {
-                std::cmp::Ordering::Less => block_offset = offset as i32,
+                std::cmp::Ordering::Less => {
+                    continue;
+                }
                 std::cmp::Ordering::Equal => {
                     return Ok(Some(offset));
                 }
                 std::cmp::Ordering::Greater => {
-                    // if all index keys are greater than the searched key then return none
-                    if block_offset == -1 {
-                        return Ok(None);
-                    }
-                    return Ok(Some(block_offset as u32));
+                    return Ok(Some(offset));
                 }
             }
         }

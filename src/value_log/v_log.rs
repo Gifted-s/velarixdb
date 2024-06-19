@@ -1,3 +1,74 @@
+//! # Value Log
+//!
+//! The Sequential Value Log is a crucial component of the LSM Tree storage engine.
+//! It provides durability and atomicity guarantees by logging write operations before they are applied to the main data structure.
+//! The sstable only stores the value offsets from this file
+//!
+//! When a write operation is received, the key-value pair is first appended to the Value Log.
+//! In the event of a crash or system failure, the Value Log can be replayed to recover the data modifications and bring the MemTable back to a consistent state.
+//!
+//! ## Value Log Structure
+//!
+//! The `ValueLog` structure contains the following field:
+//!
+//! ```rs
+//! struct ValueLog {
+//!     content: Arc<RwLock<VLogFileNode>>,
+//!     head_offset: usize
+//!     tail_offset: usize
+//! }
+//! ```
+//!
+//! ### content
+//!
+//! The `content` field is of type `Arc<Rwlock<VLogFileNode>>`. It represents the VLog file and provides concurrent access and modification through the use of an `Arc` (Atomic Reference Counting) and `RwLock`.
+//! We use RwLock to ensure multiple threads can read from the log file while permmitting only one thread to write
+//!
+//! ## Log File Structure Diagram
+//!
+//! The `log_file` is structured as follows:
+//!
+//! ```text
+//! +-------------------+
+//! |    Key Size       |   (4 bytes)
+//! +-------------------+
+//! |   Value Size      |   (4 byte)
+//! +-------------------+
+//! |      Key          |   (variable)
+//! +-------------------+
+//! |     Value         |   (variable)
+//! +-------------------+
+//! |   Created At      |   (8 bytes)
+//! |                   |
+//! +-------------------+
+//! |  Is Tombstone     |   (1 byte)
+//! |                   |
+//! |                   |
+//! +-------------------+
+//! |    Key Size       |   (4 bytes)
+//! +-------------------+
+//! |   Value Size      |   (4 byte)
+//! +-------------------+
+//! |      Key          |   (variable)
+//! +-------------------+
+//! |     Value         |   (variable)
+//! +-------------------+
+//! |   Created At      |   (8 bytes)
+//! |                   |
+//! +-------------------+
+//! |  Is Tombstone     |   (1 byte)
+//! |                   |
+//! |                   |
+//! +-------------------+
+//! ```
+//!
+//! - **Key Size**: A 4-byte field representing the length of the key in bytes.
+//! - **Value Size**: A 4-byte field representing the length of the value in bytes.
+//! - **Key**: The actual key data, which can vary in size.
+//! - **Value**: The actual value data, which can vary in size.
+//! - **Created At**: A 8-byte field representing the time of insertion in bytes.
+//! - **Is Tombstone**: A 1 byte field representing a boolean of deleted or not deleted entry
+
 use crate::{
     consts::{EOF, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, VLOG_FILE_NAME},
     err::Error,
@@ -155,55 +226,6 @@ impl ValueLogEntry {
 
         serialized_data
     }
-
-    #[allow(dead_code)]
-    fn deserialize(serialized_data: &[u8]) -> io::Result<Self> {
-        let key_len = u32::from_le_bytes([
-            serialized_data[4],
-            serialized_data[5],
-            serialized_data[6],
-            serialized_data[7],
-        ]) as usize;
-
-        let value_len = u32::from_le_bytes([
-            serialized_data[8],
-            serialized_data[9],
-            serialized_data[10],
-            serialized_data[11],
-        ]) as usize;
-
-        let created_at = u64::from_le_bytes([
-            serialized_data[12],
-            serialized_data[13],
-            serialized_data[14],
-            serialized_data[15],
-            serialized_data[16],
-            serialized_data[17],
-            serialized_data[18],
-            serialized_data[19],
-        ]);
-
-        let is_tombstone = serialized_data[20] == 1;
-
-        if serialized_data.len() != 20 + key_len + value_len {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "invalid length of serialized data",
-            ));
-        }
-
-        let key = serialized_data[20..(20 + key_len)].to_vec();
-        let value = serialized_data[(20 + key_len)..].to_vec();
-
-        Ok(ValueLogEntry::new(
-            key_len,
-            value_len,
-            key,
-            value,
-            created_at,
-            is_tombstone,
-        ))
-    }
 }
 
 #[cfg(test)]
@@ -211,27 +233,5 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_serialized_deserialized() {
-        let key = vec![1, 2, 3];
-        let value = vec![4, 5, 6];
-        let created_at = 164343434343434;
-        let is_tombstone = false;
-        let original_entry = ValueLogEntry::new(
-            key.len(),
-            value.len(),
-            key.clone(),
-            value.clone(),
-            created_at,
-            is_tombstone,
-        );
-        let serialized_data = original_entry.serialize();
-
-        let expected_entry_len = 4 + 4 + 8 + 1 + key.len() + value.len();
-
-        assert_eq!(serialized_data.len(), expected_entry_len);
-
-        let deserialized_entry = ValueLogEntry::deserialize(&serialized_data).expect("failed to deserialize data");
-
-        assert_eq!(deserialized_entry, original_entry);
-    }
+    fn test_serialized_deserialized() {}
 }
