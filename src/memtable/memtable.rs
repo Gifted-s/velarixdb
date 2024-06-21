@@ -38,22 +38,31 @@ pub struct InMemoryTable<K: Hash + cmp::Ord> {
 
 impl InsertableToBucket for InMemoryTable<Key> {
     fn get_entries(&self) -> SkipMapEntries<Key> {
-        Arc::clone(&self.entries)
+        self.entries.clone()
     }
     fn size(&self) -> usize {
         self.size
     }
+    // Find the biggest element in the skip list
     fn find_biggest_key(&self) -> Result<Key, Error> {
-        self.find_biggest_key()
+        let largest_entry = self.entries.iter().next_back();
+        match largest_entry {
+            Some(e) => return Ok(e.key().to_vec()),
+            None => Err(BiggestKeyIndexError),
+        }
     }
 
     fn find_smallest_key(&self) -> Result<Key, Error> {
-        self.find_smallest_key()
+        let smallest_entry = self.entries.iter().next();
+        match smallest_entry {
+            Some(e) => return Ok(e.key().to_vec()),
+            None => Err(LowestKeyIndexError),
+        }
     }
 }
 
 impl Entry<Key, ValOffset> {
-    pub fn new(key: Key, val_offset: ValOffset, created_at: CreationTime, is_tombstone: IsTombStone) -> Self {
+    pub(crate) fn new(key: Key, val_offset: ValOffset, created_at: CreationTime, is_tombstone: IsTombStone) -> Self {
         Entry {
             key,
             val_offset,
@@ -62,7 +71,7 @@ impl Entry<Key, ValOffset> {
         }
     }
 
-    pub fn has_expired(&self, ttl: u64) -> bool {
+    pub(crate) fn has_expired(&self, ttl: u64) -> bool {
         // Current time
         let current_time = Utc::now();
         let current_timestamp = current_time.timestamp_millis() as u64;
@@ -120,13 +129,13 @@ impl InMemoryTable<Key> {
         Ok(())
     }
 
-    pub fn get(&self, key: &Vec<u8>) -> Result<Option<(ValOffset, CreationTime, IsTombStone)>, Error> {
+    pub fn get(&self, key: &Vec<u8>) -> Option<(ValOffset, CreationTime, IsTombStone)> {
         if self.bloom_filter.contains(key) {
             if let Some(entry) = self.entries.get(key) {
-                return Ok(Some(*entry.value())); // returns value offset
+                return Some(*entry.value()); // returns value offset
             }
         }
-        Ok(None)
+        None
     }
 
     pub fn update(&mut self, entry: &Entry<Key, ValOffset>) -> Result<(), Error> {
@@ -171,15 +180,6 @@ impl InMemoryTable<Key> {
         self.size + key_len + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8 >= self.capacity()
     }
 
-    // Find the biggest element in the skip list
-    pub fn find_biggest_key(&self) -> Result<Key, Error> {
-        let largest_entry = self.entries.iter().next_back();
-        match largest_entry {
-            Some(e) => return Ok(e.key().to_vec()),
-            None => Err(BiggestKeyIndexError),
-        }
-    }
-
     // Find the smallest element in the skip list
     pub fn find_smallest_key(&self) -> Result<Key, Error> {
         let smallest_entry = self.entries.iter().next();
@@ -205,10 +205,6 @@ impl InMemoryTable<Key> {
     }
     pub fn size(&mut self) -> usize {
         self.size
-    }
-
-    pub fn get_index(self) -> SkipMapEntries<Key> {
-        self.entries.clone()
     }
 
     pub fn get_bloom_filter(&self) -> BloomFilter {
@@ -237,136 +233,218 @@ impl InMemoryTable<Key> {
     }
 }
 
-// #[cfg(test)]
-// mod tests {
+#[cfg(test)]
+mod tests {
 
-//     use super::*;
+    use std::{sync::Mutex, thread};
 
-//     #[test]
-//     fn test_new() {
-//         let mem_table = InMemoryTable::new();
-//         assert_eq!(mem_table.capacity, 1 * 1024);
-//         assert_eq!(mem_table.size, 0);
-//     }
+    use num_traits::ToBytes;
 
-//     #[test]
-//     fn test_insert() {
-//         let mut mem_table = InMemoryTable::new();
-//         assert_eq!(mem_table.capacity, 1 * 1024);
-//         assert_eq!(mem_table.size, 0);
-//         let k1 = &vec![1, 2, 3, 4];
-//         let k2 = &vec![5, 6, 7, 8];
-//         let k3 = &vec![10, 11, 12, 13];
+    use super::*;
 
-//         let _ = mem_table.insert(k1, 10);
-//         assert_eq!(mem_table.size, k1.len() + 4);
+    #[test]
+    fn test_with_specified_capacity_and_rate() {
+        let buffer_size = 51200;
+        let false_pos_rate = 1e-300;
 
-//         let prev_size = mem_table.size;
-//         let _ = mem_table.insert(k2, 10);
-//         assert_eq!(mem_table.size, prev_size + k2.len() + 4);
+        let mem_table = InMemoryTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
+        assert_eq!(mem_table.entries.len(), 0);
+        assert_eq!(mem_table.bloom_filter.num_elements(), 0);
+        assert_eq!(mem_table.size, 0);
+        assert_eq!(mem_table.size_unit, SizeUnit::Bytes);
+        assert_eq!(mem_table.capacity, mem_table.size_unit.to_bytes(buffer_size));
+        assert_eq!(mem_table.false_positive_rate, false_pos_rate);
+        assert_eq!(mem_table.read_only, false);
+    }
 
-//         let prev_size = mem_table.size;
-//         let _ = mem_table.insert(k3, 10);
-//         assert_eq!(mem_table.size, prev_size + k3.len() + 4);
-//     }
+    #[test]
+    fn test_new() {
+        let mem_table = InMemoryTable::new();
+        let buffer_size = 51200;
+        let false_pos_rate = 1e-300;
+        assert_eq!(mem_table.entries.len(), 0);
+        assert_eq!(mem_table.bloom_filter.num_elements(), 0);
+        assert_eq!(mem_table.size, 0);
+        assert_eq!(mem_table.size_unit, SizeUnit::Bytes);
+        assert_eq!(mem_table.capacity, mem_table.size_unit.to_bytes(buffer_size));
+        assert_eq!(mem_table.false_positive_rate, false_pos_rate);
+        assert_eq!(mem_table.read_only, false);
+    }
 
-//     // this tests what happens when multiple keys are written consurrently
-//     // NOTE: handling thesame keys written at thesame exact time will be handled at the concurrency level(isolation level)
-//     #[test]
-//     fn test_concurrent_write() {
-//         let mem_table = Arc::new(Mutex::new(InMemoryTable::new()));
-//         let mut handlers = Vec::with_capacity(5 as usize);
+    #[test]
+    fn test_insert() {
+        let buffer_size = 51200;
+        let false_pos_rate = 1e-300;
 
-//         for i in 0..5 {
-//             let m = mem_table.clone();
-//             let handler = thread::spawn(move || {
-//                 m.lock().unwrap().insert(&vec![i], i as u32).unwrap();
-//             });
-//             handlers.push(handler)
-//         }
+        let mut mem_table =
+            InMemoryTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
+        assert_eq!(mem_table.entries.len(), 0);
+        assert_eq!(mem_table.bloom_filter.num_elements(), 0);
+        assert_eq!(mem_table.size, 0);
+        let key = vec![1, 2, 3, 4];
+        let val_offset = 400;
+        let is_tombstone = false;
+        let created_at = Utc::now().timestamp_millis() as u64;
+        let entry = Entry::new(key, val_offset, created_at, is_tombstone);
+        let expected_len = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
 
-//         for handler in handlers {
-//             handler.join().unwrap();
-//         }
-//         assert_eq!(mem_table.lock().unwrap().get(&vec![0]).unwrap().unwrap(), 0);
-//         assert_eq!(mem_table.lock().unwrap().get(&vec![1]).unwrap().unwrap(), 1);
-//         assert_eq!(mem_table.lock().unwrap().get(&vec![2]).unwrap().unwrap(), 2);
-//         assert_eq!(mem_table.lock().unwrap().get(&vec![3]).unwrap().unwrap(), 3);
-//         assert_eq!(mem_table.lock().unwrap().get(&vec![4]).unwrap().unwrap(), 4);
-//     }
+        let _ = mem_table.insert(&entry);
+        assert_eq!(mem_table.size, expected_len);
 
-//     //test get
-//     #[test]
-//     fn test_get() {
-//         let mut mem_table = InMemoryTable::new();
-//         let k1 = &vec![1, 2, 3, 4];
-//         let k2 = &vec![5, 6, 7, 8];
-//         let k3 = &vec![10, 11, 12, 13];
-//         let k4 = &vec![19, 11, 12, 13];
-//         let _ = mem_table.insert(k1, 10);
-//         let _ = mem_table.insert(k2, 11);
-//         let _ = mem_table.insert(k3, 12);
+        let _ = mem_table.insert(&entry);
+        assert_eq!(mem_table.size, expected_len + expected_len);
 
-//         assert_eq!(*mem_table.index.get(k1).unwrap().value(), 10);
-//         assert_eq!(*mem_table.index.get(k2).unwrap().value(), 11);
-//         assert_eq!(*mem_table.index.get(k3).unwrap().value(), 12);
+        let _ = mem_table.insert(&entry);
+        assert_eq!(mem_table.size, expected_len + expected_len + expected_len);
+    }
 
-//         assert_eq!(mem_table.bloom_filter.contains(k4), false);
-//     }
-//     // test latest will be returned
-//     #[test]
-//     fn test_return_latest_value() {
-//         let mut mem_table = InMemoryTable::new();
-//         let k = &vec![1, 2, 3, 4];
+    #[test]
+    fn test_get() {
+        let buffer_size = 51200;
+        let false_pos_rate = 1e-300;
+        let mut mem_table =
+            InMemoryTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
+        assert_eq!(mem_table.size, 0);
+        let key = vec![1, 2, 3, 4];
+        let val_offset = 400;
+        let is_tombstone = false;
+        let created_at = Utc::now().timestamp_millis() as u64;
+        let entry = Entry::new(key.to_owned(), val_offset, created_at, is_tombstone);
+        let expected_len = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
 
-//         let _ = mem_table.insert(k, 10);
-//         let _ = mem_table.insert(k, 11);
-//         let _ = mem_table.insert(k, 12);
+        let _ = mem_table.insert(&entry);
+        assert_eq!(mem_table.size, expected_len);
+        // get key
+        let res = mem_table.get(&key);
+        assert!(res.is_some());
+        // get key the was not inserted
+        let invalid_key = vec![8, 2, 3, 4];
+        let res = mem_table.get(&invalid_key);
+        assert!(res.is_none());
+    }
 
-//         //expect latest value to be returned
-//         assert_eq!(mem_table.get(k).unwrap().unwrap(), 12);
-//     }
+    // this tests what happens when multiple keys are written consurrently
+    // NOTE: handling thesame keys written at thesame exact time will be handled at the concurrency level(isolation level)
+    #[test]
+    fn test_concurrent_write() {
+        let buffer_size = 51200;
+        let false_pos_rate = 1e-300;
+        let mem_table = InMemoryTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
+        let mem_table = Arc::new(Mutex::new(mem_table));
+        let mut handlers = Vec::with_capacity(5 as usize);
+        let keys = vec![
+            vec![1, 2, 3, 4],
+            vec![2, 2, 3, 4],
+            vec![3, 2, 3, 4],
+            vec![4, 2, 3, 4],
+            vec![5, 2, 3, 4],
+        ];
+        let is_tombstone = false;
+        let created_at = Utc::now().timestamp_millis() as u64;
+        for i in 0..5 {
+            let keys_clone = keys.clone();
+            let m = mem_table.clone();
+            let handler = thread::spawn(move || {
+                let entry = Entry::new(keys_clone[i].to_owned(), i, created_at, is_tombstone);
+                m.lock().unwrap().insert(&entry).unwrap();
+            });
+            handlers.push(handler)
+        }
 
-//     //test update
-//     #[test]
-//     fn test_update() {
-//         let mut mem_table = InMemoryTable::new();
-//         let k = &vec![1, 2, 3, 4];
+        for handler in handlers {
+            handler.join().unwrap();
+        }
+        assert_eq!(
+            mem_table.lock().unwrap().get(&keys[0]).unwrap(),
+            (0, created_at, is_tombstone)
+        );
+        assert_eq!(
+            mem_table.lock().unwrap().get(&keys[1]).unwrap(),
+            (1, created_at, is_tombstone)
+        );
+        assert_eq!(
+            mem_table.lock().unwrap().get(&keys[2]).unwrap(),
+            (2, created_at, is_tombstone)
+        );
+        assert_eq!(
+            mem_table.lock().unwrap().get(&keys[3]).unwrap(),
+            (3, created_at, is_tombstone)
+        );
+        assert_eq!(
+            mem_table.lock().unwrap().get(&keys[4]).unwrap(),
+            (4, created_at, is_tombstone)
+        );
+    }
 
-//         let _ = mem_table.insert(k, 10);
-//         let _ = mem_table.update(k, 11);
-//         //expect latest value to be returned
-//         assert_eq!(mem_table.get(k).unwrap().unwrap(), 11);
+    #[test]
+    fn test_update() {
+        let buffer_size = 51200;
+        let false_pos_rate = 1e-300;
 
-//         let unknown_key = &vec![0, 0, 0, 0];
-//         assert!(mem_table.update(unknown_key, 10).is_err());
-//     }
+        let mut mem_table =
+            InMemoryTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
+        assert_eq!(mem_table.entries.len(), 0);
+        assert_eq!(mem_table.bloom_filter.num_elements(), 0);
+        assert_eq!(mem_table.size, 0);
+        let key = vec![1, 2, 3, 4];
+        let val_offset = 400;
+        let is_tombstone = false;
+        let created_at = Utc::now().timestamp_millis() as u64;
+        let mut entry = Entry::new(key, val_offset, created_at, is_tombstone);
 
-//     #[test]
-//     fn test_upsert() {
-//         let mut mem_table = InMemoryTable::new();
-//         let k = &vec![1, 2, 3, 4];
+        let _ = mem_table.insert(&entry);
 
-//         let _ = mem_table.insert(k, 10);
-//         let _ = mem_table.upsert(k, 11);
-//         //expect latest value to be returned
-//         assert_eq!(mem_table.get(k).unwrap().unwrap(), 11);
+        let e = mem_table.get(&entry.key);
+        assert!(e.is_some());
+        assert_eq!(e.unwrap().0, val_offset);
 
-//         let new_key = &vec![5, 6, 7, 8];
-//         mem_table.upsert(new_key, 14).unwrap();
-//         //expect new key to be inserted if key does not already exist
-//         assert_eq!(mem_table.get(new_key).unwrap().unwrap(), 14);
-//     }
+        entry.val_offset = 300;
+        let _ = mem_table.update(&entry);
 
-//     #[test]
-//     fn test_delete() {
-//         let mut mem_table = InMemoryTable::new();
-//         let k = &vec![1, 2, 3, 4];
+        let e = mem_table.get(&entry.key);
+        assert_eq!(e.unwrap().0, 300);
 
-//         let _ = mem_table.insert(k, 10);
-//         //expect latest value to be returned
-//         assert_eq!(mem_table.get(k).unwrap().unwrap(), 10);
-//         let _ = mem_table.delete(k);
-//         assert_eq!(mem_table.get(k).unwrap().unwrap(), THUMB_STONE);
-//     }
-// }
+        entry.is_tombstone = true;
+        let _ = mem_table.update(&entry);
+
+        let e = mem_table.get(&entry.key);
+        assert_eq!(e.unwrap().2, true);
+
+        entry.key = vec![2, 2, 3, 4];
+        let e = mem_table.update(&entry);
+        assert!(e.is_err());
+        // assert_eq!(e.try_into(), Err(KeyNotFoundInMemTable))
+    }
+
+    #[test]
+    fn test_delete() {
+        let buffer_size = 51200;
+        let false_pos_rate = 1e-300;
+
+        let mut mem_table =
+            InMemoryTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
+        assert_eq!(mem_table.entries.len(), 0);
+        assert_eq!(mem_table.bloom_filter.num_elements(), 0);
+        assert_eq!(mem_table.size, 0);
+        let key = vec![1, 2, 3, 4];
+        let val_offset = 400;
+        let is_tombstone = false;
+        let created_at = Utc::now().timestamp_millis() as u64;
+        let mut entry = Entry::new(key, val_offset, created_at, is_tombstone);
+
+        let _ = mem_table.insert(&entry);
+
+        let e = mem_table.get(&entry.key);
+        assert!(e.is_some());
+        assert_eq!(e.unwrap().0, val_offset);
+        entry.is_tombstone = true;
+        let _ = mem_table.delete(&entry);
+
+        let e = mem_table.get(&entry.key);
+        assert_eq!(e.unwrap().2, true);
+
+        entry.key = vec![2, 2, 3, 4];
+        let e = mem_table.delete(&entry);
+        assert!(e.is_err());
+    }
+}
