@@ -12,8 +12,8 @@ use crate::{
     err::Error::{self, *},
     index::RangeOffset,
     load_buffer,
-    memtable::{Entry, IsDeleted},
-    types::{CreationTime, Key, NoBytesRead, SkipMapEntries, ValOffset},
+    memtable::Entry,
+    types::{CreationTime, IsTombStone, Key, NoBytesRead, SkipMapEntries, ValOffset},
     value_log::ValueLogEntry,
 };
 
@@ -71,7 +71,7 @@ pub trait DataFs: Send + Sync + Debug + Clone {
         &self,
         offset: u32,
         searched_key: &[u8],
-    ) -> Result<Option<(ValOffset, CreationTime, IsDeleted)>, Error>;
+    ) -> Result<Option<(ValOffset, CreationTime, IsTombStone)>, Error>;
 
     async fn load_entries_within_range(&self, range_offset: RangeOffset) -> Result<Vec<Entry<Vec<u8>, usize>>, Error>;
 }
@@ -271,7 +271,7 @@ impl DataFs for DataFileNode {
         &self,
         offset: u32,
         searched_key: &[u8],
-    ) -> Result<Option<(ValOffset, CreationTime, IsDeleted)>, Error> {
+    ) -> Result<Option<(ValOffset, CreationTime, IsTombStone)>, Error> {
         let path = &self.node.file_path;
         let mut file = self.node.file.write().await;
         file.seek(std::io::SeekFrom::Start(offset.into()))

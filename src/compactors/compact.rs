@@ -50,6 +50,8 @@ pub struct Config {
 
     /// compaction strategy
     pub strategy: Strategy,
+
+    pub filter_false_positive: f64,
 }
 impl Config {
     pub fn new(
@@ -60,6 +62,7 @@ impl Config {
         background_interval: Duration,
         tombstone_compaction_interval: Duration,
         strategy: Strategy,
+        filter_false_positive: f64,
     ) -> Self {
         Config {
             use_ttl,
@@ -69,6 +72,7 @@ impl Config {
             background_interval,
             tombstone_compaction_interval,
             strategy,
+            filter_false_positive,
         }
     }
 }
@@ -160,6 +164,7 @@ impl Compactor {
         tombstone_compaction_interval: Duration,
         strategy: Strategy,
         reason: CompactionReason,
+        filter_false_positive: f64,
     ) -> Self {
         Self {
             is_active: Arc::new(Mutex::new(CompState::Sleep)),
@@ -172,22 +177,26 @@ impl Compactor {
                 background_interval,
                 tombstone_compaction_interval,
                 strategy,
+                filter_false_positive,
             ),
         }
     }
     /// FUTURE: Maybe trigger tombstone compaction on interval in addtion to normal periodic sstable compaction
-    pub fn tombstone_compaction_condition_background_checker(&self, rcx: Arc<RwLock<Receiver<BucketMap>>>) {
-        let receiver = Arc::clone(&rcx);
+    pub fn tombstone_compaction_condition_background_checker(
+        &self,
+        bucket_map: BucketMapHandle,
+        filter: BloomFilterHandle,
+        key_range: KeyRangeHandle,
+    ) {
         let cfg = self.config.to_owned();
         tokio::spawn(async move {
             loop {
-                let _ = receiver.write().await.try_recv();
                 Compactor::sleep_compaction(cfg.tombstone_compaction_interval).await;
             }
         });
     }
 
-    pub fn start_flush_listner(
+    pub fn start_flush_listener(
         &self,
         flush_rx: FlushReceiver,
         bucket_map: BucketMapHandle,
@@ -207,10 +216,10 @@ impl Compactor {
                         drop(state);
                         match err {
                             async_broadcast::TryRecvError::Overflowed(_) => {
-                                log::error!("{}", FlushSignalOverflowError)
+                                log::error!("{}", FlushSignalChannelOverflowError)
                             }
                             async_broadcast::TryRecvError::Closed => {
-                                log::error!("{}", FlushSignalClosedError)
+                                log::error!("{}", FlushSignalChannelClosedError)
                             }
                             async_broadcast::TryRecvError::Empty => {}
                         }
@@ -229,6 +238,7 @@ impl Compactor {
                 }
             }
         });
+        log::info!("Compactor flush listener active");
     }
 
     pub fn start_periodic_background_compaction(

@@ -29,59 +29,14 @@ pub async fn generate_ssts(number: u32) -> Vec<Table> {
         SSTContructor::new(
         PathBuf::from("src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830953696"),
         PathBuf::from(
-            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830953696/data_1718830953697_.db",
+            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830958016/data_1718830958016_.db",
         ),
         PathBuf::from(
-            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830953696/index_1718830953697_.db",
+            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830958016/index_1718830958016_.db",
         ),
     ),
     SSTContructor::new(
         PathBuf::from("src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830954572"),
-        PathBuf::from(
-            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830954572/data_1718830954572_.db",
-        ),
-        PathBuf::from(
-            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830954572/index_1718830954572_.db",
-        ),
-    ),
-    SSTContructor::new(
-        PathBuf::from("src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830955463"),
-        PathBuf::from(
-            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830955463/data_1718830955463_.db",
-        ),
-        PathBuf::from(
-            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830955463/index_1718830955463_.db",
-        ),
-    ),
-    SSTContructor::new(
-        PathBuf::from("src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830956313"),
-        PathBuf::from(
-            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830956313/data_1718830956313_.db",
-        ),
-        PathBuf::from(
-            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830956313/index_1718830956313_.db",
-        ),
-    ),
-    SSTContructor::new(
-        PathBuf::from("src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830957169"),
-        PathBuf::from(
-            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830957169/data_1718830957169_.db",
-        ),
-        PathBuf::from(
-            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830957169/index_1718830957169_.db",
-        ),
-    ),
-    SSTContructor::new(
-        PathBuf::from("src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830958810"),
-        PathBuf::from(
-            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830958810/data_1718830958810_.db",
-        ),
-        PathBuf::from(
-            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830958810/index_1718830958810_.db",
-        ),
-    ),
-    SSTContructor::new(
-        PathBuf::from("src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830958858"),
         PathBuf::from(
             "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830958858/data_1718830958858_.db",
         ),
@@ -90,12 +45,57 @@ pub async fn generate_ssts(number: u32) -> Vec<Table> {
         ),
     ),
     SSTContructor::new(
-        PathBuf::from("src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830958906"),
+        PathBuf::from("src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830955463"),
         PathBuf::from(
             "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830958906/data_1718830958906_.db",
         ),
         PathBuf::from(
             "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830958906/index_1718830958906_.db",
+        ),
+    ),
+    SSTContructor::new(
+        PathBuf::from("src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830956313"),
+        PathBuf::from(
+            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830958953/data_1718830958953_.db",
+        ),
+        PathBuf::from(
+            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830958953/index_1718830958953_.db",
+        ),
+    ),
+    SSTContructor::new(
+        PathBuf::from("src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830957169"),
+        PathBuf::from(
+            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830959000/data_1718830959000_.db",
+        ),
+        PathBuf::from(
+            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830959000/index_1718830959000_.db",
+        ),
+    ),
+    SSTContructor::new(
+        PathBuf::from("src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830958810"),
+        PathBuf::from(
+            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830959049/data_1718830959049_.db",
+        ),
+        PathBuf::from(
+            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830959049/index_1718830959049_.db",
+        ),
+    ),
+    SSTContructor::new(
+        PathBuf::from("src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830958858"),
+        PathBuf::from(
+            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830959097/data_1718830959097_.db",
+        ),
+        PathBuf::from(
+            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830959097/index_1718830959097_.db",
+        ),
+    ),
+    SSTContructor::new(
+        PathBuf::from("src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830958906"),
+        PathBuf::from(
+            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830959145/data_1718830959145_.db",
+        ),
+        PathBuf::from(
+            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830959145/index_1718830959145_.db",
         ),
     ),
     ];

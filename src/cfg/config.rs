@@ -2,7 +2,7 @@ use crate::{
     compactors,
     consts::{
         DEFAULT_ALLOW_PREFETCH, DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI, DEFAULT_COMPACTION_INTERVAL_MILLI,
-        DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MAJOR_GARBAGE_COLLECTION_INTERVAL_MILLI, DEFAULT_MAX_WRITE_BUFFER_NUMBER,
+        DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MAX_WRITE_BUFFER_NUMBER, DEFAULT_ONLINE_GARBAGE_COLLECTION_INTERVAL_MILLI,
         DEFAULT_PREFETCH_SIZE, DEFAULT_TOMBSTONE_COMPACTION_INTERVAL_MILLI, DEFAULT_TOMBSTONE_TTL, DEFUALT_ENABLE_TTL,
         ENTRY_TTL, WRITE_BUFFER_SIZE,
     },
@@ -18,10 +18,10 @@ pub struct Config {
     /// Should we delete entries that have exceeded their time to live (TTL)?
     pub enable_ttl: bool,
 
-    /// Time for an entry to exist before it is removed automatically (in milliseconds).
+    /// Time for an entry to exist before it is removed automatically (in days).
     pub entry_ttl_millis: u64,
 
-    /// Time for a tombstone to exist before it is removed automatically (in milliseconds).
+    /// Time for a tombstone to exist before it is removed automatically (in days).
     pub tombstone_ttl: u64,
 
     /// Should we prefetch upcoming values in case of range queries?
@@ -30,20 +30,25 @@ pub struct Config {
     /// How many keys should we prefetch in case of range queries?
     pub prefetch_size: usize,
 
-    /// The size of each memtable
+    /// The size of each memtable in bytes
     pub write_buffer_size: usize,
 
     /// How many memtables should we have
     pub max_buffer_write_number: usize,
 
-    pub major_garbage_collection_interval: u64,
+    /// Interval at which online garbage collection is triggered (in hours)
+    pub online_garbage_collection_interval: u64,
 
+    /// Interval at which compaction checks if a flush has been made (in seconds)
     pub compactor_flush_listener_interval: u64,
 
+    /// Interval at which background compaction is triggered (in seconds)
     pub background_compaction_interval: u64,
 
+    /// Interval at which tombstone compaction is triggered (in days)
     pub tombstone_compaction_interval: u64,
 
+    /// Which compaction strategy is used STCS, LCS, ICS, TCS or UCS
     pub compaction_strategy: compactors::Strategy,
 }
 impl Config {
@@ -55,7 +60,7 @@ impl Config {
         prefetch_size: usize,
         write_buffer_size: usize,
         max_buffer_write_number: usize,
-        major_garbage_collection_interval: u64,
+        online_garbage_collection_interval: u64,
         compactor_flush_listener_interval: u64,
         background_compaction_interval: u64,
         tombstone_ttl: u64,
@@ -70,7 +75,7 @@ impl Config {
             prefetch_size,
             max_buffer_write_number,
             write_buffer_size,
-            major_garbage_collection_interval,
+            online_garbage_collection_interval,
             compactor_flush_listener_interval,
             background_compaction_interval,
             tombstone_ttl,
@@ -90,7 +95,7 @@ impl Default for Config {
             prefetch_size: DEFAULT_PREFETCH_SIZE,
             max_buffer_write_number: DEFAULT_MAX_WRITE_BUFFER_NUMBER,
             write_buffer_size: WRITE_BUFFER_SIZE,
-            major_garbage_collection_interval: DEFAULT_MAJOR_GARBAGE_COLLECTION_INTERVAL_MILLI,
+            online_garbage_collection_interval: DEFAULT_ONLINE_GARBAGE_COLLECTION_INTERVAL_MILLI,
             compactor_flush_listener_interval: DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI,
             background_compaction_interval: DEFAULT_COMPACTION_INTERVAL_MILLI,
             tombstone_ttl: DEFAULT_TOMBSTONE_TTL,

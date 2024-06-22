@@ -62,7 +62,6 @@
 // making it unsuitable for long-term timekeeping applications. For those scenarios, 64-bit(8 byte) integers are typically used.
 
 use err::Error::*;
-use tokio::io::{self};
 
 use crate::{
     consts::{SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8},
@@ -149,6 +148,7 @@ impl Block {
         self.size + entry_size > BLOCK_SIZE
     }
 
+    #[cfg(test)]
     /// Get entry count
     pub fn get_entry_count(&self) -> usize {
         self.entry_count
@@ -171,9 +171,7 @@ impl Block {
 
         entry_vec.push(entry.is_tombstone as u8);
         if entry_len != entry_vec.len() {
-            return Err(SSTableWriteError {
-                error: io::Error::new(io::ErrorKind::InvalidInput, "Invalid Input"),
-            });
+            return Err(SerializationError("Invalid input"));
         }
 
         Ok(entry_vec)

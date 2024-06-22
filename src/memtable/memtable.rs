@@ -156,10 +156,10 @@ impl MemTable<Key> {
         self.insert(&entry)
     }
 
-    pub fn generate_table_id() -> &'static [u8] {
+    pub fn generate_table_id() -> Vec<u8> {
         let rng = rand::thread_rng();
         let id: String = rng.sample_iter(&Alphanumeric).take(10).map(char::from).collect();
-        id.as_bytes()
+        id.as_bytes().to_vec()
     }
 
     pub fn delete(&mut self, entry: &Entry<Key, ValOffset>) -> Result<(), Error> {
@@ -266,8 +266,7 @@ mod tests {
         let buffer_size = 51200;
         let false_pos_rate = 1e-300;
 
-        let mut mem_table =
-            MemTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
+        let mut mem_table = MemTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
         assert_eq!(mem_table.entries.len(), 0);
         assert_eq!(mem_table.bloom_filter.num_elements(), 0);
         assert_eq!(mem_table.size, 0);
@@ -292,8 +291,7 @@ mod tests {
     fn test_get() {
         let buffer_size = 51200;
         let false_pos_rate = 1e-300;
-        let mut mem_table =
-            MemTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
+        let mut mem_table = MemTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
         assert_eq!(mem_table.size, 0);
         let key = vec![1, 2, 3, 4];
         let val_offset = 400;
@@ -371,8 +369,7 @@ mod tests {
         let buffer_size = 51200;
         let false_pos_rate = 1e-300;
 
-        let mut mem_table =
-            MemTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
+        let mut mem_table = MemTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
         assert_eq!(mem_table.entries.len(), 0);
         assert_eq!(mem_table.bloom_filter.num_elements(), 0);
         assert_eq!(mem_table.size, 0);
@@ -411,8 +408,7 @@ mod tests {
         let buffer_size = 51200;
         let false_pos_rate = 1e-300;
 
-        let mut mem_table =
-            MemTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
+        let mut mem_table = MemTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
         assert_eq!(mem_table.entries.len(), 0);
         assert_eq!(mem_table.bloom_filter.num_elements(), 0);
         assert_eq!(mem_table.size, 0);
@@ -473,14 +469,12 @@ mod tests {
 
         let start_invalid = &vec![10, 20, 30, 40];
         let end_invalid = &vec![0, 0, 0, 0];
-        let within_range =
-            MemTable::is_entry_within_range(&map.get(&keys[0]).unwrap(), &start_invalid, &end_invalid);
+        let within_range = MemTable::is_entry_within_range(&map.get(&keys[0]).unwrap(), &start_invalid, &end_invalid);
         assert_eq!(within_range, false);
 
         let start_valid = &keys[0];
         let end_invalid = &vec![0, 0, 0, 0];
-        let within_range =
-            MemTable::is_entry_within_range(&map.get(&keys[0]).unwrap(), &start_valid, &end_invalid);
+        let within_range = MemTable::is_entry_within_range(&map.get(&keys[0]).unwrap(), &start_valid, &end_invalid);
         assert_eq!(within_range, true);
     }
 
@@ -497,8 +491,7 @@ mod tests {
         let false_pos_rate = 1e-300;
         let is_tombstone = false;
         let created_at = Utc::now().timestamp_millis() as u64;
-        let mut mem_table =
-            MemTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
+        let mut mem_table = MemTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
         for i in 0..5 {
             let entry = Entry::new(keys[i].to_owned(), i, created_at, is_tombstone);
             let _ = mem_table.insert(&entry);
@@ -522,8 +515,7 @@ mod tests {
         let false_pos_rate = 1e-300;
         let is_tombstone = false;
         let created_at = Utc::now().timestamp_millis() as u64;
-        let mut mem_table =
-            MemTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
+        let mut mem_table = MemTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
         for i in 0..5 {
             let entry = Entry::new(keys[i].to_owned(), i, created_at, is_tombstone);
             let _ = mem_table.insert(&entry);
@@ -538,8 +530,7 @@ mod tests {
     fn test_is_full() {
         let buffer_size = 51200;
         let false_pos_rate = 1e-300;
-        let mut mem_table =
-            MemTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
+        let mut mem_table = MemTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
         let key = vec![1, 2, 3, 4];
         let is_full = mem_table
             .to_owned()
