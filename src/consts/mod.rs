@@ -1,7 +1,7 @@
 use crate::storage::SizeUnit;
 
 pub const GC_CHUNK_SIZE: usize = SizeUnit::Kilobytes.to_bytes(1);
-
+pub const KB: usize = 1024;
 pub const WRITE_BUFFER_SIZE: usize = SizeUnit::Kilobytes.to_bytes(50);
 
 pub const DEFAULT_MAX_WRITE_BUFFER_NUMBER: usize = 2;
@@ -18,7 +18,7 @@ pub const VLOG_FILE_NAME: &str = "val_log.bin";
 
 pub const META_DIRECTORY_NAME: &str = "meta";
 
-pub const TOMB_STONE_MARKER: usize = 0;
+pub const TOMB_STONE_MARKER: &str = "";
 
 // This is a minimum time that must pass since the last compaction attempt for a specific data file (SSTable).
 // This prevents continuous re-compactions of the same file.
@@ -31,10 +31,8 @@ pub const DEFAULT_COMPACTION_INTERVAL_MILLI: u64 = 3600000;
 //pub const DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI: u64 = 60000;
 pub const DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI: u64 = 1000 * 20;
 
-//pub const DEFAULT_MAJOR_GARBAGE_COLLECTION_INTERVAL_MILLI: 10 hours
-pub const DEFAULT_MAJOR_GARBAGE_COLLECTION_INTERVAL_MILLI: u64 = 36000000;
-
-pub const DEFAULT_FLUSH_DATA_CHANNEL_SIZE: usize = 10;
+//pub const DEFAULT_ONLINE_GARBAGE_COLLECTION_INTERVAL_MILLI: 10 hours
+pub const DEFAULT_ONLINE_GARBAGE_COLLECTION_INTERVAL_MILLI: u64 = 36000000;
 
 /// Only the compactor listens to flush events for now
 /// This should be greater than or equal to the writter buffer size since
@@ -56,7 +54,7 @@ pub const BUCKET_LOW: f64 = 0.5;
 
 pub const BUCKET_HIGH: f64 = 1.5;
 
-pub const MIN_SSTABLE_SIZE: usize = 32;
+pub const MIN_SSTABLE_SIZE: usize = SizeUnit::Kilobytes.to_bytes(4);
 
 pub const MIN_TRESHOLD: usize = 4;
 

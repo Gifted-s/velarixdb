@@ -34,7 +34,7 @@ impl DataStore<'static, Key> {
 
         tokio::spawn(async move {
             'runner: loop {
-                sleep_gc_task(store.read().await.config.major_garbage_collection_interval).await;
+                sleep_gc_task(store.read().await.config.online_garbage_collection_interval).await;
                 let store_clone = store.clone();
                 let invalid_entries = Arc::new(RwLock::new(Vec::new()));
                 let valid_entries = Arc::new(RwLock::new(Vec::new()));
@@ -59,7 +59,7 @@ impl DataStore<'static, Key> {
                                 match most_recent_value {
                                     Ok((value, creation_time)) => {
                                         if entry.created_at != creation_time
-                                            || value == TOMB_STONE_MARKER.to_le_bytes().to_vec()
+                                            || value == TOMB_STONE_MARKER.as_bytes().to_vec()
                                         {
                                             invalid_entries_clone.write().await.push(entry);
                                         } else {
@@ -293,7 +293,7 @@ impl DataStore<'static, Key> {
     pub async fn punch_holes(&self, file_path: &str, offset: off_t, length: off_t) -> std::result::Result<(), Error> {
         let file = tokio::fs::File::open(file_path)
             .await
-            .map_err(|err| Error::ValueLogFileReadError { error: err })?;
+            .map_err(|err| Error::FileSyncError { error: err })?;
 
         let fd = file.as_raw_fd();
 

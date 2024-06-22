@@ -33,15 +33,9 @@ impl KeyRange {
         }
     }
 
-    pub fn set(
-        &mut self,
-        sst_path: PathBuf,
-        smallest_key: SmallestKey,
-        biggest_key: LargestKey,
-        full_sst_path: Table,
-    ) -> bool {
+    pub fn set(&mut self, sst_path: PathBuf, smallest_key: SmallestKey, biggest_key: LargestKey, table: Table) -> bool {
         self.key_ranges
-            .insert(sst_path, Range::new(smallest_key, biggest_key, full_sst_path))
+            .insert(sst_path, Range::new(smallest_key, biggest_key, table))
             .is_some()
     }
 
@@ -50,14 +44,14 @@ impl KeyRange {
     }
 
     // Returns SSTables whose last key is greater than the supplied key parameter
-    pub fn filter_sstables_by_biggest_key(&self, key: &Key) -> Vec<&PathBuf> {
+    pub fn filter_sstables_by_biggest_key(&self, key: &Key) -> Vec<Table> {
         self.key_ranges
             .iter()
             .filter(|(_, range)| {
                 range.biggest_key.as_slice().cmp(key) == Ordering::Greater
                     || range.biggest_key.as_slice().cmp(key) == Ordering::Equal
             })
-            .map(|(path, _)| return path)
+            .map(|(_, range)| return range.sst.to_owned())
             .collect()
     }
 

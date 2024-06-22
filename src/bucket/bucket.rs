@@ -1,11 +1,9 @@
 use crate::consts::{BUCKET_DIRECTORY_PREFIX, BUCKET_HIGH, BUCKET_LOW, MAX_TRESHOLD, MIN_SSTABLE_SIZE, MIN_TRESHOLD};
 use crate::err::Error;
 use crate::fs::{FileAsync, FileNode};
-use crate::memtable::{InsertionTime, IsDeleted};
 use crate::sst::Table;
-use crate::types::{Bool, Key, SkipMapEntries, ValOffset};
+use crate::types::{Bool, Key, SkipMapEntries};
 use chrono::Utc;
-use crossbeam_skiplist::SkipMap;
 use indexmap::IndexMap;
 use std::fmt::Debug;
 use std::{path::PathBuf, sync::Arc};
@@ -88,6 +86,12 @@ impl Bucket {
         Ok(all_sstable_size / sst.len() as u64 as usize)
     }
 
+    pub fn fits_into_bucket<T: InsertableToBucket + ?Sized>(&mut self, table: Arc<Box<T>>) -> Bool {
+        (self.avarage_size as f64 * BUCKET_LOW < table.size() as f64)
+            && (table.size() < (self.avarage_size as f64 * BUCKET_HIGH) as usize)
+            || (table.size() < MIN_SSTABLE_SIZE && self.avarage_size < MIN_SSTABLE_SIZE)
+    }
+
     pub(crate) async fn extract_sstables(&self) -> Result<(Vec<Table>, usize), Error> {
         if self.sstables.read().await.len() < MIN_TRESHOLD {
             return Ok((vec![], 0));
@@ -126,14 +130,13 @@ impl BucketMap {
         let added_to_bucket = false;
         let created_at = Utc::now();
         for (_, bucket) in &mut self.buckets.clone() {
-            if self.table_fits_into_bucket(bucket, table.clone()) {
+            if bucket.fits_into_bucket(table.clone()) {
                 let sst_dir = bucket
                     .dir
                     .join(format!("{}_{}", SST_PREFIX, created_at.timestamp_millis()));
                 let mut sst = Table::new(sst_dir).await;
                 sst.set_entries(table.get_entries());
                 sst.write_to_file().await?;
-                println!("====={:?}====  ", sst.data_file.path);
                 bucket.sstables.write().await.push(sst.clone());
                 bucket
                     .sstables
@@ -161,21 +164,12 @@ impl BucketMap {
                 .await
                 .map_err(|err| GetFileMetaDataError(err))?
                 .len() as usize;
+
             self.buckets.insert(bucket.id, bucket.clone());
             return Ok(sst);
         }
 
-        Err(FailedToInsertSSTableToBucketError)
-    }
-
-    pub fn table_fits_into_bucket<T: InsertableToBucket + ?Sized>(
-        &mut self,
-        bucket: &mut Bucket,
-        table: Arc<Box<T>>,
-    ) -> Bool {
-        (bucket.avarage_size as f64 * BUCKET_LOW < table.size() as f64)
-            && (table.size() < (bucket.avarage_size as f64 * BUCKET_HIGH) as usize)
-            || (table.size() < MIN_SSTABLE_SIZE && bucket.avarage_size < MIN_SSTABLE_SIZE)
+        Err(ConditionsToInsertToBucketNotMetError)
     }
 
     pub async fn extract_imbalanced_buckets(&self) -> BucketsToCompact {

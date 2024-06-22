@@ -63,34 +63,22 @@ impl BloomFilter {
         self.sst = Some(sst);
     }
 
-    pub fn bloom_filters_within_key_range<'a>(
-        bloom_filters: &'a Vec<BloomFilter>,
-        paths: Vec<&'a PathBuf>,
-    ) -> Vec<&'a BloomFilter> {
-        let mut filtered_bfs = Vec::new();
-        paths.into_iter().for_each(|p| {
-            bloom_filters.iter().for_each(|b| {
-                if b.get_sst().data_file.path.as_path() == p.as_path() {
-                    filtered_bfs.push(b)
+    pub fn ssts_within_key_range<'a, T: Hash>(
+        key: &T,
+        filters: &'a Vec<BloomFilter>,
+        tables: &'a Vec<Table>,
+    ) -> Vec<Table> {
+        let mut ssts: Vec<Table> = Vec::new();
+        filters.iter().for_each(|filter| {
+            tables.iter().for_each(|p| {
+                if filter.get_sst().data_file.path.as_path() == p.get_data_file_path() {
+                    if filter.contains(key) {
+                        ssts.push(filter.get_sst().to_owned());
+                    }
                 }
             })
         });
-        filtered_bfs
-    }
-
-    pub fn sstables_within_key_range<T: Hash>(bloom_filters: Vec<&BloomFilter>, key: &T) -> Option<Vec<Table>> {
-        let mut sstables: Vec<Table> = Vec::new();
-        for bloom_filter in bloom_filters {
-            if bloom_filter.contains(key) {
-                if let Some(sst) = &bloom_filter.sst {
-                    sstables.push(sst.to_owned());
-                }
-            }
-        }
-        if sstables.is_empty() {
-            return None;
-        }
-        Some(sstables)
+        ssts
     }
 
     pub fn clear(&mut self) -> Self {

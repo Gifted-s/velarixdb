@@ -6,7 +6,7 @@
 use crate::consts::{DEFAULT_ALLOW_PREFETCH, DEFAULT_PREFETCH_SIZE, HEAD_ENTRY_KEY};
 use crate::err::Error;
 use crate::index::Index;
-use crate::memtable::{Entry, InMemoryTable};
+use crate::memtable::{Entry, MemTable};
 use crate::storage::DataStore;
 use crate::types::{Key, ValOffset, Value};
 use crate::value_log::ValueLog;

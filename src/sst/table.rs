@@ -1,6 +1,11 @@
 use chrono::{DateTime, Utc};
 use crossbeam_skiplist::SkipMap;
-use std::{cmp::Ordering, path::PathBuf, sync::Arc};
+use std::{
+    cmp::Ordering,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::SystemTime,
+};
 
 use crate::{
     block::Block,
@@ -10,7 +15,7 @@ use crate::{
     filter::BloomFilter,
     fs::{DataFileNode, DataFs, FileAsync, FileNode, IndexFileNode, IndexFs},
     index::{Index, IndexFile, RangeOffset},
-    memtable::{Entry, InsertionTime, IsDeleted},
+    memtable::Entry,
     types::{CreationTime, IsTombStone, Key, SkipMapEntries, ValOffset},
 };
 
@@ -120,9 +125,9 @@ impl Table {
         self.data_file.file.find_entry(start_offset, searched_key).await
     }
 
-    pub(crate) async fn load_entries_from_file(&self) -> Result<Option<Table>, Error> {
+    pub(crate) async fn load_entries_from_file(&self) -> Result<Table, Error> {
         let (entries, bytes_read) = self.data_file.file.load_entries().await?;
-        Ok(Some(Table {
+        Ok(Table {
             entries,
             size: bytes_read,
             dir: self.dir.clone(),
@@ -130,7 +135,35 @@ impl Table {
             created_at: self.created_at,
             data_file: self.data_file.to_owned(),
             index_file: self.index_file.to_owned(),
-        }))
+        })
+    }
+
+    pub(crate) async fn build_from(dir: PathBuf, data_file_path: PathBuf, index_file_path: PathBuf) -> Table {
+        let mut table = Table {
+            dir,
+            hotness: 1,
+            created_at: Utc::now().timestamp_millis() as u64,
+            data_file: DataFile {
+                file: DataFileNode::new(data_file_path.to_owned(), crate::fs::FileType::SSTable)
+                    .await
+                    .unwrap(),
+                path: data_file_path,
+            },
+            index_file: IndexFile {
+                file: IndexFileNode::new(index_file_path.to_owned(), crate::fs::FileType::Index)
+                    .await
+                    .unwrap(),
+                path: index_file_path,
+            },
+            size: 0,
+            entries: Arc::new(SkipMap::new()),
+        };
+        table.size = table.data_file.file.node.size().await;
+        let modified_time = table.data_file.file.node.metadata().await.unwrap().modified().unwrap();
+        let epoch = SystemTime::UNIX_EPOCH;
+        let elapsed_nanos = modified_time.duration_since(epoch).unwrap().as_nanos();
+        table.created_at = (elapsed_nanos / 1_000_000) as u64;
+        return table;
     }
 
     pub(crate) async fn write_to_file(&self) -> Result<(), Error> {
@@ -187,8 +220,7 @@ impl Table {
     }
 
     pub(crate) fn build_filter_from_sstable(entries: &SkipMapEntries<Key>) -> BloomFilter {
-        //TODO: FALSE POSITIVE should be from config
-        // Rebuild the bloom filter since a new sstable has been created
+        // TODO: FALSE POSITIVE should be from config
         let mut filter = BloomFilter::new(DEFAULT_FALSE_POSITIVE_RATE, entries.len());
         entries.iter().for_each(|e| filter.set(e.key()));
         filter

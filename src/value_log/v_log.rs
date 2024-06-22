@@ -24,6 +24,15 @@
 //! The `content` field is of type `Arc<Rwlock<VLogFileNode>>`. It represents the VLog file and provides concurrent access and modification through the use of an `Arc` (Atomic Reference Counting) and `RwLock`.
 //! We use RwLock to ensure multiple threads can read from the log file while permmitting only one thread to write
 //!
+//! ### head_offset
+//!
+//! The `head_offset` field stores the start postion of the last entry inserted into the value log
+//!
+//! ### tail_offset
+//!
+//! The `tail_offset` field stores the position  we start reading from either normal reads or during garbage collection
+//!
+//!
 //! ## Log File Structure Diagram
 //!
 //! The `log_file` is structured as follows:

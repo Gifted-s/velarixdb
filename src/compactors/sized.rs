@@ -205,16 +205,14 @@ impl<'a> SizedTierRunner<'a> {
             let mut merged_sst: Box<dyn InsertableToBucket> = Box::new(tables.get(0).unwrap().to_owned());
             for sst in tables[1..].iter() {
                 hotness += sst.hotness;
-                if let Some(table) = sst
+                let table = sst
                     .load_entries_from_file()
                     .await
-                    .map_err(|err| CompactionFailed(Box::new(err)))?
-                {
-                    merged_sst = self
-                        .merge_sstables(merged_sst, Box::new(table))
-                        .await
-                        .map_err(|err| CompactionFailed(Box::new(err)))?;
-                }
+                    .map_err(|err| CompactionFailed(Box::new(err)))?;
+                merged_sst = self
+                    .merge_sstables(merged_sst, Box::new(table))
+                    .await
+                    .map_err(|err| CompactionFailed(Box::new(err)))?;
             }
 
             let filter = Table::build_filter_from_sstable(&merged_sst.get_entries());
