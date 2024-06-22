@@ -1,8 +1,14 @@
+//! # Memtable
+//!
+//! Memtable buffers write in the RAM before it's flushed to the disk once the size exceeds `write_buffer_size`.
+//! Entries are stored in a SkipMap so they can be retrieved effectively.
+//! Before a memtable is finally flushed to the disk, it is made read-only and added to the read-only memtable vector.
+//! Once the read-only memtable vector exceeds the `max_buffer_write_number` all memtable in the vector is flushed to to the disk concurrently
+
 use crate::bucket::InsertableToBucket;
 use crate::consts::{DEFAULT_FALSE_POSITIVE_RATE, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, WRITE_BUFFER_SIZE};
 use crate::err::Error;
 use crate::filter::BloomFilter;
-//use crate::memtable::val_option::ValueOption;
 use crate::storage::SizeUnit;
 use crate::types::{CreationTime, IsTombStone, Key, SkipMapEntries, ValOffset};
 use chrono::{DateTime, Utc};
@@ -14,9 +20,6 @@ use Error::*;
 
 use std::{hash::Hash, sync::Arc};
 
-pub type InsertionTime = u64;
-pub type IsDeleted = bool;
-
 #[derive(PartialOrd, PartialEq, Copy, Clone, Debug)]
 pub struct Entry<K: Hash, V> {
     pub key: K,
@@ -25,7 +28,7 @@ pub struct Entry<K: Hash, V> {
     pub is_tombstone: bool,
 }
 #[derive(Clone, Debug)]
-pub struct InMemoryTable<K: Hash + cmp::Ord> {
+pub struct MemTable<K: Hash + cmp::Ord> {
     pub entries: SkipMapEntries<K>,
     pub bloom_filter: BloomFilter,
     pub false_positive_rate: f64,
@@ -36,7 +39,7 @@ pub struct InMemoryTable<K: Hash + cmp::Ord> {
     pub read_only: bool,
 }
 
-impl InsertableToBucket for InMemoryTable<Key> {
+impl InsertableToBucket for MemTable<Key> {
     fn get_entries(&self) -> SkipMapEntries<Key> {
         self.entries.clone()
     }
@@ -79,7 +82,7 @@ impl Entry<Key, ValOffset> {
     }
 }
 
-impl InMemoryTable<Key> {
+impl MemTable<Key> {
     pub fn new() -> Self {
         Self::with_specified_capacity_and_rate(SizeUnit::Bytes, WRITE_BUFFER_SIZE, DEFAULT_FALSE_POSITIVE_RATE)
     }
@@ -153,10 +156,10 @@ impl InMemoryTable<Key> {
         self.insert(&entry)
     }
 
-    pub fn generate_table_id() -> Vec<u8> {
+    pub fn generate_table_id() -> &'static [u8] {
         let rng = rand::thread_rng();
         let id: String = rng.sample_iter(&Alphanumeric).take(10).map(char::from).collect();
-        id.as_bytes().to_vec()
+        id.as_bytes()
     }
 
     pub fn delete(&mut self, entry: &Entry<Key, ValOffset>) -> Result<(), Error> {
@@ -178,15 +181,6 @@ impl InMemoryTable<Key> {
 
     pub fn is_full(&mut self, key_len: usize) -> bool {
         self.size + key_len + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8 >= self.capacity()
-    }
-
-    // Find the smallest element in the skip list
-    pub fn find_smallest_key(&self) -> Result<Key, Error> {
-        let smallest_entry = self.entries.iter().next();
-        match smallest_entry {
-            Some(e) => return Ok(e.key().to_vec()),
-            None => Err(LowestKeyIndexError),
-        }
     }
 
     pub fn is_entry_within_range<'a>(
@@ -235,19 +229,15 @@ impl InMemoryTable<Key> {
 
 #[cfg(test)]
 mod tests {
-
-    use std::{sync::Mutex, thread};
-
-    use num_traits::ToBytes;
-
     use super::*;
+    use std::{sync::Mutex, thread};
 
     #[test]
     fn test_with_specified_capacity_and_rate() {
         let buffer_size = 51200;
         let false_pos_rate = 1e-300;
 
-        let mem_table = InMemoryTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
+        let mem_table = MemTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
         assert_eq!(mem_table.entries.len(), 0);
         assert_eq!(mem_table.bloom_filter.num_elements(), 0);
         assert_eq!(mem_table.size, 0);
@@ -259,7 +249,7 @@ mod tests {
 
     #[test]
     fn test_new() {
-        let mem_table = InMemoryTable::new();
+        let mem_table = MemTable::new();
         let buffer_size = 51200;
         let false_pos_rate = 1e-300;
         assert_eq!(mem_table.entries.len(), 0);
@@ -277,7 +267,7 @@ mod tests {
         let false_pos_rate = 1e-300;
 
         let mut mem_table =
-            InMemoryTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
+            MemTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
         assert_eq!(mem_table.entries.len(), 0);
         assert_eq!(mem_table.bloom_filter.num_elements(), 0);
         assert_eq!(mem_table.size, 0);
@@ -303,7 +293,7 @@ mod tests {
         let buffer_size = 51200;
         let false_pos_rate = 1e-300;
         let mut mem_table =
-            InMemoryTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
+            MemTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
         assert_eq!(mem_table.size, 0);
         let key = vec![1, 2, 3, 4];
         let val_offset = 400;
@@ -329,7 +319,7 @@ mod tests {
     fn test_concurrent_write() {
         let buffer_size = 51200;
         let false_pos_rate = 1e-300;
-        let mem_table = InMemoryTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
+        let mem_table = MemTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
         let mem_table = Arc::new(Mutex::new(mem_table));
         let mut handlers = Vec::with_capacity(5 as usize);
         let keys = vec![
@@ -382,7 +372,7 @@ mod tests {
         let false_pos_rate = 1e-300;
 
         let mut mem_table =
-            InMemoryTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
+            MemTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
         assert_eq!(mem_table.entries.len(), 0);
         assert_eq!(mem_table.bloom_filter.num_elements(), 0);
         assert_eq!(mem_table.size, 0);
@@ -422,7 +412,7 @@ mod tests {
         let false_pos_rate = 1e-300;
 
         let mut mem_table =
-            InMemoryTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
+            MemTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
         assert_eq!(mem_table.entries.len(), 0);
         assert_eq!(mem_table.bloom_filter.num_elements(), 0);
         assert_eq!(mem_table.size, 0);
@@ -446,5 +436,114 @@ mod tests {
         entry.key = vec![2, 2, 3, 4];
         let e = mem_table.delete(&entry);
         assert!(e.is_err());
+    }
+
+    #[test]
+    fn test_generate_table_id() {
+        let id1 = MemTable::generate_table_id();
+        let id2 = MemTable::generate_table_id();
+        let id3 = MemTable::generate_table_id();
+
+        assert_ne!(id1, id2);
+        assert_ne!(id2, id3);
+        assert_ne!(id1, id3);
+    }
+
+    #[test]
+    fn test_is_entry_within_range() {
+        let keys = vec![
+            vec![1, 2, 3, 4],
+            vec![2, 2, 3, 4],
+            vec![3, 2, 3, 4],
+            vec![4, 2, 3, 4],
+            vec![5, 2, 3, 4],
+        ];
+        let map = SkipMap::new();
+        let is_tombstone = false;
+        let created_at = Utc::now().timestamp_millis() as u64;
+        let val_offset = 500;
+        map.insert(keys[0].to_owned(), (val_offset, created_at, is_tombstone));
+        map.insert(keys[1].to_owned(), (val_offset, created_at, is_tombstone));
+        map.insert(keys[2].to_owned(), (val_offset, created_at, is_tombstone));
+        map.insert(keys[3].to_owned(), (val_offset, created_at, is_tombstone));
+        map.insert(keys[4].to_owned(), (val_offset, created_at, is_tombstone));
+
+        let within_range = MemTable::is_entry_within_range(&map.get(&keys[0]).unwrap(), &keys[0], &keys[3]);
+        assert_eq!(within_range, true);
+
+        let start_invalid = &vec![10, 20, 30, 40];
+        let end_invalid = &vec![0, 0, 0, 0];
+        let within_range =
+            MemTable::is_entry_within_range(&map.get(&keys[0]).unwrap(), &start_invalid, &end_invalid);
+        assert_eq!(within_range, false);
+
+        let start_valid = &keys[0];
+        let end_invalid = &vec![0, 0, 0, 0];
+        let within_range =
+            MemTable::is_entry_within_range(&map.get(&keys[0]).unwrap(), &start_valid, &end_invalid);
+        assert_eq!(within_range, true);
+    }
+
+    #[test]
+    fn test_find_smallest_key() {
+        let keys = vec![
+            vec![1, 2, 3, 4],
+            vec![2, 2, 3, 4],
+            vec![3, 2, 3, 4],
+            vec![4, 2, 3, 4],
+            vec![5, 2, 3, 4],
+        ];
+        let buffer_size = 51200;
+        let false_pos_rate = 1e-300;
+        let is_tombstone = false;
+        let created_at = Utc::now().timestamp_millis() as u64;
+        let mut mem_table =
+            MemTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
+        for i in 0..5 {
+            let entry = Entry::new(keys[i].to_owned(), i, created_at, is_tombstone);
+            let _ = mem_table.insert(&entry);
+        }
+
+        let smallest = mem_table.find_smallest_key();
+        assert!(smallest.is_ok());
+        assert_eq!(smallest.unwrap(), keys[0]);
+    }
+
+    #[test]
+    fn test_find_biggest_key() {
+        let keys = vec![
+            vec![1, 2, 3, 4],
+            vec![2, 2, 3, 4],
+            vec![3, 2, 3, 4],
+            vec![4, 2, 3, 4],
+            vec![5, 2, 3, 4],
+        ];
+        let buffer_size = 51200;
+        let false_pos_rate = 1e-300;
+        let is_tombstone = false;
+        let created_at = Utc::now().timestamp_millis() as u64;
+        let mut mem_table =
+            MemTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
+        for i in 0..5 {
+            let entry = Entry::new(keys[i].to_owned(), i, created_at, is_tombstone);
+            let _ = mem_table.insert(&entry);
+        }
+
+        let biggest = mem_table.find_biggest_key();
+        assert!(biggest.is_ok());
+        assert_eq!(biggest.unwrap(), keys[4]);
+    }
+
+    #[test]
+    fn test_is_full() {
+        let buffer_size = 51200;
+        let false_pos_rate = 1e-300;
+        let mut mem_table =
+            MemTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
+        let key = vec![1, 2, 3, 4];
+        let is_full = mem_table
+            .to_owned()
+            .is_full(key.len() + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8 + mem_table.capacity());
+        assert_eq!(is_full, true);
     }
 }
