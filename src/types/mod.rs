@@ -21,3 +21,4 @@ pub type ImmutableMemTable<K> = Arc<RwLock<IndexMap<K, Arc<RwLock<MemTable<K>>>>
 pub type Duration = u64;
 pub type Bool = bool;
 pub type MemtableId = Vec<u8>;
+pub type DBName<'a> = &'a str;

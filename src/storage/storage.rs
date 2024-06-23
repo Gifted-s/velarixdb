@@ -112,13 +112,11 @@ impl<'a> DataStore<'a, Key> {
         );
     }
 
-    /// A Result indicating success or an `Error` if an error occurred.
     pub async fn put(&mut self, key: &str, value: &str, existing_val_offset: Option<ValOffset>) -> Result<bool, Error> {
         let is_tombstone = value.len() == 0;
         let key = &key.as_bytes().to_vec();
         let val = &value.as_bytes().to_vec();
         let created_at = Utc::now().timestamp_millis() as u64;
-
         let v_offset;
         if let Some(offset) = existing_val_offset {
             v_offset = offset;
@@ -162,7 +160,6 @@ impl<'a> DataStore<'a, Key> {
             }
             self.active_memtable = MemTable::with_specified_capacity_and_rate(size_unit, capacity, false_pos);
         }
-
         self.active_memtable.insert(&entry)?;
         Ok(true)
     }
@@ -415,7 +412,7 @@ impl<'a> DataStore<'a, Key> {
                 key_range.set(data_file_path.to_owned(), smallest_key, biggest_key, table);
             }
         }
-        let mut buckets_map = BucketMap::new(buckets_path.clone());
+        let mut buckets_map = BucketMap::new(buckets_path.clone()).await;
         for (bucket_id, bucket) in recovered_buckets.iter() {
             buckets_map.buckets.insert(*bucket_id, bucket.clone());
         }
@@ -435,7 +432,6 @@ impl<'a> DataStore<'a, Key> {
             Ok((active_memtable, read_only_memtables)) => {
                 let buckets = Arc::new(RwLock::new(buckets_map.to_owned()));
                 let filters = Arc::new(RwLock::new(filters));
-                //TODO:  we also need to recover this from sstable
                 let key_range = Arc::new(RwLock::new(key_range.to_owned()));
                 let read_only_memtables = Arc::new(RwLock::new(read_only_memtables));
 
@@ -518,6 +514,19 @@ impl<'a> DataStore<'a, Key> {
         Ok((active_memtable, read_only_memtables))
     }
 
+    // pub fn start_flush_listener(&self) {
+    //     let get = self.clone();
+    //     tokio::spawn(async move { loop {
+
+    //     let _get = self.get("key").await;
+
+
+
+
+    //     } });
+    //     log::info!("Compactor flush listener active");
+    // }
+
     pub async fn handle_empty_vlog(
         dir: DirPath,
         buckets_path: PathBuf,
@@ -545,7 +554,7 @@ impl<'a> DataStore<'a, Key> {
         // insert tail and head to memtable
         active_memtable.insert(&tail_entry.to_owned())?;
         active_memtable.insert(&head_entry.to_owned())?;
-        let buckets = BucketMap::new(buckets_path);
+        let buckets = BucketMap::new(buckets_path).await;
         let (flush_signal_tx, flush_signal_rx) = broadcast(DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE);
         let read_only_memtables = IndexMap::new();
         let filters = Arc::new(RwLock::new(Vec::new()));
@@ -697,8 +706,7 @@ mod tests {
     async fn datastore_create_asynchronous() {
         let path = PathBuf::new().join("bump1");
         let s_engine = DataStore::new(path.clone()).await.unwrap();
-
-        // // Specify the number of random strings to generate
+        // Specify the number of random strings to generate
         let num_strings = 20000; // 100k
 
         // Specify the length of each random string

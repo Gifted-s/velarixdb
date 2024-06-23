@@ -1,1 +1,1 @@
-mod gc;
+pub(crate) mod gc;

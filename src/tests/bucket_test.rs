@@ -175,7 +175,7 @@ mod tests {
     async fn test_bucket_map_new() -> Result<(), Error> {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("."));
-        let bucket_map = BucketMap::new(path.to_owned());
+        let bucket_map = BucketMap::new(path.to_owned()).await;
 
         assert_eq!(bucket_map.dir, path);
         assert_eq!(bucket_map.buckets.len(), 0);
@@ -210,7 +210,7 @@ mod tests {
 
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("."));
-        let mut bucket_map = BucketMap::new(path.to_owned());
+        let mut bucket_map = BucketMap::new(path.to_owned()).await;
         bucket_map.buckets.insert(new_bucket1.id, new_bucket1.to_owned());
         bucket_map.buckets.insert(new_bucket2.id, new_bucket2);
         bucket_map.buckets.insert(new_bucket3.id, new_bucket3);
@@ -281,7 +281,7 @@ mod tests {
 
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("."));
-        let mut bucket_map = BucketMap::new(path.to_owned());
+        let mut bucket_map = BucketMap::new(path.to_owned()).await;
         bucket_map.buckets.insert(new_bucket1.id, new_bucket1.to_owned());
         bucket_map.buckets.insert(new_bucket2.id, new_bucket2);
         bucket_map.buckets.insert(new_bucket3.id, new_bucket3);
@@ -308,7 +308,7 @@ mod tests {
     async fn table_insert_to_appropriate_bucket() -> Result<(), Error> {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("."));
-        let mut bucket_map = BucketMap::new(path.to_owned());
+        let mut bucket_map = BucketMap::new(path.to_owned()).await;
 
         let sst_within_size_range = generate_ssts(1).await[0].to_owned();
         let mut sst_with_entries = sst_within_size_range.load_entries_from_file().await.unwrap();
@@ -368,7 +368,7 @@ mod tests {
 
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("."));
-        let mut bucket_map = BucketMap::new(path.to_owned());
+        let mut bucket_map = BucketMap::new(path.to_owned()).await;
         bucket_map.buckets.insert(new_bucket1.id, new_bucket1.to_owned());
         bucket_map.buckets.insert(new_bucket2.id, new_bucket2);
         bucket_map.buckets.insert(new_bucket3.id, new_bucket3);

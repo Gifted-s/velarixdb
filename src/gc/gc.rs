@@ -28,21 +28,39 @@ extern "C" {
 const FALLOC_FL_PUNCH_HOLE: c_int = 0x2;
 const FALLOC_FL_KEEP_SIZE: c_int = 0x1;
 
-impl DataStore<'static, Key> {
-    pub async fn garbage_collect(&'static mut self) {
-        let store = Arc::new(RwLock::new(self));
+#[derive(Debug)]
+pub struct GC {
+    pub config: Config,
+}
+#[derive(Clone, Debug)]
+pub struct Config {
+    pub online_garbage_collection_interval: u64,
+    pub gc_chunk_size: u32,
+}
 
+impl GC {
+    pub fn new(online_garbage_collection_interval: u64, gc_chunk_size: u32) -> Self {
+        Self {
+            config: Config {
+                online_garbage_collection_interval,
+                gc_chunk_size,
+            },
+        }
+    }
+    pub fn start_background_gc_task(self, store: Arc<RwLock<DataStore<'static, Key>>>) {
+        let config = self.config.to_owned();
         tokio::spawn(async move {
             'runner: loop {
-                sleep_gc_task(store.read().await.config.online_garbage_collection_interval).await;
+                sleep_gc_task(config.online_garbage_collection_interval).await;
                 let store_clone = store.clone();
                 let invalid_entries = Arc::new(RwLock::new(Vec::new()));
                 let valid_entries = Arc::new(RwLock::new(Vec::new()));
                 let synced_entries = Arc::new(RwLock::new(Vec::new()));
-
                 let store_read_lock = store_clone.read().await;
                 let punch_hole_start_offset = store_read_lock.val_log.tail_offset.to_owned();
-                let chunk_res = store_read_lock
+                let chunk_res = store
+                    .read()
+                    .await
                     .val_log
                     .read_chunk_to_garbage_collect(GC_CHUNK_SIZE)
                     .await;
@@ -67,7 +85,7 @@ impl DataStore<'static, Key> {
                                         }
                                         Ok(())
                                     }
-                                    Err(err) => s.handle_deleted_entries(invalid_entries_clone, entry, err).await,
+                                    Err(err) => GC::handle_deleted_entries(invalid_entries_clone, entry, err).await,
                                 }
                             })
                         });
@@ -88,7 +106,7 @@ impl DataStore<'static, Key> {
                             }
                         }
                         let new_tail_offset = store.read().await.val_log.tail_offset + total_bytes_read;
-                        let append_res = DataStore::update_tail(store.clone(), new_tail_offset).await;
+                        let append_res = GC::update_tail(store.clone(), new_tail_offset).await;
 
                         match append_res {
                             Ok(v_offset) => {
@@ -98,7 +116,7 @@ impl DataStore<'static, Key> {
                                     v_offset,
                                 ));
 
-                                if let Err(err) = DataStore::write_valid_entries_to_vlog(
+                                if let Err(err) = GC::write_valid_entries_to_vlog(
                                     store.clone(),
                                     valid_entries,
                                     synced_entries.to_owned(),
@@ -114,20 +132,19 @@ impl DataStore<'static, Key> {
                                 match sync_res {
                                     Ok(_) => {
                                         store.write().await.val_log.set_tail(new_tail_offset);
-                                        if let Err(err) = DataStore::write_valid_entries_to_store(
-                                            store.clone(),
-                                            synced_entries.to_owned(),
-                                        )
-                                        .await
+                                        if let Err(err) =
+                                            GC::write_valid_entries_to_store(store.clone(), synced_entries.to_owned())
+                                                .await
                                         {
                                             log::error!("{}", GCError(err.to_string()));
                                             continue 'runner;
                                         }
-                                        let remove_res = store
-                                            .write()
-                                            .await
-                                            .remove_unsed(invalid_entries, punch_hole_start_offset, total_bytes_read)
-                                            .await;
+                                        let remove_res = GC::remove_unsed(
+                                            invalid_entries,
+                                            punch_hole_start_offset,
+                                            total_bytes_read,
+                                        )
+                                        .await;
                                         match remove_res {
                                             Err(err) => {
                                                 log::error!("{}", GCError(err.to_string()));
@@ -158,7 +175,6 @@ impl DataStore<'static, Key> {
     }
 
     pub async fn handle_deleted_entries(
-        &self,
         invalid_entries_clone: Arc<RwLock<Vec<ValueLogEntry>>>,
         entry: ValueLogEntry,
         err: Error,
@@ -196,10 +212,7 @@ impl DataStore<'static, Key> {
         }
     }
 
-    pub async fn update_tail(
-        store: Arc<RwLock<&mut DataStore<'_, K>>>,
-        new_tail_offset: usize,
-    ) -> Result<usize, Error> {
+    pub async fn update_tail(store: Arc<RwLock<DataStore<'_, K>>>, new_tail_offset: usize) -> Result<usize, Error> {
         store
             .write()
             .await
@@ -214,7 +227,7 @@ impl DataStore<'static, Key> {
     }
 
     pub async fn write_valid_entries_to_store(
-        store: Arc<RwLock<&mut DataStore<'_, K>>>,
+        store: Arc<RwLock<DataStore<'_, K>>>,
         valid_entries: Arc<RwLock<Vec<(Key, Value, ValOffset)>>>,
     ) -> Result<(), Error> {
         for (key, value, existing_v_offset) in valid_entries.to_owned().read().await.iter() {
@@ -236,7 +249,7 @@ impl DataStore<'static, Key> {
     }
 
     pub async fn write_valid_entries_to_vlog(
-        store: Arc<RwLock<&mut DataStore<'_, K>>>,
+        store: Arc<RwLock<DataStore<'_, K>>>,
         valid_entries: Arc<RwLock<Vec<(Key, Value)>>>,
         synced_entries: Arc<RwLock<Vec<(Key, Value, ValOffset)>>>,
     ) -> Result<(), Error> {
@@ -263,7 +276,6 @@ impl DataStore<'static, Key> {
     }
 
     pub async fn remove_unsed(
-        &self,
         invalid_entries: Arc<RwLock<Vec<ValueLogEntry>>>,
         punch_hole_start_offset: usize,
         punch_hole_length: usize,
@@ -272,13 +284,12 @@ impl DataStore<'static, Key> {
         #[cfg(target_os = "linux")]
         {
             let eng_read_lock = engine.read().await;
-            let garbage_collected = self
-                .punch_holes(
-                    eng_read_lock.val_log.file_path.to_str().unwrap(),
-                    punch_hole_start_offset as i64,
-                    punch_hole_length as i64,
-                )
-                .await?;
+            let garbage_collected = GC::punch_holes(
+                eng_read_lock.val_log.file_path.to_str().unwrap(),
+                punch_hole_start_offset as i64,
+                punch_hole_length as i64,
+            )
+            .await?;
             Ok(())
         }
 
@@ -290,7 +301,7 @@ impl DataStore<'static, Key> {
         }
     }
 
-    pub async fn punch_holes(&self, file_path: &str, offset: off_t, length: off_t) -> std::result::Result<(), Error> {
+    pub async fn punch_holes(file_path: &str, offset: off_t, length: off_t) -> std::result::Result<(), Error> {
         let file = tokio::fs::File::open(file_path)
             .await
             .map_err(|err| Error::FileSyncError { error: err })?;
@@ -310,6 +321,8 @@ impl DataStore<'static, Key> {
         }
     }
 }
+
+impl DataStore<'static, Key> {}
 
 async fn sleep_gc_task(duration: u64) {
     sleep(Duration::from_millis(duration)).await;
