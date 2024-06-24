@@ -1,11 +1,12 @@
-// NOTE: GC is only supported on Linux based OS for now because File Systems for other OS does not
+// NOTE: GarbageCollector is only supported on Linux based OS for now because File Systems for other OS does not
 // support the FILE_PUNCH_HOLE command which is crucial for reclaiming unused spaces on the disk
 
 extern crate libc;
 extern crate nix;
 use crate::consts::{GC_CHUNK_SIZE, TAIL_ENTRY_KEY, TOMB_STONE_MARKER};
-use crate::types::{Key, ValOffset, Value};
-use crate::value_log::ValueLogEntry;
+use crate::memtable::MemTable;
+use crate::types::{BloomFilterHandle, BucketMapHandle, Key, KeyRangeHandle, ValOffset, Value};
+use crate::value_log::{ValueLog, ValueLogEntry};
 use crate::{err, types};
 use crate::{err::Error, storage::*};
 use chrono::Utc;
@@ -16,7 +17,7 @@ use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{io, str};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tokio::time::sleep;
 type K = types::Key;
 //type V = types::Value;
@@ -34,145 +35,176 @@ pub struct GC {
 }
 #[derive(Clone, Debug)]
 pub struct Config {
-    pub online_garbage_collection_interval: u64,
-    pub gc_chunk_size: u32,
+    pub online_gc_interval: u64,
+    pub gc_chunk_size: usize,
+}
+
+#[derive(Debug)]
+pub struct GCChanData{
+    memtable: Arc<MemTable<Key>>,
+    vlog: Arc<Mutex<ValueLog>>,
+}
+
+impl GCChanData{
+    pub fn new(memtable: Arc<MemTable<Key>>, vlog: Arc<Mutex<ValueLog>>) -> Self {
+        GCChanData { memtable, vlog }
+    }
 }
 
 impl GC {
-    pub fn new(online_garbage_collection_interval: u64, gc_chunk_size: u32) -> Self {
+    pub fn new(online_gc_interval: u64, gc_chunk_size: usize) -> Self {
         Self {
             config: Config {
-                online_garbage_collection_interval,
+                online_gc_interval,
                 gc_chunk_size,
             },
         }
     }
-    pub fn start_background_gc_task(self, store: Arc<RwLock<DataStore<'static, Key>>>) {
-        let config = self.config.to_owned();
+
+    pub fn start_background_gc_task(
+        &self,
+        // flush_rx: FlushReceiver,
+        bucket_map: BucketMapHandle,
+        filter: BloomFilterHandle,
+        key_range: KeyRangeHandle,
+    ) {
+        // let mut rx = flush_rx.clone();
+        let cfg = self.config.to_owned();
         tokio::spawn(async move {
-            'runner: loop {
-                sleep_gc_task(config.online_garbage_collection_interval).await;
-                let store_clone = store.clone();
-                let invalid_entries = Arc::new(RwLock::new(Vec::new()));
-                let valid_entries = Arc::new(RwLock::new(Vec::new()));
-                let synced_entries = Arc::new(RwLock::new(Vec::new()));
-                let store_read_lock = store_clone.read().await;
-                let punch_hole_start_offset = store_read_lock.val_log.tail_offset.to_owned();
-                let chunk_res = store
-                    .read()
-                    .await
-                    .val_log
-                    .read_chunk_to_garbage_collect(GC_CHUNK_SIZE)
-                    .await;
-                drop(store_read_lock);
-                match chunk_res {
-                    Ok((entries, total_bytes_read)) => {
-                        let tasks = entries.into_iter().map(|entry| {
-                            let invalid_entries_clone = Arc::clone(&invalid_entries);
-                            let valid_entries_clone = Arc::clone(&valid_entries);
-                            let s_engine = store.clone();
-                            tokio::spawn(async move {
-                                let s = s_engine.read().await;
-                                let most_recent_value = s.get(str::from_utf8(&entry.key).unwrap()).await;
-                                match most_recent_value {
-                                    Ok((value, creation_time)) => {
-                                        if entry.created_at != creation_time
-                                            || value == TOMB_STONE_MARKER.as_bytes().to_vec()
-                                        {
-                                            invalid_entries_clone.write().await.push(entry);
-                                        } else {
-                                            valid_entries_clone.write().await.push((entry.key, value));
-                                        }
-                                        Ok(())
-                                    }
-                                    Err(err) => GC::handle_deleted_entries(invalid_entries_clone, entry, err).await,
-                                }
-                            })
-                        });
-                        let all_results = join_all(tasks).await;
-                        for res in all_results {
-                            match res {
-                                Ok(entry) => match entry {
-                                    Err(err) => {
-                                        log::error!("{}", err);
-                                        continue 'runner;
-                                    }
-                                    _ => {}
-                                },
-                                Err(err) => {
-                                    log::error!("{}", GCError(err.to_string()));
-                                    continue 'runner;
-                                }
-                            }
-                        }
-                        let new_tail_offset = store.read().await.val_log.tail_offset + total_bytes_read;
-                        let append_res = GC::update_tail(store.clone(), new_tail_offset).await;
+            loop {
 
-                        match append_res {
-                            Ok(v_offset) => {
-                                synced_entries.write().await.push((
-                                    TAIL_ENTRY_KEY.to_vec(),
-                                    new_tail_offset.to_le_bytes().to_vec(),
-                                    v_offset,
-                                ));
-
-                                if let Err(err) = GC::write_valid_entries_to_vlog(
-                                    store.clone(),
-                                    valid_entries,
-                                    synced_entries.to_owned(),
-                                )
-                                .await
-                                {
-                                    log::error!("{}", GCError(err.to_string()));
-                                    continue 'runner;
-                                }
-
-                                // call fsync on vlog to guarantee persistence to disk
-                                let sync_res = store.write().await.val_log.sync_to_disk().await;
-                                match sync_res {
-                                    Ok(_) => {
-                                        store.write().await.val_log.set_tail(new_tail_offset);
-                                        if let Err(err) =
-                                            GC::write_valid_entries_to_store(store.clone(), synced_entries.to_owned())
-                                                .await
-                                        {
-                                            log::error!("{}", GCError(err.to_string()));
-                                            continue 'runner;
-                                        }
-                                        let remove_res = GC::remove_unsed(
-                                            invalid_entries,
-                                            punch_hole_start_offset,
-                                            total_bytes_read,
-                                        )
-                                        .await;
-                                        match remove_res {
-                                            Err(err) => {
-                                                log::error!("{}", GCError(err.to_string()));
-                                                continue 'runner;
-                                            }
-                                            _ => {}
-                                        }
-                                    }
-                                    Err(err) => {
-                                        log::error!("{}", GCError(err.to_string()));
-                                        continue 'runner;
-                                    }
-                                }
-                            }
-                            Err(err) => {
-                                log::error!("{}", GCError(err.to_string()));
-                                continue 'runner;
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        log::error!("{}", GCError(err.to_string()));
-                        continue 'runner;
-                    }
-                }
+                // let signal = rx.try_recv();
             }
         });
+        log::info!("Compactor flush listener active");
     }
+
+    // pub fn start_background_gc_task(self, store: Arc<RwLock<DataStore<'static, Key>>>) {
+    //     let config = self.config.to_owned();
+    //     tokio::spawn(async move {
+    //         'runner: loop {
+    //             sleep_gc_task(config.online_gc_interval).await;
+    //             let store_clone = store.clone();
+    //             let invalid_entries = Arc::new(RwLock::new(Vec::new()));
+    //             let valid_entries = Arc::new(RwLock::new(Vec::new()));
+    //             let synced_entries = Arc::new(RwLock::new(Vec::new()));
+    //             let store_read_lock = store_clone.read().await;
+    //             let punch_hole_start_offset = store_read_lock.val_log.tail_offset.to_owned();
+    //             let chunk_res = store
+    //                 .read()
+    //                 .await
+    //                 .val_log
+    //                 .read_chunk_to_garbage_collect(GC_CHUNK_SIZE)
+    //                 .await;
+    //             drop(store_read_lock);
+    //             match chunk_res {
+    //                 Ok((entries, total_bytes_read)) => {
+    //                     let tasks = entries.into_iter().map(|entry| {
+    //                         let invalid_entries_clone = Arc::clone(&invalid_entries);
+    //                         let valid_entries_clone = Arc::clone(&valid_entries);
+    //                         let s_engine = store.clone();
+    //                         tokio::spawn(async move {
+    //                             let s = s_engine.read().await;
+    //                             let most_recent_value = s.get(str::from_utf8(&entry.key).unwrap()).await;
+    //                             match most_recent_value {
+    //                                 Ok((value, creation_time)) => {
+    //                                     if entry.created_at != creation_time
+    //                                         || value == TOMB_STONE_MARKER.as_bytes().to_vec()
+    //                                     {
+    //                                         invalid_entries_clone.write().await.push(entry);
+    //                                     } else {
+    //                                         valid_entries_clone.write().await.push((entry.key, value));
+    //                                     }
+    //                                     Ok(())
+    //                                 }
+    //                                 Err(err) => GC::handle_deleted_entries(invalid_entries_clone, entry, err).await,
+    //                             }
+    //                         })
+    //                     });
+    //                     let all_results = join_all(tasks).await;
+    //                     for res in all_results {
+    //                         match res {
+    //                             Ok(entry) => match entry {
+    //                                 Err(err) => {
+    //                                     log::error!("{}", err);
+    //                                     continue 'runner;
+    //                                 }
+    //                                 _ => {}
+    //                             },
+    //                             Err(err) => {
+    //                                 log::error!("{}", GCError(err.to_string()));
+    //                                 continue 'runner;
+    //                             }
+    //                         }
+    //                     }
+    //                     let new_tail_offset = store.read().await.val_log.tail_offset + total_bytes_read;
+    //                     let append_res = GC::update_tail(store.clone(), new_tail_offset).await;
+
+    //                     match append_res {
+    //                         Ok(v_offset) => {
+    //                             synced_entries.write().await.push((
+    //                                 TAIL_ENTRY_KEY.to_vec(),
+    //                                 new_tail_offset.to_le_bytes().to_vec(),
+    //                                 v_offset,
+    //                             ));
+
+    //                             if let Err(err) = GC::write_valid_entries_to_vlog(
+    //                                 store.clone(),
+    //                                 valid_entries,
+    //                                 synced_entries.to_owned(),
+    //                             )
+    //                             .await
+    //                             {
+    //                                 log::error!("{}", GCError(err.to_string()));
+    //                                 continue 'runner;
+    //                             }
+
+    //                             // call fsync on vlog to guarantee persistence to disk
+    //                             let sync_res = store.write().await.val_log.sync_to_disk().await;
+    //                             match sync_res {
+    //                                 Ok(_) => {
+    //                                     store.write().await.val_log.set_tail(new_tail_offset);
+    //                                     if let Err(err) =
+    //                                         GC::write_valid_entries_to_store(store.clone(), synced_entries.to_owned())
+    //                                             .await
+    //                                     {
+    //                                         log::error!("{}", GCError(err.to_string()));
+    //                                         continue 'runner;
+    //                                     }
+    //                                     let remove_res = GC::remove_unsed(
+    //                                         invalid_entries,
+    //                                         punch_hole_start_offset,
+    //                                         total_bytes_read,
+    //                                     )
+    //                                     .await;
+    //                                     match remove_res {
+    //                                         Err(err) => {
+    //                                             log::error!("{}", GCError(err.to_string()));
+    //                                             continue 'runner;
+    //                                         }
+    //                                         _ => {}
+    //                                     }
+    //                                 }
+    //                                 Err(err) => {
+    //                                     log::error!("{}", GCError(err.to_string()));
+    //                                     continue 'runner;
+    //                                 }
+    //                             }
+    //                         }
+    //                         Err(err) => {
+    //                             log::error!("{}", GCError(err.to_string()));
+    //                             continue 'runner;
+    //                         }
+    //                     }
+    //                 }
+    //                 Err(err) => {
+    //                     log::error!("{}", GCError(err.to_string()));
+    //                     continue 'runner;
+    //                 }
+    //             }
+    //         }
+    //     });
+    // }
 
     pub async fn handle_deleted_entries(
         invalid_entries_clone: Arc<RwLock<Vec<ValueLogEntry>>>,
@@ -226,27 +258,27 @@ impl GC {
             .await
     }
 
-    pub async fn write_valid_entries_to_store(
-        store: Arc<RwLock<DataStore<'_, K>>>,
-        valid_entries: Arc<RwLock<Vec<(Key, Value, ValOffset)>>>,
-    ) -> Result<(), Error> {
-        for (key, value, existing_v_offset) in valid_entries.to_owned().read().await.iter() {
-            let put_res = store
-                .write()
-                .await
-                .put(
-                    str::from_utf8(&key).unwrap(),
-                    str::from_utf8(&value).unwrap(),
-                    Some(*existing_v_offset),
-                )
-                .await;
-            match put_res {
-                Err(err) => return Err(err),
-                _ => {}
-            }
-        }
-        Ok(())
-    }
+    // pub async fn write_valid_entries_to_store(
+    //     store: Arc<RwLock<DataStore<'_, K>>>,
+    //     valid_entries: Arc<RwLock<Vec<(Key, Value, ValOffset)>>>,
+    // ) -> Result<(), Error> {
+    //     for (key, value, existing_v_offset) in valid_entries.to_owned().read().await.iter() {
+    //         let put_res = store
+    //             .write()
+    //             .await
+    //             .put(
+    //                 str::from_utf8(&key).unwrap(),
+    //                 str::from_utf8(&value).unwrap(),
+    //                 Some(*existing_v_offset),
+    //             )
+    //             .await;
+    //         match put_res {
+    //             Err(err) => return Err(err),
+    //             _ => {}
+    //         }
+    //     }
+    //     Ok(())
+    // }
 
     pub async fn write_valid_entries_to_vlog(
         store: Arc<RwLock<DataStore<'_, K>>>,
@@ -284,7 +316,7 @@ impl GC {
         #[cfg(target_os = "linux")]
         {
             let eng_read_lock = engine.read().await;
-            let garbage_collected = GC::punch_holes(
+            let garbage_collected = GarbageCollector::punch_holes(
                 eng_read_lock.val_log.file_path.to_str().unwrap(),
                 punch_hole_start_offset as i64,
                 punch_hole_length as i64,

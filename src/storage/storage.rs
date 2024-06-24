@@ -11,6 +11,7 @@ use crate::err::Error::*;
 use crate::filter::BloomFilter;
 use crate::flusher::Flusher;
 use crate::fs::{DataFileNode, DataFs, FileAsync, FileNode, IndexFileNode, IndexFs};
+use crate::gc::gc::{GCChanData, GC};
 use crate::index::{Index, IndexFile};
 use crate::key_range::KeyRange;
 use crate::memtable::{Entry, MemTable};
@@ -27,10 +28,10 @@ use chrono::Utc;
 use crossbeam_skiplist::SkipMap;
 use indexmap::IndexMap;
 use log::error;
-
 use std::path::PathBuf;
 use std::{hash::Hash, sync::Arc};
 use tokio::fs::{self, read_dir};
+use tokio::sync::watch;
 use tokio::{spawn, sync::RwLock};
 
 #[derive(Debug)]
@@ -48,10 +49,13 @@ where
     pub meta: Meta,
     pub flusher: Flusher,
     pub config: Config,
+    pub gc: GC,
     pub range_iterator: Option<RangeIterator<'a>>,
     pub read_only_memtables: ImmutableMemTable<K>,
     pub flush_signal_tx: async_broadcast::Sender<FlushSignal>,
     pub flush_signal_rx: async_broadcast::Receiver<FlushSignal>,
+    pub gc_tx: tokio::sync::watch::Sender<GCChanData>,
+    pub gc_rx: tokio::sync::watch::Receiver<GCChanData>,
 }
 
 #[derive(Clone, Debug)]
@@ -110,6 +114,13 @@ impl<'a> DataStore<'a, Key> {
             Arc::clone(&self.filters),
             Arc::clone(&self.key_range),
         );
+
+        self.gc.start_background_gc_task(
+            // self.flush_signal_rx.clone(),
+            Arc::clone(&self.buckets),
+            Arc::clone(&self.filters),
+            Arc::clone(&self.key_range),
+        );
     }
 
     pub async fn put(&mut self, key: &str, value: &str, existing_val_offset: Option<ValOffset>) -> Result<bool, Error> {
@@ -161,6 +172,8 @@ impl<'a> DataStore<'a, Key> {
             self.active_memtable = MemTable::with_specified_capacity_and_rate(size_unit, capacity, false_pos);
         }
         self.active_memtable.insert(&entry)?;
+        let gc_tx_clone = self.gc_tx.clone();
+   
         Ok(true)
     }
 
@@ -428,6 +441,7 @@ impl<'a> DataStore<'a, Key> {
         )
         .await;
         let (flush_signal_tx, flush_signal_rx) = broadcast(DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE);
+    
         match recover_res {
             Ok((active_memtable, read_only_memtables)) => {
                 let buckets = Arc::new(RwLock::new(buckets_map.to_owned()));
@@ -441,6 +455,7 @@ impl<'a> DataStore<'a, Key> {
                     filters.clone(),
                     key_range.clone(),
                 );
+                let (gc_tx, gc_rx) = tokio::sync::watch::channel(GCChanData::new(active_memtable.to_owned(), vlog.to_owned()));
 
                 Ok(DataStore {
                     active_memtable,
@@ -462,11 +477,14 @@ impl<'a> DataStore<'a, Key> {
                         compactors::CompactionReason::MaxSize,
                         config.false_positive_rate,
                     ),
-                    config: config.clone(),
+                    gc: GC::new(config.online_gc_interval, config.gc_chunk_size),
                     read_only_memtables,
                     range_iterator: None,
                     flush_signal_tx,
                     flush_signal_rx,
+                    gc_tx,
+                    gc_rx,
+                    config,
                 })
             }
             Err(err) => Err(MemTableRecoveryError(Box::new(err))),
@@ -514,19 +532,6 @@ impl<'a> DataStore<'a, Key> {
         Ok((active_memtable, read_only_memtables))
     }
 
-    // pub fn start_flush_listener(&self) {
-    //     let get = self.clone();
-    //     tokio::spawn(async move { loop {
-
-    //     let _get = self.get("key").await;
-
-
-
-
-    //     } });
-    //     log::info!("Compactor flush listener active");
-    // }
-
     pub async fn handle_empty_vlog(
         dir: DirPath,
         buckets_path: PathBuf,
@@ -568,7 +573,7 @@ impl<'a> DataStore<'a, Key> {
             filters.clone(),
             key_range.clone(),
         );
-
+        let (gc_tx, gc_rx) = tokio::sync::watch::channel(GCChanData::new(active_memtable.to_owned(), vlog.to_owned()));
         return Ok(DataStore {
             active_memtable,
             val_log: vlog,
@@ -587,13 +592,16 @@ impl<'a> DataStore<'a, Key> {
                 compactors::CompactionReason::MaxSize,
                 config.false_positive_rate,
             ),
-            config: config.clone(),
             meta,
             flusher,
             read_only_memtables,
             range_iterator: None,
             flush_signal_tx,
             flush_signal_rx,
+            gc: GC::new(config.online_gc_interval, config.gc_chunk_size),
+            gc_rx,
+            gc_tx,
+            config: config.to_owned()
         });
     }
     // Flush all memtables
