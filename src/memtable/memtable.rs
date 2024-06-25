@@ -64,7 +64,7 @@ impl InsertableToBucket for MemTable<Key> {
     fn size(&self) -> usize {
         self.size
     }
-    
+
     fn find_biggest_key(&self) -> Result<Key, Error> {
         let largest_entry = self.entries.iter().next_back();
         match largest_entry {
@@ -139,7 +139,9 @@ impl MemTable<Key> {
                 entry.key.to_owned(),
                 SkipMapValue::new(entry.val_offset, entry.created_at, entry.is_tombstone),
             );
-            self.most_recent_entry = entry.to_owned();
+            if entry.val_offset > self.most_recent_entry.val_offset {
+                self.most_recent_entry = entry.to_owned();
+            }
             self.size += entry_length_byte;
             return Ok(());
         }

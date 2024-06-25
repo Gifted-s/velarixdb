@@ -193,6 +193,7 @@ impl GC {
                                     synced_entries.to_owned(),
                                     Arc::clone(&memtable),
                                     gc_updated_entries,
+                                    Arc::clone(&vlog),
                                 )
                                 .await
                                 {
@@ -236,6 +237,7 @@ impl GC {
         valid_entries: ValidEntries,
         table: GCTable,
         gc_updated_entries: GCUpdatedEntries<Key>,
+        vlog: GCLog,
     ) -> Result<(), Error> {
         gc_updated_entries.write().await.clear();
         for (key, value, existing_v_offset) in valid_entries.to_owned().read().await.iter() {
@@ -249,6 +251,9 @@ impl GC {
             .await
             {
                 return Err(err);
+            };
+            if existing_v_offset > &vlog.read().await.head_offset {
+                vlog.write().await.set_head(*existing_v_offset)
             }
         }
         Ok(())

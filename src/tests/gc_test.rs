@@ -3,23 +3,23 @@ mod tests {
     use crate::consts::{SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8};
     use crate::err::Error;
     use crate::gc::gc::GC;
-    use crate::helpers;
     use crate::storage::{DataStore, SizeUnit};
     use crate::tests::workload::{generate_workload_data_as_vec, insert_parallel};
-    use futures::future::join_all;
     use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::tempdir;
     use tokio::fs::{self};
     use tokio::sync::RwLock;
 
-    async fn setup(store: Arc<RwLock<DataStore<'static, Vec<u8>>>>) -> Result<(), Error> {
+    async fn setup(
+        store: Arc<RwLock<DataStore<'static, Vec<u8>>>>,
+        workload_size: usize,
+        key_len: usize,
+        val_len: usize,
+        write_read_ratio: f64,
+    ) -> Result<(), Error> {
         let _ = env_logger::builder().is_test(true).try_init();
-        let size = 15000; // 100k
-        let key_len = 5;
-        let val_len = 5;
-        let write_read_ratio = 0.5;
-        let (_, write_workload) = generate_workload_data_as_vec(size, key_len, val_len, write_read_ratio);
+        let (_, write_workload) = generate_workload_data_as_vec(workload_size, key_len, val_len, write_read_ratio);
         insert_parallel(&write_workload, store).await
     }
     // Generate test to find keys after compaction
@@ -29,7 +29,11 @@ mod tests {
         let path = PathBuf::from(root.path().join("bump1"));
         let s_engine = DataStore::new(path.clone()).await.unwrap();
         let store = Arc::new(RwLock::new(s_engine));
-        if let Err(err) = setup(store.clone()).await {
+        let workload_size = 15000;
+        let key_len = 5;
+        let val_len = 5;
+        let write_read_ratio = 0.5;
+        if let Err(err) = setup(store.clone(), workload_size, key_len, val_len, write_read_ratio).await {
             log::error!("Setup failed {}", err);
             return;
         }
@@ -66,7 +70,11 @@ mod tests {
         let path = PathBuf::from(root.path().join("bump2"));
         let s_engine = DataStore::new(path.clone()).await.unwrap();
         let store = Arc::new(RwLock::new(s_engine));
-        if let Err(err) = setup(store.clone()).await {
+        let workload_size = 15000;
+        let key_len = 5;
+        let val_len = 5;
+        let write_read_ratio = 0.5;
+        if let Err(err) = setup(store.clone(), workload_size, key_len, val_len, write_read_ratio).await {
             log::error!("Setup failed {}", err);
             return;
         }
@@ -112,12 +120,16 @@ mod tests {
         let path = PathBuf::from(root.path().join("bump3"));
         let s_engine = DataStore::new(path.clone()).await.unwrap();
         let store = Arc::new(RwLock::new(s_engine));
-        if let Err(err) = setup(store.clone()).await {
+        let workload_size = 15000;
+        let key_len = 5;
+        let val_len = 5;
+        let write_read_ratio = 0.5;
+        if let Err(err) = setup(store.clone(), workload_size, key_len, val_len, write_read_ratio).await {
             log::error!("Setup failed {}", err);
             return;
         }
         let storage_eng = store.read().await;
-        let mut config = storage_eng.gc.config.clone();
+        let config = storage_eng.gc.config.clone();
         let memtable = storage_eng.gc_table.clone();
         let vlog = storage_eng.gc_log.clone();
         let initial_tail_offset = vlog.read().await.tail_offset;
@@ -147,7 +159,11 @@ mod tests {
         let path = PathBuf::from(root.path().join("bump4"));
         let s_engine = DataStore::new(path.clone()).await.unwrap();
         let store = Arc::new(RwLock::new(s_engine));
-        if let Err(err) = setup(store.clone()).await {
+        let workload_size = 15000;
+        let key_len = 5;
+        let val_len = 5;
+        let write_read_ratio = 0.5;
+        if let Err(err) = setup(store.clone(), workload_size, key_len, val_len, write_read_ratio).await {
             log::error!("Setup failed {}", err);
             return;
         }
@@ -192,7 +208,11 @@ mod tests {
         let path = PathBuf::from(root.path().join("bump5"));
         let s_engine = DataStore::new(path.clone()).await.unwrap();
         let store = Arc::new(RwLock::new(s_engine));
-        if let Err(err) = setup(store.clone()).await {
+        let workload_size = 15000;
+        let key_len = 5;
+        let val_len = 5;
+        let write_read_ratio = 0.5;
+        if let Err(err) = setup(store.clone(), workload_size, key_len, val_len, write_read_ratio).await {
             log::error!("Setup failed {}", err);
             return;
         }

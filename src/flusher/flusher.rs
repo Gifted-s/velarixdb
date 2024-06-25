@@ -87,7 +87,7 @@ impl Flusher {
                     if let Err(err) = tx.try_broadcast(FLUSH_SIGNAL) {
                         match err {
                             async_broadcast::TrySendError::Full(_) => {
-                                log::error!("{}", Error::FlushSignalChannelOverflowError)
+                                log::info!("{}", Error::FlushSignalChannelOverflowError.to_string())
                             }
                             _ => log::error!("{}", err),
                         }

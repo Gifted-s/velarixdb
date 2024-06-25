@@ -16,13 +16,13 @@ pub struct Entry {
     pub val: Vec<u8>,
 }
 
-pub type WriteWorkloadMap = HashMap<Key, Value>;
+type WriteWorkloadMap = HashMap<Key, Value>;
 
-pub type ReadWorkloadMap = HashMap<Key, Value>;
+type ReadWorkloadMap = HashMap<Key, Value>;
 
-pub type ReadWorkloadVec = Vec<Entry>;
+type ReadWorkloadVec = Vec<Entry>;
 
-pub type WriteWorkloadVec = Vec<Entry>;
+type WriteWorkloadVec = Vec<Entry>;
 
 pub fn generate_workload_data_as_map(
     size: usize,
@@ -93,10 +93,11 @@ pub async fn insert_parallel(
     let all_results = join_all(tasks).await;
     for tokio_response in all_results {
         match tokio_response {
-            Ok(entry) => match entry {
-                Ok(_) => {}
-                Err(err) => return Err(err),
-            },
+            Ok(entry) => {
+                if let Err(err) = entry {
+                    return Err(err);
+                }
+            }
             Err(_) => return Err(TokioJoinError),
         }
     }

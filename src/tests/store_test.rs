@@ -2,21 +2,21 @@
 mod tests {
 
     use crate::consts::DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI;
-    use crate::storage::DataStore;
-    use crate::helpers;
-    use futures::future::join_all;
-    use log::info;
-    use tempfile::tempdir;
-    use tokio::time::{sleep, Duration};
     use crate::err::Error;
     use crate::err::Error::*;
+    use crate::helpers;
+    use crate::storage::DataStore;
+    use futures::future::join_all;
+    use log::info;
     use std::path::PathBuf;
     use std::sync::Arc;
+    use tempfile::tempdir;
     use tokio::fs::{self};
     use tokio::sync::RwLock;
+    use tokio::time::{sleep, Duration};
 
     fn init() {
-         let _ = env_logger::builder().is_test(true).try_init();
+        let _ = env_logger::builder().is_test(true).try_init();
     }
     // Generate test to find keys after compaction
     #[tokio::test]
@@ -99,10 +99,6 @@ mod tests {
 
         //  let _ = fs::remove_dir_all(path.clone()).await;
     }
-
-
-
-    
 
     #[tokio::test]
     async fn datastore_create_synchronous() {
