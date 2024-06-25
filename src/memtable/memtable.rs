@@ -27,6 +27,23 @@ pub struct Entry<K: Hash, V> {
     pub created_at: u64,
     pub is_tombstone: bool,
 }
+#[derive(Clone, Debug, PartialEq)]
+pub struct SkipMapValue<V: Ord> {
+    pub val_offset: V,
+    pub created_at: CreationTime,
+    pub is_tombstone: IsTombStone,
+}
+
+impl<V: Ord> SkipMapValue<V> {
+    pub(crate) fn new(val_offset: V, created_at: CreationTime, is_tombstone: IsTombStone) -> Self {
+        SkipMapValue {
+            val_offset,
+            created_at,
+            is_tombstone,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct MemTable<K: Hash + cmp::Ord> {
     pub entries: SkipMapEntries<K>,
@@ -37,6 +54,7 @@ pub struct MemTable<K: Hash + cmp::Ord> {
     pub capacity: usize,
     pub created_at: DateTime<Utc>,
     pub read_only: bool,
+    pub most_recent_entry: Entry<K, ValOffset>,
 }
 
 impl InsertableToBucket for MemTable<Key> {
@@ -46,7 +64,7 @@ impl InsertableToBucket for MemTable<Key> {
     fn size(&self) -> usize {
         self.size
     }
-    // Find the biggest element in the skip list
+    
     fn find_biggest_key(&self) -> Result<Key, Error> {
         let largest_entry = self.entries.iter().next_back();
         match largest_entry {
@@ -109,6 +127,7 @@ impl MemTable<Key> {
             created_at: now,
             false_positive_rate,
             read_only: false,
+            most_recent_entry: Entry::new(vec![], 0, Utc::now().timestamp_millis() as u64, false),
         }
     }
 
@@ -118,24 +137,25 @@ impl MemTable<Key> {
             self.bloom_filter.set(&entry.key.clone());
             self.entries.insert(
                 entry.key.to_owned(),
-                (entry.val_offset, entry.created_at, entry.is_tombstone),
+                SkipMapValue::new(entry.val_offset, entry.created_at, entry.is_tombstone),
             );
+            self.most_recent_entry = entry.to_owned();
             self.size += entry_length_byte;
             return Ok(());
         }
 
         self.entries.insert(
             entry.key.to_owned(),
-            (entry.val_offset, entry.created_at, entry.is_tombstone),
+            SkipMapValue::new(entry.val_offset, entry.created_at, entry.is_tombstone),
         );
         self.size += entry_length_byte;
         Ok(())
     }
 
-    pub fn get(&self, key: &Vec<u8>) -> Option<(ValOffset, CreationTime, IsTombStone)> {
+    pub fn get(&self, key: &Vec<u8>) -> Option<SkipMapValue<ValOffset>> {
         if self.bloom_filter.contains(key) {
             if let Some(entry) = self.entries.get(key) {
-                return Some(*entry.value()); // returns value offset
+                return Some(entry.value().to_owned()); // returns value offset
             }
         }
         None
@@ -147,7 +167,7 @@ impl MemTable<Key> {
         }
         self.entries.insert(
             entry.key.to_vec(),
-            (entry.val_offset, entry.created_at, entry.is_tombstone),
+            SkipMapValue::new(entry.val_offset, entry.created_at, entry.is_tombstone),
         );
         Ok(())
     }
@@ -166,15 +186,11 @@ impl MemTable<Key> {
         if !self.bloom_filter.contains(&entry.key) {
             return Err(KeyNotFoundInMemTable);
         }
-        let created_at = Utc::now();
+        let created_at = Utc::now().timestamp_millis() as u64;
         // Insert thumb stone to indicate deletion
         self.entries.insert(
             entry.key.to_vec(),
-            (
-                entry.val_offset,
-                created_at.timestamp_millis() as u64,
-                entry.is_tombstone,
-            ),
+            SkipMapValue::new(entry.val_offset, created_at, entry.is_tombstone),
         );
         Ok(())
     }
@@ -344,23 +360,43 @@ mod tests {
         }
         assert_eq!(
             mem_table.lock().unwrap().get(&keys[0]).unwrap(),
-            (0, created_at, is_tombstone)
+            SkipMapValue {
+                val_offset: 0,
+                created_at,
+                is_tombstone
+            }
         );
         assert_eq!(
             mem_table.lock().unwrap().get(&keys[1]).unwrap(),
-            (1, created_at, is_tombstone)
+            SkipMapValue {
+                val_offset: 1,
+                created_at,
+                is_tombstone
+            }
         );
         assert_eq!(
             mem_table.lock().unwrap().get(&keys[2]).unwrap(),
-            (2, created_at, is_tombstone)
+            SkipMapValue {
+                val_offset: 2,
+                created_at,
+                is_tombstone
+            }
         );
         assert_eq!(
             mem_table.lock().unwrap().get(&keys[3]).unwrap(),
-            (3, created_at, is_tombstone)
+            SkipMapValue {
+                val_offset: 3,
+                created_at,
+                is_tombstone
+            }
         );
         assert_eq!(
             mem_table.lock().unwrap().get(&keys[4]).unwrap(),
-            (4, created_at, is_tombstone)
+            SkipMapValue {
+                val_offset: 4,
+                created_at,
+                is_tombstone
+            }
         );
     }
 
@@ -383,19 +419,19 @@ mod tests {
 
         let e = mem_table.get(&entry.key);
         assert!(e.is_some());
-        assert_eq!(e.unwrap().0, val_offset);
+        assert_eq!(e.unwrap().val_offset, val_offset);
 
         entry.val_offset = 300;
         let _ = mem_table.update(&entry);
 
         let e = mem_table.get(&entry.key);
-        assert_eq!(e.unwrap().0, 300);
+        assert_eq!(e.unwrap().val_offset, 300);
 
         entry.is_tombstone = true;
         let _ = mem_table.update(&entry);
 
         let e = mem_table.get(&entry.key);
-        assert_eq!(e.unwrap().2, true);
+        assert_eq!(e.unwrap().is_tombstone, true);
 
         entry.key = vec![2, 2, 3, 4];
         let e = mem_table.update(&entry);
@@ -422,12 +458,12 @@ mod tests {
 
         let e = mem_table.get(&entry.key);
         assert!(e.is_some());
-        assert_eq!(e.unwrap().0, val_offset);
+        assert_eq!(e.unwrap().val_offset, val_offset);
         entry.is_tombstone = true;
         let _ = mem_table.delete(&entry);
 
         let e = mem_table.get(&entry.key);
-        assert_eq!(e.unwrap().2, true);
+        assert_eq!(e.unwrap().is_tombstone, true);
 
         entry.key = vec![2, 2, 3, 4];
         let e = mem_table.delete(&entry);

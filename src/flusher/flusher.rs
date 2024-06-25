@@ -7,10 +7,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 type K = types::Key;
-
-pub type InActiveMemtableID = Vec<u8>;
 pub type InActiveMemtable = Arc<RwLock<MemTable<K>>>;
-pub type FlushDataMemTable = (InActiveMemtableID, InActiveMemtable);
 
 #[derive(Debug, Clone)]
 pub struct Flusher {

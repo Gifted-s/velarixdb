@@ -12,7 +12,6 @@ use super::{
     compact::{MergePointer, WriteTracker},
     MergedSSTable, TableInsertor,
 };
-use crate::err::Error::*;
 use crate::{
     bucket::{Bucket, BucketsToCompact, InsertableToBucket, SSTablesToRemove},
     err::Error,
@@ -21,6 +20,7 @@ use crate::{
     sst::Table,
     types::{BloomFilterHandle, Bool, BucketMapHandle, Key, KeyRangeHandle, ValOffset},
 };
+use crate::{err::Error::*, memtable::SkipMapValue};
 
 #[derive(Debug, Clone)]
 pub struct SizedTierRunner<'a> {
@@ -238,10 +238,10 @@ impl<'a> SizedTierRunner<'a> {
             .iter()
             .map(|e| {
                 Entry::new(
-                    e.key().to_vec(), // key
-                    e.value().0,      // v_offset
-                    e.value().1,      // insertion time
-                    e.value().2,      // is tombstone
+                    e.key().to_vec(),       // key
+                    e.value().val_offset,   // v_offset
+                    e.value().created_at,   // insertion time
+                    e.value().is_tombstone, // is tombstone
                 )
             })
             .collect::<Vec<Entry<Key, ValOffset>>>();
@@ -250,10 +250,10 @@ impl<'a> SizedTierRunner<'a> {
             .iter()
             .map(|e| {
                 Entry::new(
-                    e.key().to_vec(), // key
-                    e.value().0,      // v_offset
-                    e.value().1,      // insertion time
-                    e.value().2,      // is tombstone
+                    e.key().to_vec(),       // key
+                    e.value().val_offset,   // v_offset
+                    e.value().created_at,   // insertion time
+                    e.value().is_tombstone, // is tombstone
                 )
             })
             .collect::<Vec<Entry<Key, ValOffset>>>();
@@ -297,7 +297,10 @@ impl<'a> SizedTierRunner<'a> {
         }
 
         merged_entries.iter().for_each(|e| {
-            new_sst_map.insert(e.key.to_owned(), (e.val_offset, e.created_at, e.is_tombstone));
+            new_sst_map.insert(
+                e.key.to_owned(),
+                SkipMapValue::new(e.val_offset, e.created_at, e.is_tombstone),
+            );
         });
         new_sst.set_entries(new_sst_map);
         Ok(Box::new(new_sst))

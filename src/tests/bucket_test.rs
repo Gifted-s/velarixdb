@@ -1,19 +1,17 @@
+#[cfg(test)]
+
 mod tests {
-    use super::*;
     use crate::{
-        bucket::{self, Bucket, BucketMap, InsertableToBucket},
+        bucket::{Bucket, BucketMap, InsertableToBucket},
         consts::{BUCKET_HIGH, MIN_TRESHOLD},
         err::Error,
         tests::fixtures::{self, sst::generate_ssts},
     };
-    use std::{
-        path::{PathBuf, Prefix},
-        sync::Arc,
-        time::Duration,
-    };
-    use tempfile::{tempdir, tempfile};
-    use tokio::{fs, time::sleep};
+    use std::{path::PathBuf, sync::Arc};
+    use tempfile::tempdir;
+    use tokio::fs;
     use uuid::Uuid;
+
     #[tokio::test]
     async fn test_bucket_new() -> Result<(), Error> {
         let root = tempdir().unwrap();

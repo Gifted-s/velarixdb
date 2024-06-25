@@ -376,7 +376,7 @@ mod tests {
             let k = k.clone();
             tokio::spawn(async move {
                 let mut value = s_engine.write().await;
-                value.put(&k, &k, None).await
+                value.put(&k, &k).await
             })
         });
 

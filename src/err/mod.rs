@@ -112,7 +112,7 @@ pub enum Error {
     #[error("Error punching hole in file, reason `{0}`")]
     GCErrorFailedToPunchHoleInVlogFile(io::Error),
 
-    #[error("Unsuported OS, err message `{0}`")]
+    #[error("Unsuported OS for garbage collection, err message `{0}`")]
     GCErrorUnsupportedPlatform(String),
 
     #[error("GC Error `{0}`")]
@@ -121,8 +121,11 @@ pub enum Error {
     #[error("Range scan error `{0}`")]
     RangeScanError(Box<Self>),
 
-    #[error("Flush signal channel was overloaded with signals, please check all signal consumers")]
+    #[error("Flush signal channel was overloaded with signals, please check all signal consumers or try again later")]
     FlushSignalChannelOverflowError,
+
+    #[error("GC update channel was overloaded with data, please check all  consumers")]
+    GCUpdateChannelOverflowError,
 
     #[error("Flush signal channel has been closed")]
     FlushSignalChannelClosedError,
@@ -144,4 +147,7 @@ pub enum Error {
 
     #[error("Error, merged sstables has empty entries")]
     MergeSSTContainsZeroEntries,
+
+    #[error("Tokio join tasks error")]
+    TokioJoinError,
 }
