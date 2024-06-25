@@ -18,7 +18,7 @@ pub const VLOG_FILE_NAME: &str = "val_log.bin";
 
 pub const META_DIRECTORY_NAME: &str = "meta";
 
-pub const TOMB_STONE_MARKER: &str = "";
+pub const TOMB_STONE_MARKER: &str = "*";
 
 // This is a minimum time that must pass since the last compaction attempt for a specific data file (SSTable).
 // This prevents continuous re-compactions of the same file.
@@ -34,10 +34,9 @@ pub const DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI: u64 = 1000 * 20;
 //pub const DEFAULT_ONLINE_GARBAGE_COLLECTION_INTERVAL_MILLI: 10 hours
 pub const DEFAULT_ONLINE_GARBAGE_COLLECTION_INTERVAL_MILLI: u64 = 36000000;
 
-/// Only the compactor listens to flush events for now
-/// This should be greater than or equal to the writter buffer size since
-/// all be buffer can be flushed in parallel leading to multiple signals sent at once
-pub const DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE: usize = 2;
+pub const DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE: usize = 1;
+
+pub const DEFAULT_GC_UPDATE_CHANNEL_SIZE: usize = 1;
 // tombstone should only be removed after 120 days to guarantee that obsolete data don't
 // resurrect by prematurelly deleting tombstone
 pub const DEFAULT_TOMBSTONE_TTL: u64 = 120 * 86400000;
@@ -69,6 +68,10 @@ pub const EOF: &str = "EOF";
 pub const HEAD_ENTRY_KEY: &[u8; 4] = b"head";
 
 pub const TAIL_ENTRY_KEY: &[u8; 4] = b"tail";
+
+pub const HEAD_ENTRY_VALUE: &[u8; 4] = b"head";
+
+pub const TAIL_ENTRY_VALUE: &[u8; 4] = b"tail";
 // 4 bytes to store length of key "head"
 // 4 bytes to store the actual key "head"
 // 4 bytes to store the head offset

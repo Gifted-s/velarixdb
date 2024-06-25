@@ -15,7 +15,7 @@ use crate::{
     filter::BloomFilter,
     fs::{DataFileNode, DataFs, FileAsync, FileNode, IndexFileNode, IndexFs},
     index::{Index, IndexFile, RangeOffset},
-    memtable::Entry,
+    memtable::{Entry, SkipMapValue},
     types::{CreationTime, IsTombStone, Key, SkipMapEntries, ValOffset},
 };
 
@@ -173,7 +173,12 @@ impl Table {
         let mut current_block = Block::new();
 
         for e in self.entries.iter() {
-            let entry = Entry::new(e.key().clone(), e.value().0, e.value().1, e.value().2);
+            let entry = Entry::new(
+                e.key().clone(),
+                e.value().val_offset,
+                e.value().created_at,
+                e.value().is_tombstone,
+            );
             //TODO: reorder  key length(used during fetch) + key len(actual key length) + value length(4 bytes) + date in milliseconds(8 bytes)
             let entry_size = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
             if current_block.is_full(entry_size) {
@@ -226,7 +231,7 @@ impl Table {
         filter
     }
 
-    pub(crate) fn get_value_from_entries(&self, key: &[u8]) -> Option<(ValOffset, CreationTime, IsTombStone)> {
+    pub(crate) fn get_value_from_entries(&self, key: &[u8]) -> Option<SkipMapValue<ValOffset>> {
         self.entries.get(key).map(|entry| entry.value().to_owned())
     }
 
@@ -244,7 +249,7 @@ impl Table {
         self.size
     }
 
-    pub(crate) fn set_entries(&mut self, entries: Arc<SkipMap<Key, (ValOffset, CreationTime, IsTombStone)>>) {
+    pub(crate) fn set_entries(&mut self, entries: Arc<SkipMap<Key, SkipMapValue<ValOffset>>>) {
         self.entries = entries;
         self.set_sst_size_from_entries();
     }

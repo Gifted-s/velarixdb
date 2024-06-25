@@ -7,10 +7,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 type K = types::Key;
-
-pub type InActiveMemtableID = Vec<u8>;
 pub type InActiveMemtable = Arc<RwLock<MemTable<K>>>;
-pub type FlushDataMemTable = (InActiveMemtableID, InActiveMemtable);
 
 #[derive(Debug, Clone)]
 pub struct Flusher {
@@ -90,7 +87,7 @@ impl Flusher {
                     if let Err(err) = tx.try_broadcast(FLUSH_SIGNAL) {
                         match err {
                             async_broadcast::TrySendError::Full(_) => {
-                                log::error!("{}", Error::FlushSignalChannelOverflowError)
+                                log::info!("{}", Error::FlushSignalChannelOverflowError.to_string())
                             }
                             _ => log::error!("{}", err),
                         }

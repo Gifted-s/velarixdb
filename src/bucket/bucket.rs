@@ -113,7 +113,8 @@ impl Bucket {
 }
 
 impl BucketMap {
-    pub fn new(dir: PathBuf) -> Self {
+    pub async fn new(dir: PathBuf) -> Self {
+        let _ = FileNode::create_dir_all(dir.to_owned()).await;
         Self {
             dir,
             buckets: IndexMap::new(),

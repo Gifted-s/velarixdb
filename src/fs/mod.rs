@@ -12,7 +12,7 @@ use crate::{
     err::Error::{self, *},
     index::RangeOffset,
     load_buffer,
-    memtable::Entry,
+    memtable::{Entry, SkipMapValue},
     types::{CreationTime, IsTombStone, Key, NoBytesRead, SkipMapEntries, ValOffset},
     value_log::ValueLogEntry,
 };
@@ -262,7 +262,7 @@ impl DataFs for DataFileNode {
             let created_at = u64::from_le_bytes(created_at_bytes);
             let value_offset = u32::from_le_bytes(val_offset_bytes);
             let is_tombstone = is_tombstone_byte[0] == 1;
-            entries.insert(key, (value_offset as usize, created_at, is_tombstone));
+            entries.insert(key, SkipMapValue::new(value_offset as usize, created_at, is_tombstone));
         }
         return Ok((entries, total_bytes_read));
     }
@@ -515,8 +515,8 @@ impl VLogFs for VLogFileNode {
             if bytes_read == 0 {
                 return Ok((entries, total_bytes_read));
             }
-
             let key_len = u32::from_le_bytes(key_len_bytes);
+
             let mut val_len_bytes = [0; SIZE_OF_U32];
             bytes_read = load_buffer!(file, &mut val_len_bytes, path.to_owned())?;
             total_bytes_read += bytes_read;
@@ -583,7 +583,7 @@ impl IndexFs for IndexFileNode {
     }
     async fn get_from_index(&self, searched_key: &[u8]) -> Result<Option<u32>, Error> {
         let path = &self.node.file_path;
-        let mut block_offset: i32 = -1;
+        let block_offset: i32 = -1;
         let mut file = self.node.file.write().await;
         file.seek(std::io::SeekFrom::Start((0) as u64))
             .await

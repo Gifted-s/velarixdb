@@ -1,22 +1,30 @@
-// NOTE: GC is only supported on Linux based OS for now because File Systems for other OS does not
+// NOTE: GarbageCollector is only supported on Linux based OS for now because File Systems for other OS does not
 // support the FILE_PUNCH_HOLE command which is crucial for reclaiming unused spaces on the disk
 
 extern crate libc;
 extern crate nix;
-use crate::consts::{GC_CHUNK_SIZE, TAIL_ENTRY_KEY, TOMB_STONE_MARKER};
-use crate::types::{Key, ValOffset, Value};
-use crate::value_log::ValueLogEntry;
+use crate::consts::{TAIL_ENTRY_KEY, TOMB_STONE_MARKER};
+use crate::filter::BloomFilter;
+use crate::fs::{FileAsync, FileNode};
+use crate::index::Index;
+use crate::memtable::{Entry, MemTable, SkipMapValue};
+use crate::types::{
+    BloomFilterHandle, CreationTime, GCUpdatedEntries, ImmutableMemTable, IsTombStone, Key, KeyRangeHandle,
+    SkipMapEntries, ValOffset, Value,
+};
+use crate::value_log::{ValueLog, ValueLogEntry};
 use crate::{err, types};
 use crate::{err::Error, storage::*};
 use chrono::Utc;
+use crossbeam_skiplist::SkipMap;
 use err::Error::*;
 use futures::future::join_all;
 use nix::libc::{c_int, off_t};
 use std::os::unix::io::AsRawFd;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use std::{io, str};
-use tokio::sync::RwLock;
+use tokio::sync::{broadcast, RwLock};
 use tokio::time::sleep;
 type K = types::Key;
 //type V = types::Value;
@@ -28,182 +36,194 @@ extern "C" {
 const FALLOC_FL_PUNCH_HOLE: c_int = 0x2;
 const FALLOC_FL_KEEP_SIZE: c_int = 0x1;
 
-impl DataStore<'static, Key> {
-    pub async fn garbage_collect(&'static mut self) {
-        let store = Arc::new(RwLock::new(self));
+type GCTable = Arc<RwLock<MemTable<Key>>>;
+type GCLog = Arc<RwLock<ValueLog>>;
+type ValidEntries = Arc<RwLock<Vec<(Key, Value, ValOffset)>>>;
+type InvalidEntries = Arc<RwLock<Vec<ValueLogEntry>>>;
+type SyncedEntries = Arc<RwLock<Vec<(Key, Value, ValOffset)>>>;
 
+#[derive(Debug)]
+pub struct GC {
+    pub table: GCTable,
+    pub vlog: GCLog,
+    pub config: Config,
+}
+#[derive(Clone, Debug)]
+pub struct Config {
+    pub online_gc_interval: u64,
+    pub gc_chunk_size: usize,
+}
+
+impl GC {
+    pub fn new(online_gc_interval: u64, gc_chunk_size: usize, table: GCTable, vlog: GCLog) -> Self {
+        Self {
+            table,
+            vlog,
+            config: Config {
+                online_gc_interval,
+                gc_chunk_size,
+            },
+        }
+    }
+    pub fn start_background_gc_task(
+        &self,
+        filters: BloomFilterHandle,
+        key_range: KeyRangeHandle,
+        read_only_memtables: ImmutableMemTable<K>,
+        gc_updated_entries: GCUpdatedEntries<K>,
+    ) {
+        let cfg = self.config.to_owned();
+        let memtable = self.table.clone();
+        let vlog = self.vlog.clone();
+        let table_ref = Arc::clone(&memtable);
+        let vlog_ref = Arc::clone(&vlog);
+        let filters_ref = Arc::clone(&filters);
+        let key_range_ref = Arc::clone(&key_range);
+        let read_only_memtables_ref = Arc::clone(&read_only_memtables);
+        let gc_updated_entries_ref = Arc::clone(&gc_updated_entries);
         tokio::spawn(async move {
-            'runner: loop {
-                sleep_gc_task(store.read().await.config.online_garbage_collection_interval).await;
-                let store_clone = store.clone();
-                let invalid_entries = Arc::new(RwLock::new(Vec::new()));
-                let valid_entries = Arc::new(RwLock::new(Vec::new()));
-                let synced_entries = Arc::new(RwLock::new(Vec::new()));
-
-                let store_read_lock = store_clone.read().await;
-                let punch_hole_start_offset = store_read_lock.val_log.tail_offset.to_owned();
-                let chunk_res = store_read_lock
-                    .val_log
-                    .read_chunk_to_garbage_collect(GC_CHUNK_SIZE)
-                    .await;
-                drop(store_read_lock);
-                match chunk_res {
-                    Ok((entries, total_bytes_read)) => {
-                        let tasks = entries.into_iter().map(|entry| {
-                            let invalid_entries_clone = Arc::clone(&invalid_entries);
-                            let valid_entries_clone = Arc::clone(&valid_entries);
-                            let s_engine = store.clone();
-                            tokio::spawn(async move {
-                                let s = s_engine.read().await;
-                                let most_recent_value = s.get(str::from_utf8(&entry.key).unwrap()).await;
-                                match most_recent_value {
-                                    Ok((value, creation_time)) => {
-                                        if entry.created_at != creation_time
-                                            || value == TOMB_STONE_MARKER.as_bytes().to_vec()
-                                        {
-                                            invalid_entries_clone.write().await.push(entry);
-                                        } else {
-                                            valid_entries_clone.write().await.push((entry.key, value));
-                                        }
-                                        Ok(())
-                                    }
-                                    Err(err) => s.handle_deleted_entries(invalid_entries_clone, entry, err).await,
-                                }
-                            })
-                        });
-                        let all_results = join_all(tasks).await;
-                        for res in all_results {
-                            match res {
-                                Ok(entry) => match entry {
-                                    Err(err) => {
-                                        log::error!("{}", err);
-                                        continue 'runner;
-                                    }
-                                    _ => {}
-                                },
-                                Err(err) => {
-                                    log::error!("{}", GCError(err.to_string()));
-                                    continue 'runner;
-                                }
-                            }
-                        }
-                        let new_tail_offset = store.read().await.val_log.tail_offset + total_bytes_read;
-                        let append_res = DataStore::update_tail(store.clone(), new_tail_offset).await;
-
-                        match append_res {
-                            Ok(v_offset) => {
-                                synced_entries.write().await.push((
-                                    TAIL_ENTRY_KEY.to_vec(),
-                                    new_tail_offset.to_le_bytes().to_vec(),
-                                    v_offset,
-                                ));
-
-                                if let Err(err) = DataStore::write_valid_entries_to_vlog(
-                                    store.clone(),
-                                    valid_entries,
-                                    synced_entries.to_owned(),
-                                )
-                                .await
-                                {
-                                    log::error!("{}", GCError(err.to_string()));
-                                    continue 'runner;
-                                }
-
-                                // call fsync on vlog to guarantee persistence to disk
-                                let sync_res = store.write().await.val_log.sync_to_disk().await;
-                                match sync_res {
-                                    Ok(_) => {
-                                        store.write().await.val_log.set_tail(new_tail_offset);
-                                        if let Err(err) = DataStore::write_valid_entries_to_store(
-                                            store.clone(),
-                                            synced_entries.to_owned(),
-                                        )
-                                        .await
-                                        {
-                                            log::error!("{}", GCError(err.to_string()));
-                                            continue 'runner;
-                                        }
-                                        let remove_res = store
-                                            .write()
-                                            .await
-                                            .remove_unsed(invalid_entries, punch_hole_start_offset, total_bytes_read)
-                                            .await;
-                                        match remove_res {
-                                            Err(err) => {
-                                                log::error!("{}", GCError(err.to_string()));
-                                                continue 'runner;
-                                            }
-                                            _ => {}
-                                        }
-                                    }
-                                    Err(err) => {
-                                        log::error!("{}", GCError(err.to_string()));
-                                        continue 'runner;
-                                    }
-                                }
-                            }
-                            Err(err) => {
-                                log::error!("{}", GCError(err.to_string()));
-                                continue 'runner;
-                            }
-                        }
+            loop {
+                sleep_gc_task(cfg.online_gc_interval).await;
+                let res = GC::gc_handler(
+                    &cfg,
+                    Arc::clone(&table_ref),
+                    Arc::clone(&vlog_ref),
+                    Arc::clone(&filters_ref),
+                    Arc::clone(&key_range_ref),
+                    Arc::clone(&read_only_memtables_ref),
+                    Arc::clone(&gc_updated_entries_ref),
+                )
+                .await;
+                match res {
+                    Ok(_) => {
+                        log::info!("GC successful, tail shifted {}", vlog.read().await.tail_offset)
                     }
                     Err(err) => {
-                        log::error!("{}", GCError(err.to_string()));
-                        continue 'runner;
+                        log::error!("{}", GCError(err.to_string()))
                     }
                 }
             }
         });
     }
 
-    pub async fn handle_deleted_entries(
-        &self,
-        invalid_entries_clone: Arc<RwLock<Vec<ValueLogEntry>>>,
-        entry: ValueLogEntry,
-        err: Error,
-    ) -> std::result::Result<(), Error> {
-        match err {
-            KeyFoundAsTombstoneInMemtableError => {
-                invalid_entries_clone.write().await.push(entry);
-                Ok(())
+    pub async fn gc_handler(
+        cfg: &Config,
+        memtable: GCTable,
+        vlog: GCLog,
+        filters: BloomFilterHandle,
+        key_range: KeyRangeHandle,
+        read_only_memtables: ImmutableMemTable<K>,
+        gc_updated_entries: GCUpdatedEntries<Key>,
+    ) -> Result<(), Error> {
+        let invalid_entries = Arc::new(RwLock::new(Vec::new()));
+        let valid_entries = Arc::new(RwLock::new(Vec::new()));
+        let synced_entries = Arc::new(RwLock::new(Vec::new()));
+        let vlog_reader = vlog.read().await;
+        let punch_hole_start_offset = vlog_reader.tail_offset.to_owned();
+        let chunk_res = vlog_reader.read_chunk_to_garbage_collect(cfg.gc_chunk_size).await;
+        drop(vlog_reader);
+        Ok(match chunk_res {
+            Ok((entries, total_bytes_read)) => {
+                let tasks = entries.into_iter().map(|entry| {
+                    let invalid_entries_ref = Arc::clone(&invalid_entries);
+                    let valid_entries_ref = Arc::clone(&valid_entries);
+                    let table_ref = Arc::clone(&memtable);
+                    let vlog_ref = Arc::clone(&vlog);
+                    let filters_ref = Arc::clone(&filters);
+                    let key_range_ref = Arc::clone(&key_range);
+                    let read_only_memtables_ref = Arc::clone(&read_only_memtables);
+                    tokio::spawn(async move {
+                        let most_recent_value = GC::get(
+                            std::str::from_utf8(&entry.key).unwrap(),
+                            Arc::clone(&table_ref),
+                            Arc::clone(&filters_ref),
+                            Arc::clone(&key_range_ref),
+                            Arc::clone(&vlog_ref),
+                            Arc::clone(&read_only_memtables_ref),
+                        )
+                        .await;
+                        match most_recent_value {
+                            Ok((value, creation_time)) => {
+                                if entry.created_at != creation_time || value == TOMB_STONE_MARKER.as_bytes().to_vec() {
+                                    invalid_entries_ref.write().await.push(entry);
+                                } else {
+                                    valid_entries_ref.write().await.push((entry.key, value));
+                                }
+                                Ok(())
+                            }
+                            Err(err) => GC::handle_deleted_entries(invalid_entries_ref, entry, err).await,
+                        }
+                    })
+                });
+
+                let all_results = join_all(tasks).await;
+                for res in all_results {
+                    match res {
+                        Ok(entry) => {
+                            if let Err(err) = entry {
+                                return Err(GCError(err.to_string()));
+                            }
+                        }
+                        Err(err) => {
+                            return Err(GCError(err.to_string()));
+                        }
+                    }
+                }
+                let new_tail_offset = vlog.read().await.tail_offset + total_bytes_read;
+                let append_res = GC::update_tail(Arc::clone(&vlog), new_tail_offset).await;
+                match append_res {
+                    Ok(v_offset) => {
+                        synced_entries.write().await.push((
+                            TAIL_ENTRY_KEY.to_vec(),
+                            new_tail_offset.to_le_bytes().to_vec(),
+                            v_offset,
+                        ));
+                        if let Err(err) =
+                            GC::write_valid_entries_to_vlog(valid_entries, synced_entries.to_owned(), Arc::clone(&vlog))
+                                .await
+                        {
+                            return Err(GCError(err.to_string()));
+                        }
+                        // call fsync on vlog to guarantee persistence to disk
+                        let sync_res = vlog.write().await.sync_to_disk().await;
+                        match sync_res {
+                            Ok(_) => {
+                                vlog.write().await.set_tail(new_tail_offset);
+                                if let Err(err) = GC::write_valid_entries_to_store(
+                                    synced_entries.to_owned(),
+                                    Arc::clone(&memtable),
+                                    gc_updated_entries,
+                                    Arc::clone(&vlog),
+                                )
+                                .await
+                                {
+                                    return Err(GCError(err.to_string()));
+                                }
+
+                                if let Err(err) = GC::remove_unsed(
+                                    Arc::clone(&vlog),
+                                    invalid_entries,
+                                    punch_hole_start_offset,
+                                    total_bytes_read,
+                                )
+                                .await
+                                {
+                                    return Err(GCError(err.to_string()));
+                                };
+                            }
+                            Err(err) => return Err(GCError(err.to_string())),
+                        }
+                    }
+                    Err(err) => return Err(GCError(err.to_string())),
+                }
             }
-            KeyNotFoundInAnySSTableError => {
-                invalid_entries_clone.write().await.push(entry);
-                Ok(())
-            }
-            KeyNotFoundByAnyBloomFilterError => {
-                invalid_entries_clone.write().await.push(entry);
-                Ok(())
-            }
-            KeyFoundAsTombstoneInSSTableError => {
-                invalid_entries_clone.write().await.push(entry);
-                Ok(())
-            }
-            KeyFoundAsTombstoneInValueLogError => {
-                invalid_entries_clone.write().await.push(entry);
-                Ok(())
-            }
-            err::Error::KeyNotFoundInValueLogError => {
-                invalid_entries_clone.write().await.push(entry);
-                Ok(())
-            }
-            NotFoundInDB => {
-                invalid_entries_clone.write().await.push(entry);
-                Ok(())
-            }
-            _ => return Err(err),
-        }
+            Err(err) => return Err(GCError(err.to_string())),
+        })
     }
 
-    pub async fn update_tail(
-        store: Arc<RwLock<&mut DataStore<'_, K>>>,
-        new_tail_offset: usize,
-    ) -> Result<usize, Error> {
-        store
-            .write()
+    pub async fn update_tail(vlog: GCLog, new_tail_offset: usize) -> Result<usize, Error> {
+        vlog.write()
             .await
-            .val_log
             .append(
                 &TAIL_ENTRY_KEY.to_vec(),
                 &new_tail_offset.to_le_bytes().to_vec(),
@@ -214,36 +234,40 @@ impl DataStore<'static, Key> {
     }
 
     pub async fn write_valid_entries_to_store(
-        store: Arc<RwLock<&mut DataStore<'_, K>>>,
-        valid_entries: Arc<RwLock<Vec<(Key, Value, ValOffset)>>>,
+        valid_entries: ValidEntries,
+        table: GCTable,
+        gc_updated_entries: GCUpdatedEntries<Key>,
+        vlog: GCLog,
     ) -> Result<(), Error> {
+        gc_updated_entries.write().await.clear();
         for (key, value, existing_v_offset) in valid_entries.to_owned().read().await.iter() {
-            let put_res = store
-                .write()
-                .await
-                .put(
-                    str::from_utf8(&key).unwrap(),
-                    str::from_utf8(&value).unwrap(),
-                    Some(*existing_v_offset),
-                )
-                .await;
-            match put_res {
-                Err(err) => return Err(err),
-                _ => {}
+            if let Err(err) = GC::put(
+                std::str::from_utf8(&key).unwrap(),
+                std::str::from_utf8(&value).unwrap(),
+                *existing_v_offset,
+                Arc::clone(&table),
+                gc_updated_entries.clone(),
+            )
+            .await
+            {
+                return Err(err);
+            };
+            if existing_v_offset > &vlog.read().await.head_offset {
+                vlog.write().await.set_head(*existing_v_offset)
             }
         }
         Ok(())
     }
 
     pub async fn write_valid_entries_to_vlog(
-        store: Arc<RwLock<&mut DataStore<'_, K>>>,
         valid_entries: Arc<RwLock<Vec<(Key, Value)>>>,
-        synced_entries: Arc<RwLock<Vec<(Key, Value, ValOffset)>>>,
+        synced_entries: SyncedEntries,
+        vlog: GCLog,
     ) -> Result<(), Error> {
-        let mut store = store.write().await;
         for (key, value) in valid_entries.to_owned().read().await.iter() {
-            let append_res = store
-                .val_log
+            let append_res = vlog
+                .write()
+                .await
                 .append(&key, &value, Utc::now().timestamp_millis() as u64, false)
                 .await;
 
@@ -263,25 +287,16 @@ impl DataStore<'static, Key> {
     }
 
     pub async fn remove_unsed(
-        &self,
-        invalid_entries: Arc<RwLock<Vec<ValueLogEntry>>>,
+        vlog: GCLog,
+        invalid_entries: InvalidEntries,
         punch_hole_start_offset: usize,
         punch_hole_length: usize,
     ) -> std::result::Result<(), Error> {
-        // Punch hole in file for linux operating system
+        let vlog_path = vlog.read().await.content.file.node.file_path.to_owned();
         #[cfg(target_os = "linux")]
         {
-            let eng_read_lock = engine.read().await;
-            let garbage_collected = self
-                .punch_holes(
-                    eng_read_lock.val_log.file_path.to_str().unwrap(),
-                    punch_hole_start_offset as i64,
-                    punch_hole_length as i64,
-                )
-                .await?;
-            Ok(())
+            GC::punch_holes(vlog_path, punch_hole_start_offset as i64, punch_hole_length as i64).await
         }
-
         #[cfg(not(target_os = "linux"))]
         {
             return Err(Error::GCErrorUnsupportedPlatform(String::from(
@@ -290,13 +305,9 @@ impl DataStore<'static, Key> {
         }
     }
 
-    pub async fn punch_holes(&self, file_path: &str, offset: off_t, length: off_t) -> std::result::Result<(), Error> {
-        let file = tokio::fs::File::open(file_path)
-            .await
-            .map_err(|err| Error::FileSyncError { error: err })?;
-
+    pub async fn punch_holes(file_path: PathBuf, offset: off_t, length: off_t) -> std::result::Result<(), Error> {
+        let file = FileNode::open(file_path).await?;
         let fd = file.as_raw_fd();
-
         unsafe {
             let result = fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, offset, length);
             // 0 return means the punch was successful
@@ -309,7 +320,168 @@ impl DataStore<'static, Key> {
             }
         }
     }
+
+    pub async fn put(
+        key: &str,
+        value: &str,
+        val_offset: ValOffset,
+        memtable: GCTable,
+        gc_updated_entries: GCUpdatedEntries<Key>,
+    ) -> Result<bool, Error> {
+        let is_tombstone = value.len() == 0;
+        let key = &key.as_bytes().to_vec();
+        let created_at = Utc::now().timestamp_millis() as u64;
+        let v_offset = val_offset;
+        let entry = Entry::new(key.to_vec(), v_offset, created_at, is_tombstone);
+        memtable.write().await.insert(&entry)?;
+        gc_updated_entries
+            .write()
+            .await
+            .insert(key.to_vec(), SkipMapValue::new(v_offset, created_at, is_tombstone));
+        Ok(true)
+    }
+
+    pub async fn get(
+        key: &str,
+        memtable: GCTable,
+        filters: BloomFilterHandle,
+        key_range: KeyRangeHandle,
+        vlog: Arc<RwLock<ValueLog>>,
+        read_only_memtables: ImmutableMemTable<K>,
+    ) -> Result<(Value, CreationTime), Error> {
+        let key = key.as_bytes().to_vec();
+        let mut offset = 0;
+        let mut most_recent_insert_time = 0;
+        // Step 1: Check the active memtable
+        if let Some(value) = memtable.read().await.get(&key) {
+            if value.is_tombstone {
+                return Err(NotFoundInDB);
+            }
+            return GC::get_value_from_vlog(vlog, value.val_offset, value.created_at).await;
+        } else {
+            // Step 2: Check the read-only memtables
+            let mut is_deleted = false;
+            for (_, table) in read_only_memtables.read().await.iter() {
+                if let Some(value) = table.read().await.get(&key) {
+                    if value.created_at > most_recent_insert_time {
+                        offset = value.val_offset;
+                        most_recent_insert_time = value.created_at;
+                        is_deleted = value.is_tombstone
+                    }
+                }
+            }
+            if most_recent_insert_time > 0 {
+                if is_deleted {
+                    return Err(NotFoundInDB);
+                }
+                return GC::get_value_from_vlog(vlog, offset, most_recent_insert_time).await;
+            } else {
+                // Step 3: Check sstables
+                let key_range = &key_range.read().await;
+                let mut ssts = key_range.filter_sstables_by_biggest_key(&key);
+                if ssts.is_empty() {
+                    return Err(KeyNotFoundInAnySSTableError);
+                }
+                let filters = &filters.read().await;
+                ssts = BloomFilter::ssts_within_key_range(&key, filters, &ssts);
+                if ssts.is_empty() {
+                    return Err(KeyNotFoundByAnyBloomFilterError);
+                }
+                for sst in ssts.iter() {
+                    let index = Index::new(sst.index_file.path.to_owned(), sst.index_file.file.to_owned());
+                    let block_handle = index.get(&key).await;
+                    match block_handle {
+                        Ok(None) => continue,
+                        Ok(result) => {
+                            if let Some(block_offset) = result {
+                                let sst_res = sst.get(block_offset, &key).await;
+                                match sst_res {
+                                    Ok(None) => continue,
+                                    Ok(result) => {
+                                        if let Some((val_offset, created_at, is_tombstone)) = result {
+                                            if created_at > most_recent_insert_time {
+                                                offset = val_offset;
+                                                most_recent_insert_time = created_at;
+                                                is_deleted = is_tombstone;
+                                            }
+                                        }
+                                    }
+                                    Err(err) => log::error!("{}", err),
+                                }
+                            }
+                        }
+                        Err(err) => log::error!("{}", err),
+                    }
+                }
+                if most_recent_insert_time > 0 {
+                    if is_deleted {
+                        return Err(NotFoundInDB);
+                    }
+                    // Step 5: Read value from value log based on offset
+                    return GC::get_value_from_vlog(vlog, offset, most_recent_insert_time).await;
+                }
+            }
+        }
+        Err(NotFoundInDB)
+    }
+
+    pub async fn get_value_from_vlog(
+        val_log: Arc<RwLock<ValueLog>>,
+        offset: usize,
+        creation_time: CreationTime,
+    ) -> Result<(Value, CreationTime), Error> {
+        let res = val_log.read().await.get(offset).await?;
+        match res {
+            Some((value, is_tombstone)) => {
+                if is_tombstone {
+                    return Err(KeyFoundAsTombstoneInValueLogError);
+                }
+                return Ok((value, creation_time));
+            }
+            None => return Err(KeyNotFoundInValueLogError),
+        };
+    }
+
+    pub async fn handle_deleted_entries(
+        invalid_entries_ref: Arc<RwLock<Vec<ValueLogEntry>>>,
+        entry: ValueLogEntry,
+        err: Error,
+    ) -> std::result::Result<(), Error> {
+        match err {
+            KeyFoundAsTombstoneInMemtableError => {
+                invalid_entries_ref.write().await.push(entry);
+                Ok(())
+            }
+            KeyNotFoundInAnySSTableError => {
+                invalid_entries_ref.write().await.push(entry);
+                Ok(())
+            }
+            KeyNotFoundByAnyBloomFilterError => {
+                invalid_entries_ref.write().await.push(entry);
+                Ok(())
+            }
+            KeyFoundAsTombstoneInSSTableError => {
+                invalid_entries_ref.write().await.push(entry);
+                Ok(())
+            }
+            KeyFoundAsTombstoneInValueLogError => {
+                invalid_entries_ref.write().await.push(entry);
+                Ok(())
+            }
+            err::Error::KeyNotFoundInValueLogError => {
+                invalid_entries_ref.write().await.push(entry);
+                Ok(())
+            }
+            NotFoundInDB => {
+                invalid_entries_ref.write().await.push(entry);
+                Ok(())
+            }
+            _ => return Err(err),
+        }
+    }
 }
+
+impl DataStore<'static, Key> {}
 
 async fn sleep_gc_task(duration: u64) {
     sleep(Duration::from_millis(duration)).await;
