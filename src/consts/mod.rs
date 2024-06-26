@@ -36,7 +36,6 @@ pub const DEFAULT_ONLINE_GARBAGE_COLLECTION_INTERVAL_MILLI: u64 = 36000000;
 
 pub const DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE: usize = 1;
 
-pub const DEFAULT_GC_UPDATE_CHANNEL_SIZE: usize = 1;
 // tombstone should only be removed after 120 days to guarantee that obsolete data don't
 // resurrect by prematurelly deleting tombstone
 pub const DEFAULT_TOMBSTONE_TTL: u64 = 120 * 86400000;

@@ -1,564 +1,402 @@
 #[cfg(test)]
 mod tests {
-
-    use crate::consts::DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI;
     use crate::err::Error;
-    use crate::err::Error::*;
-    use crate::helpers;
     use crate::storage::DataStore;
+    use crate::tests::workload::Workload;
     use futures::future::join_all;
-    use log::info;
     use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::tempdir;
     use tokio::fs::{self};
     use tokio::sync::RwLock;
-    use tokio::time::{sleep, Duration};
 
-    fn init() {
+    fn setup() {
         let _ = env_logger::builder().is_test(true).try_init();
     }
-    // Generate test to find keys after compaction
     #[tokio::test]
-    async fn datastore_create_asynchronous() {
-        init();
+    async fn datastore_create_new() {
+        setup();
         let root = tempdir().unwrap();
-        let path = PathBuf::from(root.path().join("bump1"));
-        let s_engine = DataStore::new(path.clone()).await.unwrap();
-        // Specify the number of random strings to generate
-        let num_strings = 20000; // 100k
+        let path = PathBuf::from(root.path().join("store_test_1"));
+        let store = DataStore::new(path.clone()).await;
+        assert!(store.is_ok())
+    }
 
-        // Specify the length of each random string
-        let string_length = 5;
-        // Generate random strings and store them in a vector
-        let mut random_strings: Vec<String> = Vec::with_capacity(num_strings);
-        for _ in 0..num_strings {
-            let random_string = helpers::generate_random_id(string_length);
-            random_strings.push(random_string);
-        }
-        let sg = Arc::new(RwLock::new(s_engine));
+    #[tokio::test]
+    async fn datastore_put_test() {
+        setup();
+        let root = tempdir().unwrap();
+        let path = PathBuf::from(root.path().join("store_test_2"));
+        let store = DataStore::new(path.clone()).await.unwrap();
+        let workload_size = 15000;
+        let key_len = 5;
+        let val_len = 5;
+        let write_read_ratio = 0.5;
+        let workload = Workload::new(workload_size, key_len, val_len, write_read_ratio);
+        let (_, write_workload) = workload.generate_workload_data_as_map();
 
-        let tasks = random_strings.iter().map(|k| {
-            let s_engine = Arc::clone(&sg);
-            let k = k.clone();
+        let store_ref = Arc::new(RwLock::new(store));
+        let write_tasks = write_workload.iter().map(|e| {
+            let store_inner = Arc::clone(&store_ref);
+            let key = e.0.to_owned();
+            let val = e.1.to_owned();
             tokio::spawn(async move {
-                let mut value = s_engine.write().await;
-                value.put(&k, "boy").await
+                let key_str = std::str::from_utf8(&key).unwrap();
+                let val_str = std::str::from_utf8(&val).unwrap();
+                let mut value = store_inner.write().await;
+                value.put(key_str, val_str).await
             })
         });
 
-        let all_results = join_all(tasks).await;
-        for tokio_response in all_results {
-            match tokio_response {
-                Ok(entry) => match entry {
-                    Ok(is_inserted) => {
-                        assert_eq!(is_inserted, true)
-                    }
-                    Err(err) => assert!(false, "{}", err.to_string()),
-                },
-                Err(err) => {
-                    assert!(false, "{}", err.to_string())
-                }
-            }
+        let all_results = join_all(write_tasks).await;
+        for tokio_res in all_results {
+            assert!(tokio_res.is_ok());
+            assert!(tokio_res.as_ref().unwrap().is_ok());
+            assert_eq!(tokio_res.unwrap().unwrap(), true);
         }
-        // println!("Write completed ");
-        // sleep(Duration::from_millis(
-        //     DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI * 3,
-        // ))
-        // .await;
-        // println!("About to start reading");
-        // println!("Compaction completed !");
-        random_strings.sort();
-        let tasks = random_strings
-            .get(0..(num_strings / 2))
-            .unwrap_or_default()
-            .iter()
-            .map(|k| {
-                let s_engine = Arc::clone(&sg);
-                let key = k.clone();
-                tokio::spawn(async move {
-                    let value = s_engine.read().await;
-                    let nn = value.get(&key).await;
-                    return nn;
-                })
-            });
-        let all_results = join_all(tasks).await;
-        for tokio_response in all_results {
-            match tokio_response {
-                Ok(entry) => match entry {
-                    Ok(v) => {
-                        assert_eq!(v.0, b"boy");
-                    }
-                    Err(err) => assert!(false, "Error: {}", err.to_string()),
-                },
-                Err(err) => {
-                    assert!(false, "{}", err.to_string())
-                }
-            }
-        }
-
-        //  let _ = fs::remove_dir_all(path.clone()).await;
     }
 
     #[tokio::test]
-    async fn datastore_create_synchronous() {
+    async fn datastore_test_put_and_get() {
+        setup();
         let root = tempdir().unwrap();
-        let path = PathBuf::from(root.path().join("bump2"));
-        let mut s_engine = DataStore::new(path.clone()).await.unwrap();
+        let path = PathBuf::from(root.path().join("store_test_3"));
+        let store = DataStore::new(path.clone()).await.unwrap();
+        let workload_size = 15000;
+        let key_len = 5;
+        let val_len = 5;
+        let write_read_ratio = 0.5;
+        let workload = Workload::new(workload_size, key_len, val_len, write_read_ratio);
+        let (read_workload, write_workload) = workload.generate_workload_data_as_map();
+        let store_ref = Arc::new(RwLock::new(store));
+        let write_tasks = write_workload.iter().map(|e| {
+            let store_inner = Arc::clone(&store_ref);
+            let key = e.0.to_owned();
+            let val = e.1.to_owned();
+            tokio::spawn(async move {
+                let key_str = std::str::from_utf8(&key).unwrap();
+                let val_str = std::str::from_utf8(&val).unwrap();
+                let mut value = store_inner.write().await;
+                value.put(key_str, val_str).await
+            })
+        });
 
-        // Specify the number of random strings to generate
-        let num_strings = 1000;
-
-        // Specify the length of each random string
-        let string_length = 10;
-        // Generate random strings and store them in a vector
-        let mut random_strings: Vec<String> = Vec::new();
-        for _ in 0..num_strings {
-            let random_string = helpers::generate_random_id(string_length);
-            random_strings.push(random_string);
+        let all_results = join_all(write_tasks).await;
+        for tokio_res in all_results {
+            assert!(tokio_res.is_ok());
+            assert!(tokio_res.as_ref().unwrap().is_ok());
+            assert_eq!(tokio_res.unwrap().unwrap(), true);
         }
 
-        // Insert the generated random strings
-        for (_, s) in random_strings.iter().enumerate() {
-            s_engine.put(s, "boyode").await.unwrap();
-        }
-        // let compactor = Compactor::new();
-
-        let compaction_opt = s_engine.run_compaction().await;
-        match compaction_opt {
-            Ok(_) => {
-                println!("Compaction is successful");
-                println!(
-                    "Length of bucket after compaction {:?}",
-                    s_engine.buckets.read().await.buckets.len()
-                );
-                println!(
-                    "Length of bloom filters after compaction {:?}",
-                    s_engine.filters.read().await.len()
-                );
-            }
-            Err(err) => {
-                println!("Error during compaction {}", err)
-            }
-        }
-
-        // random_strings.sort();
-        for k in random_strings {
-            let result = s_engine.get(&k).await;
-            match result {
-                Ok((value, _)) => {
-                    assert_eq!(value, b"boyode");
+        let read_tasks = read_workload.iter().map(|e| {
+            let store_inner = Arc::clone(&store_ref);
+            let key = e.0.to_owned();
+            tokio::spawn(async move {
+                let key_str = std::str::from_utf8(&key).unwrap();
+                match store_inner.read().await.get(key_str).await {
+                    Ok((value, _)) => Ok((key_str.as_bytes().to_vec(), value)),
+                    Err(err) => return Err(err),
                 }
-                Err(_) => {
-                    assert!(false, "No err should be found");
-                }
-            }
+            })
+        });
+
+        let all_results = join_all(read_tasks).await;
+
+        for tokio_res in all_results {
+            assert!(tokio_res.is_ok());
+            assert!(tokio_res.as_ref().unwrap().is_ok());
+            let (key, value) = tokio_res.unwrap().unwrap();
+            assert_eq!(value, *write_workload.get(&key).unwrap());
+        }
+    }
+
+    #[tokio::test]
+    async fn datastore_test_put_and_get_concurrent() {
+        setup();
+        let root = tempdir().unwrap();
+        let path = PathBuf::from(root.path().join("store_test_4"));
+        let store = DataStore::new(path.clone()).await.unwrap();
+        let workload_size = 1;
+        let key_len = 5;
+        let val_len = 5;
+        let write_read_ratio = 0.5;
+        let workload = Workload::new(workload_size, key_len, val_len, write_read_ratio);
+        let (_, write_workload) = workload.generate_workload_data_as_vec();
+        let key = &write_workload[0].key;
+        let entry1 = write_workload[0].to_owned();
+        let mut entry2 = entry1.clone();
+        let mut entry3 = entry1.clone();
+        let mut entry4 = entry1.clone();
+        let mut entry5 = entry1.clone();
+        entry2.val = b"val2".to_vec();
+        entry3.val = b"val3".to_vec();
+        entry4.val = b"val4".to_vec();
+        entry5.val = b"val5".to_vec();
+
+        let concurrent_write_workload = vec![entry1, entry2, entry3, entry4, entry5.to_owned()];
+        let store_ref = Arc::new(RwLock::new(store));
+
+        let concurrent_write_tasks = concurrent_write_workload.iter().map(|e| {
+            let store_inner = Arc::clone(&store_ref);
+            let key = e.key.to_owned();
+            let val = e.val.to_owned();
+            tokio::spawn(async move {
+                let key_str = std::str::from_utf8(&key).unwrap();
+                let val_str = std::str::from_utf8(&val).unwrap();
+                let mut value = store_inner.write().await;
+                value.put(key_str, val_str).await
+            })
+        });
+
+        let all_results = join_all(concurrent_write_tasks).await;
+        for tokio_res in all_results {
+            assert!(tokio_res.is_ok());
+            assert!(tokio_res.as_ref().unwrap().is_ok());
+            assert_eq!(tokio_res.unwrap().unwrap(), true);
         }
 
-        let _ = fs::remove_dir_all(path.clone()).await;
-        // sort to make fetch random
+        let res = store_ref.read().await.get(std::str::from_utf8(&key).unwrap()).await;
+        assert!(res.is_ok());
+        // Even though the write of thesame key happened concurrently, we expect the last entry to reflect
+        assert_eq!(res.unwrap().0, entry5.val);
+    }
+
+    #[tokio::test]
+    async fn datastore_test_seqential_put() {
+        setup();
+        let root = tempdir().unwrap();
+        let path = PathBuf::from(root.path().join("store_test_5"));
+        let mut store = DataStore::new(path.clone()).await.unwrap();
+        let workload_size = 5000;
+        let key_len = 5;
+        let val_len = 5;
+        let write_read_ratio = 1.0;
+        let workload = Workload::new(workload_size, key_len, val_len, write_read_ratio);
+        let (_, write_workload) = workload.generate_workload_data_as_map();
+        for e in write_workload.iter() {
+            let key = e.0.to_owned();
+            let val = e.1.to_owned();
+            let key_str = std::str::from_utf8(&key).unwrap();
+            let val_str = std::str::from_utf8(&val).unwrap();
+            let res = store.put(key_str, val_str).await;
+            assert!(res.is_ok());
+            assert_eq!(res.unwrap(), true);
+        }
+    }
+
+    #[tokio::test] 
+    async fn datastore_test_sequential_put_and_get() {
+        setup();
+        let root = tempdir().unwrap();
+        let path = PathBuf::from(root.path().join("store_test_6"));
+        let mut store = DataStore::new(path.clone()).await.unwrap();
+        let workload_size = 5000;
+        let key_len = 5;
+        let val_len = 5;
+        let write_read_ratio = 1.0;
+        let workload = Workload::new(workload_size, key_len, val_len, write_read_ratio);
+        let (read_workload, write_workload) = workload.generate_workload_data_as_map();
+
+        for (i, (key, val)) in write_workload.iter().enumerate() {
+            let key_str = std::str::from_utf8(&key).unwrap();
+            let val_str = std::str::from_utf8(&val).unwrap();
+            println!("insertion point key {}, val {} i {}", key_str, val_str, i);
+            let res = store.put(key_str, val_str).await;
+            assert!(res.is_ok());
+            assert_eq!(res.unwrap(), true);
+        }
+        for (i, (key, val)) in read_workload.iter().enumerate() {
+            let key_str = std::str::from_utf8(&key).unwrap();
+            let res = store.get(&key_str).await;
+            println!(
+                "Fetch point key {}, val {:?} value in read workload {:?} i {}",
+                std::str::from_utf8(&key).unwrap(),
+                std::str::from_utf8(&res.as_ref().unwrap().0).unwrap(),
+                std::str::from_utf8(&val).unwrap(),
+                i
+            );
+            assert!(res.is_ok());
+            assert_eq!(res.unwrap().0, *write_workload.get(key).unwrap());
+        }
+    }
+
+    #[tokio::test]
+    async fn datastore_not_found() {
+        setup();
+        let root = tempdir().unwrap();
+        let path = PathBuf::from(root.path().join("store_test_7"));
+        let store = DataStore::new(path.clone()).await.unwrap();
+        let workload_size = 10000;
+        let key_len = 5;
+        let val_len = 5;
+        let write_read_ratio = 1.0;
+        let workload = Workload::new(workload_size, key_len, val_len, write_read_ratio);
+        let (_, write_workload) = workload.generate_workload_data_as_vec();
+        let store_ref = Arc::new(RwLock::new(store));
+        let res = workload.insert_parallel(&write_workload, store_ref.clone()).await;
+        if !res.is_ok() {
+            log::error!("Insert failed {:?}", res.err());
+            return;
+        }
+
+        let not_found_key = "**_not_found_**";
+        let res = store_ref.read().await.get(not_found_key).await;
+        assert!(res.is_err());
+        assert!(
+            Error::KeyNotFoundByAnyBloomFilterError.to_string() == res.as_ref().err().unwrap().to_string()
+                || res.err().unwrap().to_string() == Error::NotFoundInDB.to_string(),
+        );
     }
 
     #[tokio::test]
     async fn datastore_compaction_asynchronous() {
+        setup();
         let root = tempdir().unwrap();
-        let path = PathBuf::from(root.path().join("bump3"));
-        let s_engine = DataStore::new(path.clone()).await.unwrap();
-
-        // Specify the number of random strings to generate
-        let num_strings = 50000;
-
-        // Specify the length of each random string
-        let string_length = 10;
-        // Generate random strings and store them in a vector
-        let mut random_strings: Vec<String> = Vec::new();
-        for _ in 0..num_strings {
-            let random_string = helpers::generate_random_id(string_length);
-            random_strings.push(random_string);
+        let path = PathBuf::from(root.path().join("store_test_8"));
+        let store = DataStore::new(path.clone()).await.unwrap();
+        let workload_size = 15000;
+        let key_len = 5;
+        let val_len = 5;
+        let write_read_ratio = 1.0;
+        let workload = Workload::new(workload_size, key_len, val_len, write_read_ratio);
+        let (_, write_workload) = workload.generate_workload_data_as_vec();
+        let store_ref = Arc::new(RwLock::new(store));
+        let res = workload.insert_parallel(&write_workload, store_ref.clone()).await;
+        if !res.is_ok() {
+            log::error!("Insert failed {:?}", res.err());
+            return;
         }
-        // for k in random_strings.clone() {
-        //     s_engine.put(&k, "boyode").await.unwrap();
-        // }
-        let sg = Arc::new(RwLock::new(s_engine));
-        let binding = random_strings.clone();
-        let tasks = binding.iter().map(|k| {
-            let s_engine = Arc::clone(&sg);
-            let k = k.clone();
-            tokio::spawn(async move {
-                let mut value = s_engine.write().await;
-                value.put(&k, "boyode").await
-            })
-        });
+        let key1 = std::str::from_utf8(&write_workload[0].key).unwrap();
+        let key2 = std::str::from_utf8(&write_workload[1].key).unwrap();
+        let key3 = std::str::from_utf8(&write_workload[2].key).unwrap();
+        let key4 = std::str::from_utf8(&write_workload[3].key).unwrap();
+        let res1 = store_ref.read().await.get(key1).await;
+        let res2 = store_ref.read().await.get(key2).await;
+        let res3 = store_ref.read().await.get(key3).await;
+        let res4 = store_ref.read().await.get(key4).await;
 
-        //Collect the results from the spawned tasks
-        for task in tasks {
-            tokio::select! {
-                result = task => {
-                    match result{
-                        Ok(v_opt)=>{
-                            match v_opt{
-                                Ok(v) => {
-                                    assert_eq!(v, true)
-                                },
-                                Err(_) => { assert!(false, "No err should be found")},
-                            }
-                             }
-                        Err(_) =>  assert!(false, "No err should be found") }
-                    //println!("{:?}",result);
-                }
-            }
-        }
+        assert!(res1.is_ok());
+        assert!(res2.is_ok());
+        assert!(res3.is_ok());
+        assert!(res4.is_ok());
+        assert_eq!(res1.unwrap().0, write_workload[0].val);
+        assert_eq!(res2.unwrap().0, write_workload[1].val);
+        assert_eq!(res3.unwrap().0, write_workload[2].val);
+        assert_eq!(res4.unwrap().0, write_workload[3].val);
 
-        // sort to make fetch random
-        random_strings.sort();
-        let key = &random_strings[0];
+        let res = store_ref.write().await.delete(key1).await;
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), true);
 
-        let get_res1 = sg.read().await.get(key).await;
-        let get_res2 = sg.read().await.get(key).await;
-        let get_res3 = sg.read().await.get(key).await;
-        let get_res4 = sg.read().await.get(key).await;
-        match get_res1 {
-            Ok(v) => {
-                assert_eq!(v.0, b"boyode");
-            }
-            Err(_) => {
-                assert!(false, "No error should be found");
-            }
-        }
+        let res = store_ref.read().await.get(key1).await;
+        assert!(res.is_err());
+        assert_eq!(Error::NotFoundInDB.to_string(), res.err().unwrap().to_string());
 
-        match get_res2 {
-            Ok(v) => {
-                assert_eq!(v.0, b"boyode");
-            }
-            Err(_) => {
-                assert!(false, "No error should be found");
-            }
-        }
-
-        match get_res3 {
-            Ok(v) => {
-                assert_eq!(v.0, b"boyode");
-            }
-            Err(_) => {
-                assert!(false, "No error should be found");
-            }
-        }
-        match get_res4 {
-            Ok(v) => {
-                assert_eq!(v.0, b"boyode");
-            }
-            Err(_) => {
-                assert!(false, "No error should be found");
-            }
-        }
-
-        let del_res = sg.write().await.delete(key).await;
-        match del_res {
-            Ok(v) => {
-                assert_eq!(v, true)
-            }
-            Err(_) => {
-                assert!(false, "No error should be found");
-            }
-        }
-
-        let get_res2 = sg.read().await.get(key).await;
-        match get_res2 {
-            Ok(_) => {
-                assert!(false, "Should not be found after compaction")
-            }
-            Err(err) => {
-                assert_eq!(Error::NotFoundInDB.to_string(), err.to_string())
-            }
-        }
-
-        let _ = sg.write().await.flush_all_memtables().await;
-        sg.write().await.active_memtable.clear();
+        let _ = store_ref.write().await.flush_all_memtables().await;
+        store_ref.write().await.active_memtable.clear();
 
         // We expect tombstone to be flushed to an sstable at this point
-        let get_res2 = sg.read().await.get(key).await;
-        match get_res2 {
-            Ok(_) => {
-                assert!(false, "Should not be found after compaction")
-            }
-            Err(err) => {
-                assert_eq!(Error::NotFoundInDB.to_string(), err.to_string())
-            }
-        }
+        let res = store_ref.read().await.get(key1).await;
+        assert!(res.is_err());
+        assert_eq!(Error::NotFoundInDB.to_string(), res.err().unwrap().to_string());
 
-        let compaction_opt = sg.write().await.run_compaction().await;
-        // Insert the generated random strings
-        // let compactor = Compactor::new();
-        // let compaction_opt = sg.write().await.run_compaction().await;
-        match compaction_opt {
-            Ok(_) => {
-                println!("Compaction is successful");
-                println!(
-                    "Length of bucket after compaction {:?}",
-                    sg.read().await.buckets.read().await.buckets.len()
-                );
-                println!(
-                    "Length of bloom filters after compaction {:?}",
-                    sg.read().await.filters.read().await.len()
-                );
-            }
-            Err(err) => {
-                info!("Error during compaction {}", err)
-            }
-        }
+        let comp_res = store_ref.write().await.run_compaction().await;
+        assert!(comp_res.is_ok());
 
-        // Insert the generated random strings
-        let get_res3 = sg.read().await.get(key).await;
-        match get_res3 {
-            Ok(_) => {
-                assert!(false, "Deleted key should be found as tumbstone");
-            }
-
-            Err(err) => {
-                println!("{}", err);
-                if err.to_string() != NotFoundInDB.to_string() && err.to_string() != NotFoundInDB.to_string() {
-                    println!("{}", err);
-                    assert!(false, "Key should be mapped to tombstone or deleted from all sstables")
-                }
-            }
-        }
-        let _ = fs::remove_dir_all(path.clone()).await;
+        // Fetch after compaction
+        let res = store_ref.read().await.get(key1).await;
+        assert!(res.is_err());
+        assert_eq!(Error::NotFoundInDB.to_string(), res.err().unwrap().to_string());
     }
 
     #[tokio::test]
     async fn datastore_update_asynchronous() {
+        setup();
         let root = tempdir().unwrap();
-        let path = PathBuf::from(root.path().join("bump4"));
-        let mut s_engine = DataStore::new(path.clone()).await.unwrap();
-
-        // Specify the number of random strings to generate
-        let num_strings = 6000;
-
-        // Specify the length of each random string
-        let string_length = 10;
-        // Generate random strings and store them in a vector
-        let mut random_strings: Vec<String> = Vec::new();
-        for _ in 0..num_strings {
-            let random_string = helpers::generate_random_id(string_length);
-            random_strings.push(random_string);
+        let path = PathBuf::from(root.path().join("store_test_9"));
+        let store = DataStore::new(path.clone()).await.unwrap();
+        let workload_size = 15000;
+        let key_len = 5;
+        let val_len = 5;
+        let write_read_ratio = 1.0;
+        let workload = Workload::new(workload_size, key_len, val_len, write_read_ratio);
+        let (_, write_workload) = workload.generate_workload_data_as_vec();
+        let store_ref = Arc::new(RwLock::new(store));
+        let res = workload.insert_parallel(&write_workload, store_ref.clone()).await;
+        if !res.is_ok() {
+            log::error!("Insert failed {:?}", res.err());
+            return;
         }
-        for k in random_strings.clone() {
-            s_engine.put(&k, "boyode").await.unwrap();
-        }
-        let sg = Arc::new(RwLock::new(s_engine));
-        let binding = random_strings.clone();
-        let tasks = binding.iter().map(|k| {
-            let s_engine = Arc::clone(&sg);
-            let k = k.clone();
-            tokio::spawn(async move {
-                let mut value = s_engine.write().await;
-                value.put(&k, "boyode").await
-            })
-        });
 
-        // Collect the results from the spawned tasks
-        for task in tasks {
-            tokio::select! {
-                result = task => {
-                    match result{
-                        Ok(v_opt)=>{
-                            match v_opt{
-                                Ok(v) => {
-                                    assert_eq!(v, true)
-                                },
-                                Err(_) => { assert!(false, "No err should be found")},
-                            }
-                             }
-                        Err(_) =>  assert!(false, "No err should be found") }
-                }
-            }
-        }
-        // // sort to make fetch random
-        random_strings.sort();
-        let key = &random_strings[0];
+        let key1 = std::str::from_utf8(&write_workload[0].key).unwrap();
         let updated_value = "updated_key";
 
-        let get_res = sg.read().await.get(key).await;
-        match get_res {
-            Ok(v) => {
-                assert_eq!(v.0, b"boyode");
-            }
-            Err(_) => {
-                assert!(false, "No error should be found");
-            }
-        }
+        let res = store_ref.read().await.get(key1).await;
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap().0, write_workload[0].val);
 
-        let update_res = sg.write().await.update(key, updated_value).await;
-        match update_res {
-            Ok(v) => {
-                assert_eq!(v, true)
-            }
-            Err(_) => {
-                assert!(false, "No error should be found");
-            }
-        }
-        let _ = sg.write().await.flush_all_memtables().await;
-        sg.write().await.active_memtable.clear();
+        let res = store_ref.write().await.update(key1, updated_value).await;
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), true);
 
-        let get_res = sg.read().await.get(key).await;
-        match get_res {
-            Ok((value, _)) => {
-                assert_eq!(value, updated_value.as_bytes().to_vec())
-            }
-            Err(_) => {
-                assert!(false, "Should not run")
-            }
-        }
+        let res = store_ref.write().await.flush_all_memtables().await;
+        assert!(res.is_ok());
+        store_ref.write().await.active_memtable.clear();
+
+        let res = store_ref.read().await.get(key1).await;
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap().0, updated_value.as_bytes().to_vec());
 
         // // Run compaction
-        let compaction_opt = sg.write().await.run_compaction().await;
-        match compaction_opt {
-            Ok(_) => {
-                println!("Compaction is successful");
-                println!(
-                    "Length of bucket after compaction {:?}",
-                    sg.read().await.buckets.read().await.buckets.len()
-                );
-                println!(
-                    "Length of bloom filters after compaction {:?}",
-                    sg.read().await.filters.read().await.len()
-                );
-            }
-            Err(err) => {
-                info!("Error during compaction {}", err)
-            }
-        }
+        let comp_res = store_ref.write().await.run_compaction().await;
+        assert!(comp_res.is_ok());
 
-        let get_res = sg.read().await.get(key).await;
-        match get_res {
-            Ok((value, _)) => {
-                assert_eq!(value, updated_value.as_bytes().to_vec())
-            }
-            Err(_) => {
-                assert!(false, "Should not run")
-            }
-        }
-        let _ = fs::remove_dir_all(path.clone()).await;
+        let res = store_ref.read().await.get(key1).await;
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap().0, updated_value.as_bytes().to_vec());
     }
 
     #[tokio::test]
     async fn datastore_deletion_asynchronous() {
+        setup();
         let root = tempdir().unwrap();
-        let path = PathBuf::from(root.path().join("bump5"));
-        let s_engine = DataStore::new(path.clone()).await.unwrap();
-
-        // Specify the number of random strings to generate
-        let num_strings = 50000;
-
-        // Specify the length of each random string
-        let string_length = 10;
-        // Generate random strings and store them in a vector
-        let mut random_strings: Vec<String> = Vec::new();
-        for _ in 0..num_strings {
-            let random_string = helpers::generate_random_id(string_length);
-            random_strings.push(random_string);
+        let path = PathBuf::from(root.path().join("store_test_10"));
+        let store = DataStore::new(path.clone()).await.unwrap();
+        let workload_size = 15000;
+        let key_len = 5;
+        let val_len = 5;
+        let write_read_ratio = 1.0;
+        let workload = Workload::new(workload_size, key_len, val_len, write_read_ratio);
+        let (_, write_workload) = workload.generate_workload_data_as_vec();
+        let store_ref = Arc::new(RwLock::new(store));
+        let res = workload.insert_parallel(&write_workload, store_ref.clone()).await;
+        if !res.is_ok() {
+            log::error!("Insert failed {:?}", res.err());
+            return;
         }
-        // for k in random_strings.clone() {
-        //     s_engine.put(&k, "boyode").await.unwrap();
-        // }
-        let sg = Arc::new(RwLock::new(s_engine));
-        let binding = random_strings.clone();
-        let tasks = binding.iter().map(|k| {
-            let s_engine = Arc::clone(&sg);
-            let k = k.clone();
-            tokio::spawn(async move {
-                let mut value = s_engine.write().await;
-                value.put(&k, "boyode").await
-            })
-        });
-        let key = "aunkanmi";
-        let _ = sg.write().await.put(key, "boyode").await;
-        // // Collect the results from the spawned tasks
-        for task in tasks {
-            tokio::select! {
-                result = task => {
-                    match result{
-                        Ok(v_opt)=>{
-                            match v_opt{
-                                Ok(v) => {
-                                    assert_eq!(v, true)
-                                },
-                                Err(_) => { assert!(false, "No err should be found")},
-                            }
-                             }
-                        Err(_) =>  assert!(false, "No err should be found") }
-                }
-            }
-        }
-        // sort to make fetch random
-        random_strings.sort();
-        let get_res = sg.read().await.get(key).await;
-        match get_res {
-            Ok((value, _)) => {
-                assert_eq!(value, "boyode".as_bytes().to_vec());
-            }
-            Err(err) => {
-                assert_ne!(key.as_bytes().to_vec(), err.to_string().as_bytes().to_vec());
-            }
-        }
+        let key1 = std::str::from_utf8(&write_workload[0].key).unwrap();
 
-        let del_res = sg.write().await.delete(key).await;
-        match del_res {
-            Ok(v) => {
-                assert_eq!(v, true);
-            }
-            Err(err) => {
-                assert!(err.to_string().is_empty())
-            }
-        }
+        let res = store_ref.read().await.get(key1).await;
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap().0, write_workload[0].val);
 
-        let _ = sg.write().await.flush_all_memtables().await;
+        let res = store_ref.write().await.delete(key1).await;
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), true);
 
-        let get_res = sg.read().await.get(key).await;
-        match get_res {
-            Ok((v, d)) => {
-                println!("{:?} {}", v, d);
-                assert!(false, "Should not be executed")
-            }
-            Err(err) => {
-                assert_eq!(NotFoundInDB.to_string(), err.to_string())
-            }
-        }
+        let res = store_ref.write().await.flush_all_memtables().await;
+        assert!(res.is_ok());
 
-        let compaction_opt = sg.write().await.run_compaction().await;
-        match compaction_opt {
-            Ok(_) => {
-                println!("Compaction is successful");
-                println!(
-                    "Length of bucket after compaction {:?}",
-                    sg.read().await.buckets.read().await.buckets.len()
-                );
-                println!(
-                    "Length of bloom filters after compaction {:?}",
-                    sg.read().await.filters.read().await.len()
-                );
-            }
-            Err(err) => {
-                info!("Error during compaction {}", err)
-            }
-        }
+        let res = store_ref.read().await.get(key1).await;
+        assert!(res.is_err());
+        assert_eq!(Error::NotFoundInDB.to_string(), res.err().unwrap().to_string());
 
-        // Insert the generated random strings
-        println!("trying to get this after compaction {}", key);
-        let get_res = sg.read().await.get(key).await;
-        match get_res {
-            Ok((g, r)) => {
-                println!("{:?}. {:?}", g, r);
-                assert!(false, "Should not ne executed")
-            }
-            Err(err) => {
-                if err.to_string() != NotFoundInDB.to_string()
-                    && err.to_string() != KeyNotFoundByAnyBloomFilterError.to_string()
-                {
-                    assert!(false, "Key should be mapped to tombstone or deleted from all sstables")
-                }
-            }
-        }
+        let comp_opt = store_ref.write().await.run_compaction().await;
+        assert!(comp_opt.is_ok());
+
+        let res = store_ref.read().await.get(key1).await;
+        assert!(res.is_err());
+        assert_eq!(Error::NotFoundInDB.to_string(), res.err().unwrap().to_string());
         let _ = fs::remove_dir_all(path.clone()).await;
     }
 }

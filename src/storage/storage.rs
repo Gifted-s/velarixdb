@@ -127,7 +127,7 @@ impl<'a> DataStore<'a, Key> {
             gc_entries_reader.clear();
         }
         drop(gc_entries_reader);
-        let is_tombstone = value.len() == 0;
+        let is_tombstone = value == TOMB_STONE_MARKER;
         let key = &key.as_bytes().to_vec();
         let val = &value.as_bytes().to_vec();
         let created_at = Utc::now().timestamp_millis() as u64;
@@ -148,7 +148,6 @@ impl<'a> DataStore<'a, Key> {
                 Utc::now().timestamp_millis() as u64,
                 false,
             );
-
             self.active_memtable.insert(&head_entry)?;
             self.active_memtable.read_only = true;
             self.read_only_memtables.write().await.insert(
@@ -163,7 +162,11 @@ impl<'a> DataStore<'a, Key> {
                     let id = table_id.clone();
                     let mut flusher = self.flusher.clone();
                     let tx = self.flush_signal_tx.clone();
-                    spawn(async move {
+                    // NOTE: If the put method returns before the code inside tokio::spawn finishes executing, 
+                    // the tokio::spawn task will continue to run independently of the original function call. 
+                    // This is because tokio::spawn creates a new asynchronous task that is managed by the Tokio runtime.
+                    // The spawned task is executed concurrently and its lifecycle is not tied to the function that spawned it.
+                    tokio::spawn(async move {
                         flusher.flush_handler(id, table_inner, tx);
                     });
                 }

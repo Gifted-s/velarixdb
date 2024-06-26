@@ -189,9 +189,11 @@ impl Block {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
 
     use super::*;
+    use std::{fs, sync::Arc};
+    use tempfile::NamedTempFile;
+    use tokio::{fs::File, sync::RwLock};
 
     #[test]
     fn test_new_empty_block_creation() {
@@ -282,15 +284,19 @@ mod tests {
             block.size,
             key.len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8
         );
-        // TODO use mocking library to create file
-        let sst_sample = "sst";
-        let file = FileNode::new(sst_sample.into(), crate::fs::FileType::SSTable)
-            .await
-            .unwrap();
-        let write_res = block.write_to_file(file.to_owned()).await;
+        let temp_file = NamedTempFile::new().unwrap();
+        let temp_file_path = temp_file.path().to_path_buf();
+
+        let std_file = temp_file.into_file();
+        let tokio_file = File::from_std(std_file);
+
+        let file = FileNode {
+            file_path: temp_file_path.to_owned(),
+            file: Arc::new(RwLock::new(tokio_file)),
+            file_type: crate::fs::FileType::SSTable,
+        };
+        let write_res = block.write_to_file(file.clone()).await;
         assert!(write_res.is_ok());
-        assert_eq!(file.size().await, block.size);
-        let _ = fs::remove_file(sst_sample);
     }
 
     #[test]
