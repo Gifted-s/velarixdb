@@ -68,6 +68,7 @@ use crate::{
     err::{self, Error},
     fs::{FileAsync, FileNode},
 };
+type BytesWritten = usize;
 const BLOCK_SIZE: usize = 4 * 1024; // 4KB
 
 #[derive(Debug, Clone)]
@@ -135,12 +136,14 @@ impl Block {
     /// Writes entries in the block to the sstable file
     ///
     /// Returns an `Result` indicating success or failure. An error is returned if write fails
-    pub async fn write_to_file(&self, file: FileNode) -> Result<(), Error> {
+    pub async fn write_to_file(&self, file: FileNode) -> Result<BytesWritten, Error> {
+        let mut bytes_written = 0;
         for entry in &self.entries {
             let serialized_entry = self.serialize(entry)?;
             file.write_all(&serialized_entry).await?;
+            bytes_written+=serialized_entry.len();
         }
-        Ok(())
+        Ok(bytes_written)
     }
 
     /// Checks if the Block is full given the size of an entry.
@@ -160,15 +163,10 @@ impl Block {
     pub(crate) fn serialize(&self, entry: &BlockEntry) -> Result<Vec<u8>, Error> {
         let entry_len = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
         let mut entry_vec = Vec::with_capacity(entry_len);
-
         entry_vec.extend_from_slice(&(entry.key_prefix).to_le_bytes());
-
         entry_vec.extend_from_slice(&entry.key);
-
         entry_vec.extend_from_slice(&(entry.value_offset as u32).to_le_bytes());
-
         entry_vec.extend_from_slice(&entry.creation_date.to_le_bytes());
-
         entry_vec.push(entry.is_tombstone as u8);
         if entry_len != entry_vec.len() {
             return Err(SerializationError("Invalid input"));
@@ -293,7 +291,7 @@ mod tests {
         let file = FileNode {
             file_path: temp_file_path.to_owned(),
             file: Arc::new(RwLock::new(tokio_file)),
-            file_type: crate::fs::FileType::SSTable,
+            file_type: crate::fs::FileType::Data,
         };
         let write_res = block.write_to_file(file.clone()).await;
         assert!(write_res.is_ok());

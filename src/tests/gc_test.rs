@@ -11,14 +11,11 @@ mod tests {
     use tokio::fs::{self};
     use tokio::sync::RwLock;
 
-    async fn setup(
-        store: Arc<RwLock<DataStore<'static, Vec<u8>>>>,
-        workload: &Workload
-    ) -> Result<(), Error> {
+    async fn setup(store: Arc<RwLock<DataStore<'static, Vec<u8>>>>, workload: &Workload) -> Result<(), Error> {
         let _ = env_logger::builder().is_test(true).try_init();
         let (_, data) = workload.generate_workload_data_as_vec();
         workload.insert_parallel(&data, store).await
-    } 
+    }
     // Generate test to find keys after compaction
     #[tokio::test]
     async fn datastore_gc_test_success() {
@@ -37,21 +34,14 @@ mod tests {
         }
         let storage_reader = store.read().await;
         let config = storage_reader.gc.config.clone();
-        let memtable = storage_reader.gc_table.clone();
-        let vlog = storage_reader.gc_log.clone();
-        let filters = storage_reader.filters.clone();
-        let key_range = storage_reader.key_range.clone();
-        let read_only_memtables = storage_reader.read_only_memtables.clone();
-        let gc_updated_entries = storage_reader.gc_updated_entries.clone();
-        drop(storage_reader);
         let res = GC::gc_handler(
             &config,
-            memtable,
-            vlog,
-            filters,
-            key_range,
-            read_only_memtables,
-            gc_updated_entries,
+            Arc::clone(&storage_reader.gc_table),
+            Arc::clone(&storage_reader.gc_log),
+            Arc::clone(&storage_reader.filters),
+            Arc::clone(&storage_reader.key_range),
+            Arc::clone(&storage_reader.read_only_memtables),
+            Arc::clone(&storage_reader.gc_updated_entries),
         )
         .await;
 
@@ -78,21 +68,14 @@ mod tests {
         }
         let storage_reader = store.read().await;
         let config = storage_reader.gc.config.clone();
-        let memtable = storage_reader.gc_table.clone();
-        let vlog = storage_reader.gc_log.clone();
-        let filters = storage_reader.filters.clone();
-        let key_range = storage_reader.key_range.clone();
-        let read_only_memtables = storage_reader.read_only_memtables.clone();
-        let gc_updated_entries = storage_reader.gc_updated_entries.clone();
-        drop(storage_reader);
         let res = GC::gc_handler(
             &config,
-            memtable,
-            vlog,
-            filters,
-            key_range,
-            read_only_memtables,
-            gc_updated_entries,
+            Arc::clone(&storage_reader.gc_table),
+            Arc::clone(&storage_reader.gc_log),
+            Arc::clone(&storage_reader.filters),
+            Arc::clone(&storage_reader.key_range),
+            Arc::clone(&storage_reader.read_only_memtables),
+            Arc::clone(&storage_reader.gc_updated_entries),
         )
         .await;
 
@@ -127,21 +110,16 @@ mod tests {
         }
         let storage_reader = store.read().await;
         let config = storage_reader.gc.config.clone();
-        let memtable = storage_reader.gc_table.clone();
-        let vlog = storage_reader.gc_log.clone();
-        let initial_tail_offset = vlog.read().await.tail_offset;
-        let filters = storage_reader.filters.clone();
-        let key_range = storage_reader.key_range.clone();
-        let read_only_memtables = storage_reader.read_only_memtables.clone();
-        let gc_updated_entries = storage_reader.gc_updated_entries.clone();
+        let initial_tail_offset =  storage_reader.gc_log.read().await.tail_offset;
+       
         let _ = GC::gc_handler(
             &config,
-            memtable,
-            vlog,
-            filters,
-            key_range,
-            read_only_memtables,
-            gc_updated_entries,
+            Arc::clone(&storage_reader.gc_table),
+            Arc::clone(&storage_reader.gc_log),
+            Arc::clone(&storage_reader.filters),
+            Arc::clone(&storage_reader.key_range),
+            Arc::clone(&storage_reader.read_only_memtables),
+            Arc::clone(&storage_reader.gc_updated_entries),
         )
         .await;
         assert!(storage_reader.gc.vlog.read().await.tail_offset != initial_tail_offset);
@@ -167,22 +145,17 @@ mod tests {
         let vaue_len = 3;
         let storage_reader = store.read().await;
         let mut config = storage_reader.gc.config.clone();
-        let memtable = storage_reader.gc_table.clone();
-        let vlog = storage_reader.gc_log.clone();
-        let initial_tail_offset = vlog.read().await.tail_offset;
-        let filters = storage_reader.filters.clone();
-        let key_range = storage_reader.key_range.clone();
-        let read_only_memtables = storage_reader.read_only_memtables.clone();
-        let gc_updated_entries = storage_reader.gc_updated_entries.clone();
+       
+        let initial_tail_offset = storage_reader.gc_log.read().await.tail_offset;
         config.gc_chunk_size = bytes_to_scan_for_garbage_colection;
         let _ = GC::gc_handler(
             &config,
-            memtable,
-            vlog,
-            filters,
-            key_range,
-            read_only_memtables,
-            gc_updated_entries,
+            Arc::clone(&storage_reader.gc_table),
+            Arc::clone(&storage_reader.gc_log),
+            Arc::clone(&storage_reader.filters),
+            Arc::clone(&storage_reader.key_range),
+            Arc::clone(&storage_reader.read_only_memtables),
+            Arc::clone(&storage_reader.gc_updated_entries),
         )
         .await;
         let max_extention_length = SIZE_OF_U32   // Key Size(for fetching key length)
@@ -212,24 +185,16 @@ mod tests {
             log::error!("Setup failed {}", err);
             return;
         }
-        //TODO: redundant
         let storage_reader = store.read().await;
-        let config = storage_reader.gc.config.clone();
-        let memtable = storage_reader.gc_table.clone();
-        let vlog = storage_reader.gc_log.clone();
-        let initial_head_offset = vlog.read().await.head_offset;
-        let filters = storage_reader.filters.clone();
-        let key_range = storage_reader.key_range.clone();
-        let read_only_memtables = storage_reader.read_only_memtables.clone();
-        let gc_updated_entries = storage_reader.gc_updated_entries.clone();
+        let initial_head_offset = storage_reader.gc_log.read().await.head_offset;
         let _ = GC::gc_handler(
-            &config,
-            memtable,
-            vlog,
-            filters,
-            key_range,
-            read_only_memtables,
-            gc_updated_entries,
+            &storage_reader.gc.config.clone(),
+            Arc::clone(&storage_reader.gc_table),
+            Arc::clone(&storage_reader.gc_log),
+            Arc::clone(&storage_reader.filters),
+            Arc::clone(&storage_reader.key_range),
+            Arc::clone(&storage_reader.read_only_memtables),
+            Arc::clone(&storage_reader.gc_updated_entries),
         )
         .await;
 

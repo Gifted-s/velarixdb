@@ -135,7 +135,7 @@ impl BucketMap {
                 let sst_dir = bucket
                     .dir
                     .join(format!("{}_{}", SST_PREFIX, created_at.timestamp_millis()));
-                let mut sst = Table::new(sst_dir).await;
+                let mut sst = Table::new(sst_dir).await?;
                 sst.set_entries(table.get_entries());
                 sst.write_to_file().await?;
                 bucket.sstables.write().await.push(sst.clone());
@@ -157,7 +157,7 @@ impl BucketMap {
             let sst_dir = bucket
                 .dir
                 .join(format!("{}_{}", SST_PREFIX, created_at.timestamp_millis()));
-            let mut sst = Table::new(sst_dir).await;
+            let mut sst = Table::new(sst_dir).await?;
             sst.set_entries(table.get_entries());
             sst.write_to_file().await?;
             bucket.sstables.write().await.push(sst.clone());
@@ -165,7 +165,6 @@ impl BucketMap {
                 .await
                 .map_err(|err| GetFileMetaDataError(err))?
                 .len() as usize;
-
             self.buckets.insert(bucket.id, bucket.clone());
             return Ok(sst);
         }
@@ -218,18 +217,7 @@ impl BucketMap {
                         sstables: Arc::new(RwLock::new(ssts_remaining.to_vec())),
                     };
                 } else {
-                    *bucket = Bucket {
-                        id: bucket.id,
-                        size: 0,
-                        dir: bucket.dir.clone(),
-                        avarage_size: 0,
-                        sstables: Arc::new(RwLock::new(vec![])),
-                    };
-
                     buckets_to_delete.push(bucket_id);
-
-                    // TODO: Investigate deletion, is it possible that a new flush has happened to the bucket we are about to delete?
-                    // This will lead to a fatal issue so we have to lock the bucket and check if a flush has happened before deletion
                     if let Err(err) = fs::remove_dir_all(&bucket.dir).await {
                         log::error!("{}", DirDeleteError(err));
                     }
@@ -244,7 +232,6 @@ impl BucketMap {
                 }
             }
         }
-        // Same: Verify that a new sstable has not been added to this bucket before deletion
         if !buckets_to_delete.is_empty() {
             buckets_to_delete.iter().for_each(|&bucket_id| {
                 self.buckets.shift_remove(bucket_id);

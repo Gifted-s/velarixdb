@@ -62,10 +62,10 @@ mod tests {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("store_test_3"));
         let store = DataStore::new(path.clone()).await.unwrap();
-        let workload_size = 15000;
+        let workload_size = 50000;
         let key_len = 5;
         let val_len = 5;
-        let write_read_ratio = 0.5;
+        let write_read_ratio = 1.0;
         let workload = Workload::new(workload_size, key_len, val_len, write_read_ratio);
         let (read_workload, write_workload) = workload.generate_workload_data_as_map();
         let store_ref = Arc::new(RwLock::new(store));
@@ -184,7 +184,7 @@ mod tests {
         }
     }
 
-    #[tokio::test] 
+    #[tokio::test]
     async fn datastore_test_sequential_put_and_get() {
         setup();
         let root = tempdir().unwrap();
@@ -195,28 +195,21 @@ mod tests {
         let val_len = 5;
         let write_read_ratio = 1.0;
         let workload = Workload::new(workload_size, key_len, val_len, write_read_ratio);
-        let (read_workload, write_workload) = workload.generate_workload_data_as_map();
+        let (read_workload, write_workload) = workload.generate_workload_data_as_vec();
 
-        for (i, (key, val)) in write_workload.iter().enumerate() {
-            let key_str = std::str::from_utf8(&key).unwrap();
-            let val_str = std::str::from_utf8(&val).unwrap();
-            println!("insertion point key {}, val {} i {}", key_str, val_str, i);
+        for e in write_workload.iter() {
+            let key_str = std::str::from_utf8(&e.key).unwrap();
+            let val_str = std::str::from_utf8(&e.val).unwrap();
             let res = store.put(key_str, val_str).await;
             assert!(res.is_ok());
             assert_eq!(res.unwrap(), true);
         }
-        for (i, (key, val)) in read_workload.iter().enumerate() {
-            let key_str = std::str::from_utf8(&key).unwrap();
+        for e in read_workload.iter() {
+            let key_str = std::str::from_utf8(&e.key).unwrap();
             let res = store.get(&key_str).await;
-            println!(
-                "Fetch point key {}, val {:?} value in read workload {:?} i {}",
-                std::str::from_utf8(&key).unwrap(),
-                std::str::from_utf8(&res.as_ref().unwrap().0).unwrap(),
-                std::str::from_utf8(&val).unwrap(),
-                i
-            );
             assert!(res.is_ok());
-            assert_eq!(res.unwrap().0, *write_workload.get(key).unwrap());
+            let w = write_workload.iter().find(|e1| e1.key == e.key).unwrap();
+            assert_eq!(res.unwrap().0, w.val);
         }
     }
 
@@ -242,10 +235,7 @@ mod tests {
         let not_found_key = "**_not_found_**";
         let res = store_ref.read().await.get(not_found_key).await;
         assert!(res.is_err());
-        assert!(
-            Error::KeyNotFoundByAnyBloomFilterError.to_string() == res.as_ref().err().unwrap().to_string()
-                || res.err().unwrap().to_string() == Error::NotFoundInDB.to_string(),
-        );
+        assert_eq!(res.err().unwrap().to_string(), Error::NotFoundInDB.to_string());
     }
 
     #[tokio::test]
@@ -293,7 +283,6 @@ mod tests {
         assert_eq!(Error::NotFoundInDB.to_string(), res.err().unwrap().to_string());
 
         let _ = store_ref.write().await.flush_all_memtables().await;
-        store_ref.write().await.active_memtable.clear();
 
         // We expect tombstone to be flushed to an sstable at this point
         let res = store_ref.read().await.get(key1).await;
@@ -339,11 +328,16 @@ mod tests {
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), true);
 
+        let res = store_ref.read().await.get(key1).await;
+        assert!(res.is_ok());
+        assert_ne!(res.as_ref().unwrap().0, write_workload[0].val);
+        assert_eq!(res.as_ref().unwrap().0, updated_value.as_bytes().to_vec());
+
         let res = store_ref.write().await.flush_all_memtables().await;
         assert!(res.is_ok());
-        store_ref.write().await.active_memtable.clear();
 
         let res = store_ref.read().await.get(key1).await;
+        println!("RESPONSE {:?}", res);
         assert!(res.is_ok());
         assert_eq!(res.unwrap().0, updated_value.as_bytes().to_vec());
 

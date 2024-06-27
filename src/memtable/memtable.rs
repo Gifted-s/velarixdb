@@ -10,7 +10,7 @@ use crate::consts::{DEFAULT_FALSE_POSITIVE_RATE, SIZE_OF_U32, SIZE_OF_U64, SIZE_
 use crate::err::Error;
 use crate::filter::BloomFilter;
 use crate::storage::SizeUnit;
-use crate::types::{CreationTime, IsTombStone, Key, SkipMapEntries, ValOffset};
+use crate::types::{CreationTime, IsTombStone, Key, SkipMapEntries, ValOffset, Value};
 use chrono::{DateTime, Utc};
 use crossbeam_skiplist::SkipMap;
 use rand::distributions::Alphanumeric;
@@ -57,6 +57,20 @@ pub struct MemTable<K: Hash + cmp::Ord> {
     pub most_recent_entry: Entry<K, ValOffset>,
 }
 
+#[allow(dead_code)]
+pub enum ValueOption {
+    /// We might need to cache the raw value in memory if the size is small, this will reduce
+    /// number of Disk IO because value of smaller size can reside and fetched in memory before it
+    /// is been flushed to disk
+    Raw(Value),
+
+    /// Value offset gotten from value position in value log
+    Offset(ValOffset),
+
+    /// Represents deleted entry
+    TombStone(IsTombStone),
+}
+
 impl InsertableToBucket for MemTable<Key> {
     fn get_entries(&self) -> SkipMapEntries<Key> {
         self.entries.clone()
@@ -64,7 +78,6 @@ impl InsertableToBucket for MemTable<Key> {
     fn size(&self) -> usize {
         self.size
     }
-
     fn find_biggest_key(&self) -> Result<Key, Error> {
         let largest_entry = self.entries.iter().next_back();
         match largest_entry {
@@ -93,7 +106,6 @@ impl Entry<Key, ValOffset> {
     }
 
     pub(crate) fn has_expired(&self, ttl: u64) -> bool {
-        // Current time
         let current_time = Utc::now();
         let current_timestamp = current_time.timestamp_millis() as u64;
         current_timestamp > (self.created_at + ttl)

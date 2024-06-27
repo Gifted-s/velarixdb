@@ -144,7 +144,7 @@ impl DataStore<'static, Key> {
                         most_recent_tail_timestamp = value.created_at;
                     }
                 }
-                let mut filter = Table::build_filter_from_sstable(&sstable.entries);
+                let mut filter = Table::build_filter_from_sstable(&sstable.entries, config.false_positive_rate);
                 table.entries.clear();
                 filter.set_sstable(table.clone());
                 filters.push(filter);
@@ -340,49 +340,6 @@ impl DataStore<'static, Key> {
             gc_table,
             gc_updated_entries: Arc::new(RwLock::new(SkipMap::new())),
         });
-    }
-    // Flush all memtables
-    pub async fn flush_all_memtables(&mut self) -> Result<(), Error> {
-        // Flush active memtable
-        let hotness = 1;
-        self.flush_memtable(Arc::new(RwLock::new(self.active_memtable.to_owned())), hotness)
-            .await?;
-        let readonly_memtables = self.read_only_memtables.read().await.to_owned();
-        // TODO: handle with multiple threads
-        for (_, memtable) in readonly_memtables.iter() {
-            self.flush_memtable(memtable.clone(), hotness).await?;
-        }
-        drop(readonly_memtables);
-        // Sort filters by hotness after flushing read-only memtables
-        self.filters
-            .write()
-            .await
-            .sort_by(|a, b| b.get_sst().get_hotness().cmp(&a.get_sst().get_hotness()));
-        self.active_memtable.clear();
-        self.read_only_memtables = Arc::new(RwLock::new(IndexMap::new()));
-        Ok(())
-    }
-
-    async fn flush_memtable(&mut self, memtable: Arc<RwLock<MemTable<Key>>>, _: u64) -> Result<(), Error> {
-        let sstable_path = self
-            .buckets
-            .write()
-            .await
-            .insert_to_appropriate_bucket(Arc::new(Box::new(memtable.read().await.to_owned())))
-            .await?;
-
-        let mut filter = memtable.read().await.get_bloom_filter();
-        filter.set_sstable(sstable_path.clone());
-        self.filters.write().await.push(filter);
-        let biggest_key = memtable.read().await.find_biggest_key()?;
-        let smallest_key = memtable.read().await.find_smallest_key()?;
-        self.key_range.write().await.set(
-            sstable_path.get_data_file_path(),
-            smallest_key,
-            biggest_key,
-            sstable_path,
-        );
-        Ok(())
     }
 
     fn get_bucket_id_from_full_bucket_path(full_path: PathBuf) -> String {

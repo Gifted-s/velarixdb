@@ -1,12 +1,10 @@
-use std::sync::Arc;
-
+use crate::{bucket::InsertableToBucket, err::Error, types::*};
 use crate::{
     consts::{SIZE_OF_U64, SIZE_OF_U8, SIZE_OF_USIZE},
     err::Error::{BiggestKeyIndexError, LowestKeyIndexError},
 };
 use crossbeam_skiplist::SkipMap;
-//TODO this should be from the types module not memtable
-use crate::{bucket::InsertableToBucket, err::Error, types::*};
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct TableInsertor {
@@ -14,7 +12,6 @@ pub struct TableInsertor {
     pub(crate) size: usize,
 }
 
-// TODO: This is redundant
 impl InsertableToBucket for TableInsertor {
     fn get_entries(&self) -> SkipMapEntries<Key> {
         Arc::clone(&self.entries)

@@ -20,7 +20,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub enum FileType {
     Index,
-    SSTable,
+    Data,
     ValueLog,
 }
 pub type Buf = [u8];
@@ -281,6 +281,7 @@ impl DataFs for DataFileNode {
         loop {
             let mut key_len_bytes = [0; SIZE_OF_U32];
             let mut bytes_read = load_buffer!(file, &mut key_len_bytes, path.to_owned())?;
+
             if bytes_read == 0 {
                 return Ok(None);
             }
