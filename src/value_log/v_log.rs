@@ -112,6 +112,7 @@ pub struct ValueLog {
     pub content: VFile<VLogFileNode>,
     pub head_offset: usize,
     pub tail_offset: usize,
+    pub size: usize,
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -136,6 +137,7 @@ impl ValueLog {
             head_offset: 0,
             tail_offset: 0,
             content: VFile::new(file_path, file),
+            size: 0,
         })
     }
 
@@ -156,9 +158,10 @@ impl ValueLog {
         );
         let serialized_data = v_log_entry.serialize();
         // Get the current offset before writing(this will be the offset of the value stored in the memtable)
-        let last_offset = self.content.file.node.size().await;
+        let last_offset = self.size;
         let data_file = &self.content;
         let _ = data_file.file.node.write_all(&serialized_data).await;
+        self.size += serialized_data.len();
         Ok(last_offset as usize)
     }
 

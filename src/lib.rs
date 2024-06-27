@@ -12,7 +12,7 @@ mod gc;
 mod helpers;
 mod index;
 mod key_range;
-mod macros;
+mod mac;
 mod memtable;
 mod meta;
 mod range;

@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use crossbeam_skiplist::SkipMap;
 use std::{
     cmp::Ordering,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::Arc,
     time::SystemTime,
 };
@@ -10,7 +10,7 @@ use std::{
 use crate::{
     block::Block,
     bucket::InsertableToBucket,
-    consts::{DEFAULT_FALSE_POSITIVE_RATE, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, SIZE_OF_USIZE},
+    consts::{SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, SIZE_OF_USIZE},
     err::Error,
     filter::BloomFilter,
     fs::{DataFileNode, DataFs, FileAsync, FileNode, IndexFileNode, IndexFs},
@@ -75,17 +75,16 @@ impl InsertableToBucket for Table {
 }
 
 impl Table {
-    pub async fn new(dir: PathBuf) -> Self {
-        //TODO: handle error during file creation
-        let (data_file_path, index_file_path, creation_time) = Table::generate_file_path(dir.to_owned()).await.unwrap();
-        let data_file = DataFileNode::new(data_file_path.to_owned(), crate::fs::FileType::SSTable)
+    pub async fn new(dir: PathBuf) -> Result<Table, Error> {
+        let (data_file_path, index_file_path, creation_time) = Table::generate_file_path(dir.to_owned()).await?;
+        let data_file = DataFileNode::new(data_file_path.to_owned(), crate::fs::FileType::Data)
             .await
             .unwrap();
         let index_file = IndexFileNode::new(index_file_path.to_owned(), crate::fs::FileType::Index)
             .await
             .unwrap();
 
-        Self {
+        Ok(Self {
             dir,
             hotness: 0,
             index_file: IndexFile::new(index_file_path, index_file),
@@ -93,7 +92,7 @@ impl Table {
             created_at: creation_time.timestamp_millis() as u64,
             entries: Arc::new(SkipMap::new()),
             size: 0,
-        }
+        })
     }
     pub fn increase_hotness(&mut self) {
         self.hotness += 1;
@@ -144,7 +143,7 @@ impl Table {
             hotness: 1,
             created_at: Utc::now().timestamp_millis() as u64,
             data_file: DataFile {
-                file: DataFileNode::new(data_file_path.to_owned(), crate::fs::FileType::SSTable)
+                file: DataFileNode::new(data_file_path.to_owned(), crate::fs::FileType::Data)
                     .await
                     .unwrap(),
                 path: data_file_path,
@@ -166,12 +165,14 @@ impl Table {
         return table;
     }
 
-    pub(crate) async fn write_to_file(&self) -> Result<(), Error> {
+    pub(crate) async fn write_to_file(&mut self) -> Result<(), Error> {
         let index_file = &self.index_file;
         let mut blocks: Vec<Block> = Vec::new();
         let mut table_index = Index::new(self.index_file.path.clone(), index_file.file.clone());
         let mut current_block = Block::new();
-
+        if self.size > 0 {
+            self.reset_size();
+        }
         for e in self.entries.iter() {
             let entry = Entry::new(
                 e.key().clone(),
@@ -179,7 +180,7 @@ impl Table {
                 e.value().created_at,
                 e.value().is_tombstone,
             );
-            //TODO: reorder  key length(used during fetch) + key len(actual key length) + value length(4 bytes) + date in milliseconds(8 bytes)
+            // key len(variable) +  key length(used during fetch) + value length(4 bytes) + date in milliseconds(8 bytes)
             let entry_size = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
             if current_block.is_full(entry_size) {
                 blocks.push(current_block);
@@ -199,24 +200,20 @@ impl Table {
             self.write_block(block, &mut table_index).await?;
         }
 
-        // Incase we have some entries in current block, write them to disk
+        // Incase we have some entries left in current block, write them to disk
         if current_block.entries.len() > 0 {
             self.write_block(&current_block, &mut table_index).await?;
         }
-
         table_index.write_to_file().await?;
         Ok(())
     }
 
-    async fn write_block(&self, block: &Block, table_index: &mut Index) -> Result<(), Error> {
-        // Get the current offset before writing (this will be the offset of the value stored in the sparse index)
-        let offset = self.data_file.file.node.size().await;
+    async fn write_block(&mut self, block: &Block, table_index: &mut Index) -> Result<(), Error> {
+        let offset = self.size;
         let last_entry = block.get_last_entry();
-
-        // Store last entry key and its sstable file offset in sparse index
         table_index.insert(last_entry.key_prefix, last_entry.key, offset as u32);
-
-        block.write_to_file(self.data_file.file.node.clone()).await?;
+        let bytes_written = block.write_to_file(self.data_file.file.node.clone()).await?;
+        self.size += bytes_written;
         Ok(())
     }
 
@@ -224,9 +221,12 @@ impl Table {
         self.data_file.file.load_entries_within_range(range_offset).await
     }
 
-    pub(crate) fn build_filter_from_sstable(entries: &SkipMapEntries<Key>) -> BloomFilter {
-        // TODO: FALSE POSITIVE should be from config
-        let mut filter = BloomFilter::new(DEFAULT_FALSE_POSITIVE_RATE, entries.len());
+    pub(crate) fn reset_size(&mut self) {
+        self.size = 0;
+    }
+
+    pub(crate) fn build_filter_from_sstable(entries: &SkipMapEntries<Key>, false_positive: f64) -> BloomFilter {
+        let mut filter = BloomFilter::new(false_positive, entries.len());
         entries.iter().for_each(|e| filter.set(e.key()));
         filter
     }

@@ -79,7 +79,6 @@ impl Flusher {
         let read_only_memtable = self.read_only_memtable.clone();
         tokio::spawn(async move {
             let mut flusher = Flusher::new(read_only_memtable.clone(), buckets, filters, key_range);
-
             match flusher.flush(table_to_flush).await {
                 Ok(_) => {
                     let mut tables = read_only_memtable.write().await;

@@ -115,7 +115,7 @@ pub async fn generate_ssts(number: u32) -> Vec<Table> {
                                 .await
                                 .unwrap(),
                         )),
-                        file_type: FileType::SSTable,
+                        file_type: FileType::Data,
                     },
                 },
                 path: sst_contructor[i as usize].data_path.to_owned(),

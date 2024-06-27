@@ -1,3 +1,4 @@
+use crate::bucket::bucket::InsertableToBucket;
 use crate::cfg::Config;
 use crate::compactors::Compactor;
 use crate::consts::{
@@ -19,11 +20,11 @@ use crate::types::{
 };
 use crate::value_log::ValueLog;
 use chrono::Utc;
+use indexmap::IndexMap;
 use std::path::PathBuf;
 use std::{hash::Hash, sync::Arc};
 use tokio::fs::{self};
-use tokio::{spawn, sync::RwLock};
-
+use tokio::sync::RwLock;
 pub struct DataStore<'a, K>
 where
     K: Hash + Ord + Send + Sync + Clone,
@@ -113,7 +114,7 @@ impl<'a> DataStore<'a, Key> {
         );
     }
 
-    pub async fn put(&mut self, key: &str, value: &str) -> Result<Bool, Error> {
+    pub async fn put(&mut self, key: &str, val: &str) -> Result<Bool, Error> {
         let gc_entries_reader = self.gc_updated_entries.read().await;
         if !gc_entries_reader.is_empty() {
             for e in gc_entries_reader.iter() {
@@ -127,9 +128,9 @@ impl<'a> DataStore<'a, Key> {
             gc_entries_reader.clear();
         }
         drop(gc_entries_reader);
-        let is_tombstone = value.len() == 0;
+        let is_tombstone = val == TOMB_STONE_MARKER;
         let key = &key.as_bytes().to_vec();
-        let val = &value.as_bytes().to_vec();
+        let val = &val.as_bytes().to_vec();
         let created_at = Utc::now().timestamp_millis() as u64;
         let v_offset = self.val_log.append(key, val, created_at, is_tombstone).await?;
 
@@ -148,7 +149,6 @@ impl<'a> DataStore<'a, Key> {
                 Utc::now().timestamp_millis() as u64,
                 false,
             );
-
             self.active_memtable.insert(&head_entry)?;
             self.active_memtable.read_only = true;
             self.read_only_memtables.write().await.insert(
@@ -163,7 +163,11 @@ impl<'a> DataStore<'a, Key> {
                     let id = table_id.clone();
                     let mut flusher = self.flusher.clone();
                     let tx = self.flush_signal_tx.clone();
-                    spawn(async move {
+                    // NOTE: If the put method returns before the code inside tokio::spawn finishes executing,
+                    // the tokio::spawn task will continue to run independently of the original function call.
+                    // This is because tokio::spawn creates a new asynchronous task that is managed by the Tokio runtime.
+                    // The spawned task is executed concurrently and its lifecycle is not tied to the function that spawned it.
+                    tokio::spawn(async move {
                         flusher.flush_handler(id, table_inner, tx);
                     });
                 }
@@ -219,7 +223,7 @@ impl<'a> DataStore<'a, Key> {
                     }
                 }
             }
-            if most_recent_insert_time > 0 {
+            if self.found_in_table(most_recent_insert_time)  {
                 if is_deleted {
                     return Err(NotFoundInDB);
                 }
@@ -229,12 +233,12 @@ impl<'a> DataStore<'a, Key> {
                 let key_range = &self.key_range.read().await;
                 let mut ssts = key_range.filter_sstables_by_biggest_key(&key);
                 if ssts.is_empty() {
-                    return Err(KeyNotFoundInAnySSTableError);
+                    return Err(NotFoundInDB);
                 }
                 let filters = &self.filters.read().await;
                 ssts = BloomFilter::ssts_within_key_range(&key, filters, &ssts);
                 if ssts.is_empty() {
-                    return Err(KeyNotFoundByAnyBloomFilterError);
+                    return Err(NotFoundInDB);
                 }
                 for sst in ssts.iter() {
                     let index = Index::new(sst.index_file.path.to_owned(), sst.index_file.file.to_owned());
@@ -262,7 +266,7 @@ impl<'a> DataStore<'a, Key> {
                         Err(err) => log::error!("{}", err),
                     }
                 }
-                if most_recent_insert_time > 0 {
+                if self.found_in_table(most_recent_insert_time) {
                     if is_deleted {
                         return Err(NotFoundInDB);
                     }
@@ -272,6 +276,10 @@ impl<'a> DataStore<'a, Key> {
             }
         }
         Err(NotFoundInDB)
+    }
+
+    pub fn found_in_table(&self, most_recent_insert_time: u64)-> bool {
+        most_recent_insert_time > 0
     }
 
     pub async fn get_value_from_vlog(
@@ -295,13 +303,27 @@ impl<'a> DataStore<'a, Key> {
         self.get(key).await?;
         self.put(key, value).await
     }
-
-    pub async fn clear(&'a mut self) -> Result<DataStore<'a, types::Key>, Error> {
-        let size_unit = self.active_memtable.size_unit();
+    // Flush all memtables
+    pub async fn flush_all_memtables(&mut self) -> Result<(), Error> {
+        self.active_memtable.read_only = true;
+        self.read_only_memtables.write().await.insert(
+            MemTable::generate_table_id(),
+            Arc::new(RwLock::new(self.active_memtable.to_owned())),
+        );
+        let immutable_tables = self.read_only_memtables.read().await.to_owned();
+        let mut flusher = Flusher::new(
+            Arc::clone(&self.read_only_memtables),
+            Arc::clone(&self.buckets),
+            Arc::clone(&self.filters),
+            Arc::clone(&self.key_range),
+        );
+        for (_, table) in immutable_tables.iter() {
+            let table_inner = Arc::clone(table);
+            flusher.flush(table_inner).await?;
+        }
         self.active_memtable.clear();
-        self.buckets.write().await.clear_all().await;
-        self.val_log.clear_all().await;
-        DataStore::with_capacity_and_rate(self.dir.clone(), size_unit, self.config.to_owned()).await
+        self.read_only_memtables = Arc::new(RwLock::new(IndexMap::new()));
+        Ok(())
     }
 
     async fn with_default_config(

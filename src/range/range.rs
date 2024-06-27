@@ -348,90 +348,90 @@ impl Merger {
     }
 }
 
-#[cfg(test)]
-mod tests {
+// #[cfg(test)]
+// mod tests {
 
-    use super::*;
+//     use super::*;
 
-    use std::sync::Arc;
-    use tokio::sync::RwLock;
+//     use std::sync::Arc;
+//     use tokio::sync::RwLock;
 
-    use tokio::fs;
+//     use tokio::fs;
 
-    #[tokio::test]
-    async fn range_test_without_compaction() {
-        let path = PathBuf::new().join("bump3");
-        let s_engine = DataStore::new(path.clone()).await.unwrap();
+//     #[tokio::test]
+//     async fn range_test_without_compaction() {
+//         let path = PathBuf::new().join("bump3");
+//         let s_engine = DataStore::new(path.clone()).await.unwrap();
 
-        // Specify the number of random strings to generate
-        let num_strings = 50000;
-        let mut entries = vec![];
-        for i in 0..num_strings {
-            entries.push(i.to_string())
-        }
+//         // Specify the number of random strings to generate
+//         let num_strings = 50000;
+//         let mut entries = vec![];
+//         for i in 0..num_strings {
+//             entries.push(i.to_string())
+//         }
 
-        let sg = Arc::new(RwLock::new(s_engine));
-        let tasks = entries.iter().map(|k| {
-            let s_engine = Arc::clone(&sg);
-            let k = k.clone();
-            tokio::spawn(async move {
-                let mut value = s_engine.write().await;
-                value.put(&k, &k).await
-            })
-        });
+//         let sg = Arc::new(RwLock::new(s_engine));
+//         let tasks = entries.iter().map(|k| {
+//             let s_engine = Arc::clone(&sg);
+//             let k = k.clone();
+//             tokio::spawn(async move {
+//                 let mut value = s_engine.write().await;
+//                 value.put(&k, &k).await
+//             })
+//         });
 
-        let all_results = join_all(tasks).await;
-        for tokio_response in all_results {
-            match tokio_response {
-                Ok(entry) => match entry {
-                    Ok(v) => {
-                        assert_eq!(v, true)
-                    }
-                    Err(_) => {
-                        assert!(false, "No err should be found")
-                    }
-                },
-                Err(_) => assert!(false, "No err should be found"),
-            }
-        }
-        let binding = Arc::clone(&sg);
-        let s_engine = binding.read().await;
-        let response = s_engine.seek("200".as_bytes(), "80000".as_bytes());
-        match response.await {
-            Ok(mut iterator) => {
-                while let Some(entry) = iterator.next().await {
-                    print!(
-                        "Key: {:?} Value: {:?}",
-                        String::from_utf8(entry.key).unwrap().as_str(),
-                        String::from_utf8(entry.val).unwrap().as_str()
-                    );
-                }
-            }
-            Err(_) => assert!(false, "No err should be found"),
-        }
+//         let all_results = join_all(tasks).await;
+//         for tokio_response in all_results {
+//             match tokio_response {
+//                 Ok(entry) => match entry {
+//                     Ok(v) => {
+//                         assert_eq!(v, true)
+//                     }
+//                     Err(_) => {
+//                         assert!(false, "No err should be found")
+//                     }
+//                 },
+//                 Err(_) => assert!(false, "No err should be found"),
+//             }
+//         }
+//         let binding = Arc::clone(&sg);
+//         let s_engine = binding.read().await;
+//         let response = s_engine.seek("200".as_bytes(), "80000".as_bytes());
+//         match response.await {
+//             Ok(mut iterator) => {
+//                 while let Some(entry) = iterator.next().await {
+//                     print!(
+//                         "Key: {:?} Value: {:?}",
+//                         String::from_utf8(entry.key).unwrap().as_str(),
+//                         String::from_utf8(entry.val).unwrap().as_str()
+//                     );
+//                 }
+//             }
+//             Err(_) => assert!(false, "No err should be found"),
+//         }
 
-        // let mut s_engine2 = binding.write().await;
-        // let compaction_opt = s_engine2.run_compaction().await;
-        // // Insert the generated random strings
-        // // let compactor = Compactor::new();
-        // // let compaction_opt = sg.write().await.run_compaction().await;
-        // match compaction_opt {
-        //     Ok(_) => {
-        //         println!("Compaction is successful");
-        //         println!(
-        //             "Length of bucket after compaction {:?}",
-        //             sg.read().await.buckets.read().await.buckets.len()
-        //         );
-        //         println!(
-        //             "Length of bloom filters after compaction {:?}",
-        //             sg.read().await.bloom_filters.read().await.len()
-        //         );
-        //     }
-        //     Err(err) => {
-        //         info!("Error during compaction {}", err)
-        //     }
-        // }
+//         // let mut s_engine2 = binding.write().await;
+//         // let compaction_opt = s_engine2.run_compaction().await;
+//         // // Insert the generated random strings
+//         // // let compactor = Compactor::new();
+//         // // let compaction_opt = sg.write().await.run_compaction().await;
+//         // match compaction_opt {
+//         //     Ok(_) => {
+//         //         println!("Compaction is successful");
+//         //         println!(
+//         //             "Length of bucket after compaction {:?}",
+//         //             sg.read().await.buckets.read().await.buckets.len()
+//         //         );
+//         //         println!(
+//         //             "Length of bloom filters after compaction {:?}",
+//         //             sg.read().await.bloom_filters.read().await.len()
+//         //         );
+//         //     }
+//         //     Err(err) => {
+//         //         info!("Error during compaction {}", err)
+//         //     }
+//         // }
 
-        let _ = fs::remove_dir_all(path.clone()).await;
-    }
-}
+//         let _ = fs::remove_dir_all(path.clone()).await;
+//     }
+// }

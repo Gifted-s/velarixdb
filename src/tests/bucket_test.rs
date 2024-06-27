@@ -1,5 +1,4 @@
 #[cfg(test)]
-
 mod tests {
     use crate::{
         bucket::{Bucket, BucketMap, InsertableToBucket},
@@ -13,7 +12,7 @@ mod tests {
     use uuid::Uuid;
 
     #[tokio::test]
-    async fn test_bucket_new() -> Result<(), Error> {
+    async fn test_bucket_new() {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("."));
         let new_bucket = Bucket::new(path.to_owned()).await;
@@ -24,13 +23,12 @@ mod tests {
         assert_eq!(new_bucket.size, 0);
         assert_eq!(new_bucket.avarage_size, 0);
         assert!(new_bucket.sstables.read().await.is_empty());
-
-        Ok(())
     }
 
     #[tokio::test]
-    async fn test_bucket_from_with_empty() -> Result<(), Error> {
-        let path = PathBuf::from(".");
+    async fn test_bucket_from_with_empty() {
+        let root = tempdir().unwrap();
+        let path = PathBuf::from(root.path().join("."));
         let id = Uuid::new_v4();
         let average_size = 0;
         let sstables = Vec::new();
@@ -41,12 +39,12 @@ mod tests {
         assert_eq!(new_bucket.avarage_size, average_size);
         assert_eq!(new_bucket.id, id);
         assert!(new_bucket.sstables.read().await.is_empty());
-        Ok(())
     }
 
     #[tokio::test]
-    async fn test_bucket_from_with_sstables() -> Result<(), Error> {
-        let path = PathBuf::from(".");
+    async fn test_bucket_from_with_sstables() {
+        let root = tempdir().unwrap();
+        let path = PathBuf::from(root.path().join("."));
         let id = Uuid::new_v4();
         let sst_count = 3;
         let sst_samples = fixtures::sst::generate_ssts(sst_count).await;
@@ -57,9 +55,9 @@ mod tests {
         for meta_task in sst_meta {
             let meta_data = meta_task
                 .await
-                .map_err(|err| Error::GetFileMetaDataError(err.into()))?
+                .map_err(|err| Error::GetFileMetaDataError(err.into()))
                 .unwrap();
-            all_sstable_size += meta_data.len() as usize;
+            all_sstable_size += meta_data.unwrap().len() as usize;
         }
         let expected_avg = all_sstable_size / sst_count as usize;
         let res = Bucket::from(path.to_owned(), id, sst_samples, expected_avg).await;
@@ -69,11 +67,10 @@ mod tests {
         assert_eq!(new_bucket.avarage_size, expected_avg);
         assert_eq!(new_bucket.id, id);
         assert_eq!(new_bucket.sstables.read().await.len(), sst_count as usize);
-        Ok(())
     }
 
     #[tokio::test]
-    async fn test_cal_average_size() -> Result<(), Error> {
+    async fn test_cal_average_size() {
         let sst_count = 3;
         let sst_samples = fixtures::sst::generate_ssts(sst_count).await;
         let sst_meta = sst_samples
@@ -83,19 +80,18 @@ mod tests {
         for meta_task in sst_meta {
             let meta_data = meta_task
                 .await
-                .map_err(|err| Error::GetFileMetaDataError(err.into()))?
+                .map_err(|err| Error::GetFileMetaDataError(err.into()))
                 .unwrap();
-            all_sstable_size += meta_data.len() as usize;
+            all_sstable_size += meta_data.unwrap().len() as usize;
         }
         let expected_avg = all_sstable_size / sst_count as usize;
         let actual_avg = Bucket::cal_average_size(sst_samples).await;
         assert!(actual_avg.is_ok());
         assert_eq!(actual_avg.unwrap(), expected_avg);
-        Ok(())
     }
 
     #[tokio::test]
-    async fn test_sstcount_exceed_threshold() -> Result<(), Error> {
+    async fn test_sstcount_exceed_threshold() {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("."));
         let new_bucket = Bucket::new(path.to_owned()).await;
@@ -109,11 +105,10 @@ mod tests {
         new_bucket.sstables.write().await.clear();
 
         assert_eq!(new_bucket.sstable_count_exceeds_threshhold().await, false);
-        Ok(())
     }
 
     #[tokio::test]
-    async fn test_extract_sstable_to_compact() -> Result<(), Error> {
+    async fn test_extract_sstable_to_compact() {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("."));
         let new_bucket = Bucket::new(path.to_owned()).await;
@@ -126,9 +121,9 @@ mod tests {
         for meta_task in sst_meta {
             let meta_data = meta_task
                 .await
-                .map_err(|err| Error::GetFileMetaDataError(err.into()))?
+                .map_err(|err| Error::GetFileMetaDataError(err.into()))
                 .unwrap();
-            all_sstable_size += meta_data.len() as usize;
+            all_sstable_size += meta_data.unwrap().len() as usize;
         }
         for s in sst_samples {
             new_bucket.sstables.write().await.push(s)
@@ -139,11 +134,10 @@ mod tests {
         let (ssts, avg) = extracted_ssts.unwrap();
         assert_eq!(avg, expected_avg);
         assert_eq!(ssts.len(), sst_count as usize);
-        Ok(())
     }
 
     #[tokio::test]
-    async fn table_fits_into_bucket() -> Result<(), Error> {
+    async fn table_fits_into_bucket() {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("."));
         let mut new_bucket = Bucket::new(path.to_owned()).await;
@@ -166,22 +160,20 @@ mod tests {
         let fits_into_bucket = new_bucket.fits_into_bucket(Arc::new(Box::new(sst_within_size_range.to_owned())));
         // sstable size is within bucket range
         assert_eq!(fits_into_bucket, true);
-        Ok(())
     }
 
     #[tokio::test]
-    async fn test_bucket_map_new() -> Result<(), Error> {
+    async fn test_bucket_map_new() {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("."));
         let bucket_map = BucketMap::new(path.to_owned()).await;
 
         assert_eq!(bucket_map.dir, path);
         assert_eq!(bucket_map.buckets.len(), 0);
-        Ok(())
     }
 
     #[tokio::test]
-    async fn test_bucket_map_extract_imbalanced_buckets() -> Result<(), Error> {
+    async fn test_bucket_map_extract_imbalanced_buckets() {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("."));
         let new_bucket1 = Bucket::new(path.to_owned()).await;
@@ -248,11 +240,10 @@ mod tests {
         let (buckets, sst_to_remove) = imbalanced_buckets.unwrap();
         assert_eq!(buckets.len(), 0);
         assert_eq!(sst_to_remove.len(), 0);
-        Ok(())
     }
 
     #[tokio::test]
-    async fn test_bucket_map_is_balanced() -> Result<(), Error> {
+    async fn test_bucket_map_is_balanced() {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("."));
         let new_bucket1 = Bucket::new(path.to_owned()).await;
@@ -299,11 +290,10 @@ mod tests {
         bucket_map.buckets.insert(new_bucket1.id, new_bucket1);
         let is_balanced = bucket_map.is_balanced().await;
         assert_eq!(is_balanced, true);
-        Ok(())
     }
 
     #[tokio::test]
-    async fn table_insert_to_appropriate_bucket() -> Result<(), Error> {
+    async fn table_insert_to_appropriate_bucket() {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("."));
         let mut bucket_map = BucketMap::new(path.to_owned()).await;
@@ -329,12 +319,10 @@ mod tests {
         assert!(insert_res.is_ok());
         // SST size is not within first bucket size range so a new bucket should have be created
         assert_eq!(bucket_map.buckets.len(), 2);
-
-        Ok(())
     }
 
     #[tokio::test]
-    async fn test_delete_sstables() -> Result<(), Error> {
+    async fn test_delete_sstables() {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("."));
         let new_bucket1 = Bucket::new(path.to_owned()).await;
@@ -381,7 +369,5 @@ mod tests {
         let delete_res = bucket_map.delete_ssts(&ssts_to_remove).await;
         assert!(delete_res.is_ok());
         assert_eq!(bucket_map.buckets.len(), 0);
-
-        Ok(())
     }
 }

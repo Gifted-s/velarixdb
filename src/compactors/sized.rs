@@ -9,7 +9,7 @@ use crossbeam_skiplist::SkipMap;
 use uuid::Uuid;
 
 use super::{
-    compact::{MergePointer, WriteTracker},
+    compact::{Config, MergePointer, WriteTracker},
     MergedSSTable, TableInsertor,
 };
 use crate::{
@@ -27,20 +27,20 @@ pub struct SizedTierRunner<'a> {
     bucket_map: BucketMapHandle,
     filters: BloomFilterHandle,
     key_range: KeyRangeHandle,
-    config: &'a super::compact::Config,
+    config: &'a Config,
     tombstones: HashMap<Key, u64>,
 }
 
 impl<'a> SizedTierRunner<'a> {
     pub fn new(
-        buckets: BucketMapHandle,
+        bucket_map: BucketMapHandle,
         filters: BloomFilterHandle,
         key_range: KeyRangeHandle,
-        config: &'a super::compact::Config,
+        config: &'a Config,
     ) -> SizedTierRunner<'a> {
         Self {
             tombstones: HashMap::new(),
-            bucket_map: buckets,
+            bucket_map,
             filters,
             key_range,
             config,
@@ -187,7 +187,6 @@ impl<'a> SizedTierRunner<'a> {
             .iter()
             .map(|b| (b.get_sst().dir.to_owned(), b.to_owned()))
             .collect();
-
         ssts_to_delete.iter().for_each(|(_, tables)| {
             tables.iter().for_each(|t| {
                 filter_map.remove(&t.dir);
@@ -214,11 +213,9 @@ impl<'a> SizedTierRunner<'a> {
                     .await
                     .map_err(|err| CompactionFailed(Box::new(err)))?;
             }
-
-            let filter = Table::build_filter_from_sstable(&merged_sst.get_entries());
+            let filter = Table::build_filter_from_sstable(&merged_sst.get_entries(), self.config.filter_false_positive);
             merged_ssts.push(MergedSSTable::new(merged_sst, filter, hotness));
         }
-
         if merged_ssts.is_empty() {
             return Err(CompactionFailed(Box::new(MergeSSTContainsZeroEntries)));
         }

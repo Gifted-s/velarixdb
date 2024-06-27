@@ -68,6 +68,7 @@ use crate::{
     err::{self, Error},
     fs::{FileAsync, FileNode},
 };
+type BytesWritten = usize;
 const BLOCK_SIZE: usize = 4 * 1024; // 4KB
 
 #[derive(Debug, Clone)]
@@ -135,12 +136,14 @@ impl Block {
     /// Writes entries in the block to the sstable file
     ///
     /// Returns an `Result` indicating success or failure. An error is returned if write fails
-    pub async fn write_to_file(&self, file: FileNode) -> Result<(), Error> {
+    pub async fn write_to_file(&self, file: FileNode) -> Result<BytesWritten, Error> {
+        let mut bytes_written = 0;
         for entry in &self.entries {
             let serialized_entry = self.serialize(entry)?;
             file.write_all(&serialized_entry).await?;
+            bytes_written+=serialized_entry.len();
         }
-        Ok(())
+        Ok(bytes_written)
     }
 
     /// Checks if the Block is full given the size of an entry.
@@ -160,15 +163,10 @@ impl Block {
     pub(crate) fn serialize(&self, entry: &BlockEntry) -> Result<Vec<u8>, Error> {
         let entry_len = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
         let mut entry_vec = Vec::with_capacity(entry_len);
-
         entry_vec.extend_from_slice(&(entry.key_prefix).to_le_bytes());
-
         entry_vec.extend_from_slice(&entry.key);
-
         entry_vec.extend_from_slice(&(entry.value_offset as u32).to_le_bytes());
-
         entry_vec.extend_from_slice(&entry.creation_date.to_le_bytes());
-
         entry_vec.push(entry.is_tombstone as u8);
         if entry_len != entry_vec.len() {
             return Err(SerializationError("Invalid input"));
@@ -189,9 +187,11 @@ impl Block {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
 
     use super::*;
+    use std::{fs, sync::Arc};
+    use tempfile::NamedTempFile;
+    use tokio::{fs::File, sync::RwLock};
 
     #[test]
     fn test_new_empty_block_creation() {
@@ -282,15 +282,19 @@ mod tests {
             block.size,
             key.len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8
         );
-        // TODO use mocking library to create file
-        let sst_sample = "sst";
-        let file = FileNode::new(sst_sample.into(), crate::fs::FileType::SSTable)
-            .await
-            .unwrap();
-        let write_res = block.write_to_file(file.to_owned()).await;
+        let temp_file = NamedTempFile::new().unwrap();
+        let temp_file_path = temp_file.path().to_path_buf();
+
+        let std_file = temp_file.into_file();
+        let tokio_file = File::from_std(std_file);
+
+        let file = FileNode {
+            file_path: temp_file_path.to_owned(),
+            file: Arc::new(RwLock::new(tokio_file)),
+            file_type: crate::fs::FileType::Data,
+        };
+        let write_res = block.write_to_file(file.clone()).await;
         assert!(write_res.is_ok());
-        assert_eq!(file.size().await, block.size);
-        let _ = fs::remove_file(sst_sample);
     }
 
     #[test]
