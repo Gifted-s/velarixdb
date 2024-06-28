@@ -1,6 +1,4 @@
-use std::{
-    cmp, collections::HashMap, hash::Hash, ops::Deref, path::PathBuf, sync::Arc
-};
+use std::{cmp, collections::HashMap, hash::Hash, ops::Deref, path::PathBuf, sync::Arc};
 
 use crossbeam_skiplist::SkipMap;
 use uuid::Uuid;
@@ -232,10 +230,10 @@ impl<'a> SizedTierRunner<'a> {
             .iter()
             .map(|e| {
                 Entry::new(
-                    e.key().to_vec(),       // key
-                    e.value().val_offset,   // v_offset
-                    e.value().created_at,   // insertion time
-                    e.value().is_tombstone, // is tombstone
+                    e.key().to_vec(),
+                    e.value().val_offset,
+                    e.value().created_at,
+                    e.value().is_tombstone,
                 )
             })
             .collect::<Vec<Entry<Key, ValOffset>>>();
@@ -244,50 +242,50 @@ impl<'a> SizedTierRunner<'a> {
             .iter()
             .map(|e| {
                 Entry::new(
-                    e.key().to_vec(),       // key
-                    e.value().val_offset,   // v_offset
-                    e.value().created_at,   // insertion time
-                    e.value().is_tombstone, // is tombstone
+                    e.key().to_vec(),
+                    e.value().val_offset,
+                    e.value().created_at,
+                    e.value().is_tombstone,
                 )
             })
             .collect::<Vec<Entry<Key, ValOffset>>>();
         let mut ptr = MergePointer::new();
 
-        while ptr.a < entries1.len() && ptr.b < entries2.len() {
-            match entries1[ptr.a].key.cmp(&entries2[ptr.b].key) {
+        while ptr.ptr1 < entries1.len() && ptr.ptr2 < entries2.len() {
+            match entries1[ptr.ptr1].key.cmp(&entries2[ptr.ptr2].key) {
                 cmp::Ordering::Less => {
-                    self.tombstone_check(&entries1[ptr.a], &mut merged_entries)
+                    self.tombstone_check(&entries1[ptr.ptr1], &mut merged_entries)
                         .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
-                    ptr.increment_a();
+                    ptr.increment_ptr1();
                 }
                 cmp::Ordering::Equal => {
-                    if entries1[ptr.a].created_at > entries2[ptr.b].created_at {
-                        self.tombstone_check(&entries1[ptr.a], &mut merged_entries)
+                    if entries1[ptr.ptr1].created_at > entries2[ptr.ptr2].created_at {
+                        self.tombstone_check(&entries1[ptr.ptr1], &mut merged_entries)
                             .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
                     } else {
-                        self.tombstone_check(&entries2[ptr.b], &mut merged_entries)
+                        self.tombstone_check(&entries2[ptr.ptr2], &mut merged_entries)
                             .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
                     }
-                    ptr.increment_a();
-                    ptr.increment_b();
+                    ptr.increment_ptr1();
+                    ptr.increment_ptr2();
                 }
                 cmp::Ordering::Greater => {
-                    self.tombstone_check(&entries2[ptr.b], &mut merged_entries)
+                    self.tombstone_check(&entries2[ptr.ptr2], &mut merged_entries)
                         .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
-                    ptr.increment_b();
+                    ptr.increment_ptr2();
                 }
             }
         }
-        while ptr.a < entries1.len() {
-            self.tombstone_check(&entries1[ptr.a], &mut merged_entries)
+        while ptr.ptr1 < entries1.len() {
+            self.tombstone_check(&entries1[ptr.ptr1], &mut merged_entries)
                 .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
-            ptr.increment_a();
+            ptr.increment_ptr1();
         }
 
-        while ptr.b < entries2.len() {
-            self.tombstone_check(&entries2[ptr.b], &mut merged_entries)
+        while ptr.ptr2 < entries2.len() {
+            self.tombstone_check(&entries2[ptr.ptr2], &mut merged_entries)
                 .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
-            ptr.increment_b();
+            ptr.increment_ptr2();
         }
 
         merged_entries.iter().for_each(|e| {

@@ -321,23 +321,22 @@ impl GC {
         }
     }
 
-    pub async fn put(
-        key: &str,
-        value: &str,
+    pub async fn put<T: AsRef<[u8]>>(
+        key: T,
+        value: T,
         val_offset: ValOffset,
         memtable: GCTable,
         gc_updated_entries: GCUpdatedEntries<Key>,
     ) -> Result<bool, Error> {
-        let is_tombstone = value.len() == 0;
-        let key = &key.as_bytes().to_vec();
+        let is_tombstone = value.as_ref().len() == 0;
         let created_at = Utc::now().timestamp_millis() as u64;
         let v_offset = val_offset;
-        let entry = Entry::new(key.to_vec(), v_offset, created_at, is_tombstone);
+        let entry = Entry::new(key.as_ref(), v_offset, created_at, is_tombstone);
         memtable.write().await.insert(&entry)?;
         gc_updated_entries
             .write()
             .await
-            .insert(key.to_vec(), SkipMapValue::new(v_offset, created_at, is_tombstone));
+            .insert(key.as_ref().to_vec(), SkipMapValue::new(v_offset, created_at, is_tombstone));
         Ok(true)
     }
 

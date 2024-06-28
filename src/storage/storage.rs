@@ -15,7 +15,8 @@ use crate::mem::{Entry, MemTable, K};
 use crate::meta::Meta;
 use crate::range::RangeIterator;
 use crate::types::{
-    self, BloomFilterHandle, Bool, BucketMapHandle, CreationTime, FlushSignal, GCUpdatedEntries, ImmutableMemTable, Key, KeyRangeHandle, Value
+    self, BloomFilterHandle, Bool, BucketMapHandle, CreationTime, FlushSignal, GCUpdatedEntries, ImmutableMemTable,
+    Key, KeyRangeHandle, Value,
 };
 use crate::vlog::ValueLog;
 use chrono::Utc;
@@ -116,7 +117,7 @@ impl DataStore<'static, Key> {
         );
     }
 
-    pub async fn put<T: AsRef<[u8]>>(&mut self, key: T, val: T) -> Result<Bool, Error> {
+    pub async fn put<K: AsRef<[u8]>, V: AsRef<[u8]>>(&mut self, key: K, val: V) -> Result<Bool, Error> {
         let gc_entries_reader = self.gc_updated_entries.read().await;
         if !gc_entries_reader.is_empty() {
             for e in gc_entries_reader.iter() {
@@ -132,7 +133,10 @@ impl DataStore<'static, Key> {
         drop(gc_entries_reader);
         let is_tombstone = std::str::from_utf8(val.as_ref()).unwrap() == TOMB_STONE_MARKER;
         let created_at = Utc::now().timestamp_millis() as u64;
-        let v_offset = self.val_log.append(key.as_ref(), val.as_ref(), created_at, is_tombstone).await?;
+        let v_offset = self
+            .val_log
+            .append(key.as_ref(), val.as_ref(), created_at, is_tombstone)
+            .await?;
 
         let entry = Entry::new(key.as_ref().to_vec(), v_offset, created_at, is_tombstone);
         if self.active_memtable.is_full(HEAD_ENTRY_KEY.len()) {
@@ -183,10 +187,10 @@ impl DataStore<'static, Key> {
         Ok(true)
     }
 
-    pub async fn delete(&mut self, key: &str) -> Result<bool, Error> {
-        self.get(key).await?;
+    pub async fn delete<T: AsRef<[u8]>>(&mut self, key: T) -> Result<bool, Error> {
+        self.get(key.as_ref()).await?;
         let value = TOMB_STONE_MARKER;
-        self.put(key, value).await
+        self.put(key.as_ref(), value).await
     }
 
     pub async fn get<K: AsRef<[u8]>>(&self, key: K) -> Result<(Value, CreationTime), Error> {
@@ -298,8 +302,8 @@ impl DataStore<'static, Key> {
         };
     }
 
-    pub async fn update(&mut self, key: &str, value: &str) -> Result<bool, Error> {
-        self.get(key).await?;
+    pub async fn update<T: AsRef<[u8]>>(&mut self, key: T, value: T) -> Result<bool, Error> {
+        self.get(key.as_ref()).await?;
         self.put(key, value).await
     }
     // Flush all memtables

@@ -241,8 +241,8 @@ impl Table {
         filter
     }
 
-    pub(crate) fn get_value_from_entries(&self, key: &[u8]) -> Option<SkipMapValue<ValOffset>> {
-        self.entries.get(key).map(|entry| entry.value().to_owned())
+    pub(crate) fn get_value_from_entries<K: AsRef<[u8]>>(&self, key: K) -> Option<SkipMapValue<ValOffset>> {
+        self.entries.get(key.as_ref()).map(|entry| entry.value().to_owned())
     }
 
     fn compare_offsets(offset_a: usize, offset_b: usize) -> Ordering {

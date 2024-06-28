@@ -108,20 +108,18 @@ impl WriteTracker {
 
 #[derive(Debug, Clone)]
 pub struct MergePointer {
-    pub a: usize,
-    pub b: usize,
+    pub ptr1: usize,
+    pub ptr2: usize,
 }
 impl MergePointer {
     pub fn new() -> Self {
-        Self { a: 0, b: 0 }
+        Self { ptr1: 0, ptr2: 0 }
     }
-
-    pub fn increment_a(&mut self) {
-        self.a += 1;
+    pub fn increment_ptr1(&mut self) {
+        self.ptr1 += 1;
     }
-
-    pub fn increment_b(&mut self) {
-        self.b += 1;
+    pub fn increment_ptr2(&mut self) {
+        self.ptr2 += 1;
     }
 }
 

@@ -25,7 +25,7 @@ impl Range {
     pub fn new<T: AsRef<[u8]>>(smallest_key: T, biggest_key: T, sst: Table) -> Self {
         Self {
             smallest_key: smallest_key.as_ref().to_vec(),
-            biggest_key: smallest_key.as_ref().to_vec(),
+            biggest_key: biggest_key.as_ref().to_vec(),
             sst,
         }
     }

@@ -180,8 +180,8 @@ impl Block {
     /// Returns `Some(value)` if the key is found in the Block, `None` otherwise.
     /// Method will be used when we implement the block cache
     #[allow(dead_code)]
-    pub(crate) fn get_entry(&self, key: &[u8]) -> Option<&BlockEntry> {
-        self.entries.iter().find(|entry| *entry.key == *key)
+    pub(crate) fn get_entry<K: AsRef<[u8]>>(&self, key: &K) -> Option<&BlockEntry> {
+        self.entries.iter().find(|entry| *entry.key == *key.as_ref())
     }
 }
 
