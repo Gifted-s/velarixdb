@@ -7,12 +7,12 @@ use crate::consts::{TAIL_ENTRY_KEY, TOMB_STONE_MARKER};
 use crate::filter::BloomFilter;
 use crate::fs::{FileAsync, FileNode};
 use crate::index::Index;
-use crate::memtable::{Entry, MemTable, SkipMapValue};
+use crate::mem::{Entry, MemTable, SkipMapValue, K};
 use crate::types::{
-    BloomFilterHandle, CreationTime, GCUpdatedEntries, ImmutableMemTable, IsTombStone, Key, KeyRangeHandle,
-    SkipMapEntries, ValOffset, Value,
+    BloomFilterHandle, CreationTime, ImmutableMemTable, Key, KeyRangeHandle, ValOffset,
+    Value,
 };
-use crate::value_log::{ValueLog, ValueLogEntry};
+use crate::vlog::{ValueLog, ValueLogEntry};
 use crate::{err, types};
 use crate::{err::Error, storage::*};
 use chrono::Utc;
@@ -21,13 +21,11 @@ use err::Error::*;
 use futures::future::join_all;
 use nix::libc::{c_int, off_t};
 use std::os::unix::io::AsRawFd;
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::RwLock;
 use tokio::time::sleep;
-type K = types::Key;
-//type V = types::Value;
 
 extern "C" {
     fn fallocate(fd: libc::c_int, mode: c_int, offset: off_t, len: off_t) -> c_int;
@@ -41,6 +39,7 @@ type GCLog = Arc<RwLock<ValueLog>>;
 type ValidEntries = Arc<RwLock<Vec<(Key, Value, ValOffset)>>>;
 type InvalidEntries = Arc<RwLock<Vec<ValueLogEntry>>>;
 type SyncedEntries = Arc<RwLock<Vec<(Key, Value, ValOffset)>>>;
+type GCUpdatedEntries<K> = Arc<RwLock<SkipMap<K, SkipMapValue<ValOffset>>>>;
 
 #[derive(Debug)]
 pub struct GC {
@@ -69,8 +68,8 @@ impl GC {
         &self,
         filters: BloomFilterHandle,
         key_range: KeyRangeHandle,
-        read_only_memtables: ImmutableMemTable<K>,
-        gc_updated_entries: GCUpdatedEntries<K>,
+        read_only_memtables: ImmutableMemTable<Key>,
+        gc_updated_entries: GCUpdatedEntries<Key>,
     ) {
         let cfg = self.config.to_owned();
         let memtable = self.table.clone();
@@ -112,7 +111,7 @@ impl GC {
         vlog: GCLog,
         filters: BloomFilterHandle,
         key_range: KeyRangeHandle,
-        read_only_memtables: ImmutableMemTable<K>,
+        read_only_memtables: ImmutableMemTable<Key>,
         gc_updated_entries: GCUpdatedEntries<Key>,
     ) -> Result<(), Error> {
         let invalid_entries = Arc::new(RwLock::new(Vec::new()));
@@ -286,6 +285,7 @@ impl GC {
         Ok(())
     }
 
+    #[allow(unused_variables)]
     pub async fn remove_unsed(
         vlog: GCLog,
         invalid_entries: InvalidEntries,
@@ -305,8 +305,8 @@ impl GC {
         }
     }
 
-    pub async fn punch_holes(file_path: PathBuf, offset: off_t, length: off_t) -> std::result::Result<(), Error> {
-        let file = FileNode::open(file_path).await?;
+    pub async fn punch_holes<P: AsRef<Path>>(file_path: P, offset: off_t, length: off_t) -> std::result::Result<(), Error> {
+        let file = FileNode::open(file_path.as_ref()).await?;
         let fd = file.as_raw_fd();
         unsafe {
             let result = fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, offset, length);
@@ -341,15 +341,15 @@ impl GC {
         Ok(true)
     }
 
-    pub async fn get(
-        key: &str,
+    pub async fn get<CustomKey: K>(
+        key: CustomKey,
         memtable: GCTable,
         filters: BloomFilterHandle,
         key_range: KeyRangeHandle,
         vlog: Arc<RwLock<ValueLog>>,
-        read_only_memtables: ImmutableMemTable<K>,
+        read_only_memtables: ImmutableMemTable<Key>,
     ) -> Result<(Value, CreationTime), Error> {
-        let key = key.as_bytes().to_vec();
+        let key = key.as_ref().to_vec();
         let mut offset = 0;
         let mut most_recent_insert_time = 0;
         // Step 1: Check the active memtable

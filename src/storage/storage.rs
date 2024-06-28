@@ -1,4 +1,3 @@
-use crate::bucket::bucket::InsertableToBucket;
 use crate::cfg::Config;
 use crate::compactors::Compactor;
 use crate::consts::{
@@ -7,30 +6,30 @@ use crate::consts::{
 use crate::err::Error;
 use crate::err::Error::*;
 use crate::filter::BloomFilter;
-use crate::flusher::Flusher;
+
+use crate::flush::Flusher;
 use crate::gc::gc::GC;
 use crate::index::Index;
 use crate::key_range::KeyRange;
-use crate::memtable::{Entry, MemTable};
+use crate::mem::{Entry, MemTable, K};
 use crate::meta::Meta;
 use crate::range::RangeIterator;
 use crate::types::{
-    self, BloomFilterHandle, Bool, BucketMapHandle, CreationTime, FlushSignal, GCUpdatedEntries, ImmutableMemTable,
-    Key, KeyRangeHandle, Value,
+    self, BloomFilterHandle, Bool, BucketMapHandle, CreationTime, FlushSignal, GCUpdatedEntries, ImmutableMemTable, Key, KeyRangeHandle, Value
 };
-use crate::value_log::ValueLog;
+use crate::vlog::ValueLog;
 use chrono::Utc;
 use indexmap::IndexMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::{hash::Hash, sync::Arc};
 use tokio::fs::{self};
 use tokio::sync::RwLock;
-pub struct DataStore<'a, K>
+pub struct DataStore<'a, Key>
 where
-    K: Hash + Ord + Send + Sync + Clone,
+    Key: K,
 {
     pub dir: DirPath,
-    pub active_memtable: MemTable<K>,
+    pub active_memtable: MemTable<Key>,
     pub filters: BloomFilterHandle,
     pub val_log: ValueLog,
     pub buckets: BucketMapHandle,
@@ -41,10 +40,10 @@ where
     pub config: Config,
     pub gc: GC,
     pub range_iterator: Option<RangeIterator<'a>>,
-    pub read_only_memtables: ImmutableMemTable<K>,
+    pub read_only_memtables: ImmutableMemTable<Key>,
     pub flush_signal_tx: async_broadcast::Sender<FlushSignal>,
     pub flush_signal_rx: async_broadcast::Receiver<FlushSignal>,
-    pub gc_updated_entries: GCUpdatedEntries<K>,
+    pub gc_updated_entries: GCUpdatedEntries<Key>,
     pub gc_table: Arc<RwLock<MemTable<Key>>>,
     pub gc_log: Arc<RwLock<ValueLog>>,
 }
@@ -76,8 +75,8 @@ impl SizeUnit {
     }
 }
 
-impl<'a> DataStore<'a, Key> {
-    pub async fn new(dir: PathBuf) -> Result<DataStore<'a, Vec<u8>>, Error> {
+impl DataStore<'static, Key> {
+    pub async fn new<P: AsRef<Path> + Send + Sync>(dir: P) -> Result<DataStore<'static, Key>, Error> {
         let dir = DirPath::build(dir);
         let default_config = Config::default();
         let store = DataStore::with_default_config(dir.to_owned(), SizeUnit::Bytes, default_config).await?;
@@ -85,7 +84,10 @@ impl<'a> DataStore<'a, Key> {
         return Ok(store);
     }
 
-    pub async fn new_with_custom_config(dir: PathBuf, config: Config) -> Result<DataStore<'a, Key>, Error> {
+    pub async fn new_with_custom_config<P: AsRef<Path> + Send + Sync>(
+        dir: P,
+        config: Config,
+    ) -> Result<DataStore<'static, Key>, Error> {
         let dir = DirPath::build(dir);
         let store = DataStore::with_default_config(dir.clone(), SizeUnit::Bytes, config).await?;
         store.start_background_jobs();
@@ -114,7 +116,7 @@ impl<'a> DataStore<'a, Key> {
         );
     }
 
-    pub async fn put(&mut self, key: &str, val: &str) -> Result<Bool, Error> {
+    pub async fn put<T: AsRef<[u8]>>(&mut self, key: T, val: T) -> Result<Bool, Error> {
         let gc_entries_reader = self.gc_updated_entries.read().await;
         if !gc_entries_reader.is_empty() {
             for e in gc_entries_reader.iter() {
@@ -128,13 +130,11 @@ impl<'a> DataStore<'a, Key> {
             gc_entries_reader.clear();
         }
         drop(gc_entries_reader);
-        let is_tombstone = val == TOMB_STONE_MARKER;
-        let key = &key.as_bytes().to_vec();
-        let val = &val.as_bytes().to_vec();
+        let is_tombstone = std::str::from_utf8(val.as_ref()).unwrap() == TOMB_STONE_MARKER;
         let created_at = Utc::now().timestamp_millis() as u64;
-        let v_offset = self.val_log.append(key, val, created_at, is_tombstone).await?;
+        let v_offset = self.val_log.append(key.as_ref(), val.as_ref(), created_at, is_tombstone).await?;
 
-        let entry = Entry::new(key.to_vec(), v_offset, created_at, is_tombstone);
+        let entry = Entry::new(key.as_ref().to_vec(), v_offset, created_at, is_tombstone);
         if self.active_memtable.is_full(HEAD_ENTRY_KEY.len()) {
             let capacity = self.active_memtable.capacity();
             let size_unit = self.active_memtable.size_unit();
@@ -189,11 +189,10 @@ impl<'a> DataStore<'a, Key> {
         self.put(key, value).await
     }
 
-    pub async fn get(&self, key: &str) -> Result<(Value, CreationTime), Error> {
-        let key = key.as_bytes().to_vec();
+    pub async fn get<K: AsRef<[u8]>>(&self, key: K) -> Result<(Value, CreationTime), Error> {
         let gc_entries_reader = self.gc_updated_entries.read().await;
         if !gc_entries_reader.is_empty() {
-            let res = gc_entries_reader.get(&key);
+            let res = gc_entries_reader.get(key.as_ref());
             if res.is_some() {
                 let value = res.to_owned().unwrap().value().to_owned();
                 if value.is_tombstone {
@@ -206,7 +205,7 @@ impl<'a> DataStore<'a, Key> {
         let mut offset = 0;
         let mut most_recent_insert_time = 0;
         // Step 1: Check the active memtable
-        if let Some(value) = self.active_memtable.get(&key) {
+        if let Some(value) = self.active_memtable.get(key.as_ref()) {
             if value.is_tombstone {
                 return Err(NotFoundInDB);
             }
@@ -215,7 +214,7 @@ impl<'a> DataStore<'a, Key> {
             // Step 2: Check the read-only memtables
             let mut is_deleted = false;
             for (_, table) in self.read_only_memtables.read().await.iter() {
-                if let Some(value) = table.read().await.get(&key) {
+                if let Some(value) = table.read().await.get(key.as_ref()) {
                     if value.created_at > most_recent_insert_time {
                         offset = value.val_offset;
                         most_recent_insert_time = value.created_at;
@@ -223,7 +222,7 @@ impl<'a> DataStore<'a, Key> {
                     }
                 }
             }
-            if self.found_in_table(most_recent_insert_time)  {
+            if self.found_in_table(most_recent_insert_time) {
                 if is_deleted {
                     return Err(NotFoundInDB);
                 }
@@ -231,12 +230,12 @@ impl<'a> DataStore<'a, Key> {
             } else {
                 // Step 3: Check sstables
                 let key_range = &self.key_range.read().await;
-                let mut ssts = key_range.filter_sstables_by_biggest_key(&key);
+                let mut ssts = key_range.filter_sstables_by_biggest_key(key.as_ref());
                 if ssts.is_empty() {
                     return Err(NotFoundInDB);
                 }
                 let filters = &self.filters.read().await;
-                ssts = BloomFilter::ssts_within_key_range(&key, filters, &ssts);
+                ssts = BloomFilter::ssts_within_key_range(key.as_ref(), filters, &ssts);
                 if ssts.is_empty() {
                     return Err(NotFoundInDB);
                 }
@@ -278,7 +277,7 @@ impl<'a> DataStore<'a, Key> {
         Err(NotFoundInDB)
     }
 
-    pub fn found_in_table(&self, most_recent_insert_time: u64)-> bool {
+    pub fn found_in_table(&self, most_recent_insert_time: u64) -> bool {
         most_recent_insert_time > 0
     }
 
@@ -330,7 +329,7 @@ impl<'a> DataStore<'a, Key> {
         dir: DirPath,
         size_unit: SizeUnit,
         config: Config,
-    ) -> Result<DataStore<'a, types::Key>, Error> {
+    ) -> Result<DataStore<'static, Key>, Error> {
         Self::with_capacity_and_rate(dir, size_unit, config).await
     }
 
@@ -338,7 +337,7 @@ impl<'a> DataStore<'a, Key> {
         dir: DirPath,
         size_unit: SizeUnit,
         config: Config,
-    ) -> Result<DataStore<'a, types::Key>, Error> {
+    ) -> Result<DataStore<'static, Key>, Error> {
         let vlog_path = &dir.clone().val_log;
         let buckets_path = dir.buckets.clone();
         let vlog_exit = vlog_path.exists();
@@ -363,13 +362,13 @@ impl<'a> DataStore<'a, Key> {
     }
 }
 impl DirPath {
-    pub(crate) fn build(root_path: PathBuf) -> Self {
+    pub(crate) fn build<P: AsRef<Path> + Send + Sync>(root_path: P) -> Self {
         let root = root_path;
-        let val_log = root.join(VALUE_LOG_DIRECTORY_NAME);
-        let buckets = root.join(BUCKETS_DIRECTORY_NAME);
-        let meta = root.join(META_DIRECTORY_NAME);
+        let val_log = root.as_ref().join(VALUE_LOG_DIRECTORY_NAME);
+        let buckets = root.as_ref().join(BUCKETS_DIRECTORY_NAME);
+        let meta = root.as_ref().join(META_DIRECTORY_NAME);
         Self {
-            root,
+            root: root.as_ref().to_path_buf(),
             val_log,
             buckets,
             meta,

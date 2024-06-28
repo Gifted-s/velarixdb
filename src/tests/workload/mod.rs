@@ -27,8 +27,8 @@ pub struct Workload {
 
 #[derive(Clone, Debug)]
 pub struct Entry {
-    pub key: Vec<u8>,
-    pub val: Vec<u8>,
+    pub key: Key,
+    pub val: Value,
 }
 
 impl Workload {
@@ -84,7 +84,7 @@ impl Workload {
     pub async fn insert_parallel(
         &self,
         entries: &Vec<Entry>,
-        store: Arc<RwLock<DataStore<'static, Vec<u8>>>>,
+        store: Arc<RwLock<DataStore<'static, Key>>>,
     ) -> Result<(), Error> {
         let tasks = entries.iter().map(|e| {
             let s_engine = Arc::clone(&store);

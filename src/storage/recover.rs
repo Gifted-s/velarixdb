@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::Path;
 
 use super::{storage::DirPath, DataStore, SizeUnit};
 
@@ -13,14 +13,14 @@ use crate::consts::{
 use crate::err::Error;
 use crate::err::Error::*;
 use crate::filter::BloomFilter;
-use crate::flusher::Flusher;
+use crate::flush::Flusher;
 use crate::gc::gc::GC;
 use crate::key_range::KeyRange;
-use crate::memtable::{Entry, MemTable};
+use crate::mem::{Entry, MemTable, K};
 use crate::meta::Meta;
 use crate::sst::Table;
-use crate::types::{self, Key, MemtableId};
-use crate::value_log::ValueLog;
+use crate::types::{Key, MemtableId};
+use crate::vlog::ValueLog;
 use async_broadcast::broadcast;
 use chrono::Utc;
 use crossbeam_skiplist::SkipMap;
@@ -28,11 +28,12 @@ use indexmap::IndexMap;
 use std::sync::Arc;
 use tokio::fs::read_dir;
 use tokio::sync::RwLock;
+use std::hash::Hash;
 
-impl DataStore<'static, Key> {
-    pub async fn recover(
+impl DataStore<'static, Key>{
+    pub async fn recover<P: AsRef<Path> + Send + Sync + Clone>(
         dir: DirPath,
-        buckets_path: PathBuf,
+        buckets_path: P,
         mut vlog: ValueLog,
         mut key_range: KeyRange,
         config: &Config,
@@ -50,12 +51,12 @@ impl DataStore<'static, Key> {
         let mut buckets_stream = read_dir(buckets_path.to_owned())
             .await
             .map_err(|err| DirectoryOpenError {
-                path: buckets_path.to_owned(),
+                path: buckets_path.as_ref().to_path_buf(),
                 error: err,
             })?;
         // for each bucket directory
         while let Some(bucket_dir) = buckets_stream.next_entry().await.map_err(|err| DirectoryOpenError {
-            path: buckets_path.to_owned(),
+            path: buckets_path.as_ref().to_path_buf(),
             error: err,
         })? {
             // get read stream for sstable directories stream in the bucket
@@ -63,7 +64,7 @@ impl DataStore<'static, Key> {
                 read_dir(bucket_dir.path().to_owned())
                     .await
                     .map_err(|err| DirectoryOpenError {
-                        path: buckets_path.to_owned(),
+                        path: buckets_path.as_ref().to_path_buf(),
                         error: err,
                     })?;
             // iterate over each sstable directory
@@ -71,7 +72,7 @@ impl DataStore<'static, Key> {
                 .next_entry()
                 .await
                 .map_err(|err| DirectoryOpenError {
-                    path: buckets_path.to_owned(),
+                    path: buckets_path.as_ref().to_path_buf(),
                     error: err,
                 })?
             {
@@ -84,7 +85,7 @@ impl DataStore<'static, Key> {
                 let mut reader = files_read_stream.unwrap();
                 // iterate over each file
                 while let Some(file) = reader.next_entry().await.map_err(|err| DirectoryOpenError {
-                    path: buckets_path.to_owned(),
+                    path: buckets_path.as_ref().to_path_buf(),
                     error: err,
                 })? {
                     let file_path = file.path();
@@ -151,7 +152,7 @@ impl DataStore<'static, Key> {
                 key_range.set(data_file_path.to_owned(), smallest_key, biggest_key, table);
             }
         }
-        let mut buckets_map = BucketMap::new(buckets_path.clone()).await;
+        let mut buckets_map = BucketMap::new(buckets_path.clone()).await?;
         for (bucket_id, bucket) in recovered_buckets.iter() {
             buckets_map.buckets.insert(*bucket_id, bucket.clone());
         }
@@ -221,16 +222,16 @@ impl DataStore<'static, Key> {
         }
     }
 
-    pub async fn recover_memtable(
+    pub async fn recover_memtable<P: AsRef<Path> + Send + Sync>(
         size_unit: SizeUnit,
         capacity: usize,
         false_positive_rate: f64,
-        vlog_path: &PathBuf,
+        vlog_path: P,
         head_offset: usize,
     ) -> Result<(MemTable<Key>, IndexMap<MemtableId, Arc<RwLock<MemTable<Key>>>>), Error> {
         let mut read_only_memtables: IndexMap<MemtableId, Arc<RwLock<MemTable<Key>>>> = IndexMap::new();
         let mut active_memtable = MemTable::with_specified_capacity_and_rate(size_unit, capacity, false_positive_rate);
-        let mut vlog = ValueLog::new(&vlog_path.clone()).await?;
+        let mut vlog = ValueLog::new(vlog_path.as_ref()).await?;
         let mut most_recent_offset = head_offset;
         let entries = vlog.recover(head_offset).await?;
 
@@ -262,15 +263,15 @@ impl DataStore<'static, Key> {
         Ok((active_memtable, read_only_memtables))
     }
 
-    pub async fn handle_empty_vlog(
+    pub async fn handle_empty_vlog<P: AsRef<Path> + Send + Sync>(
         dir: DirPath,
-        buckets_path: PathBuf,
+        buckets_path: P,
         mut vlog: ValueLog,
         key_range: KeyRange,
         config: &Config,
         size_unit: SizeUnit,
         meta: Meta,
-    ) -> Result<DataStore<'static, types::Key>, Error> {
+    ) -> Result<DataStore<'static, Key>, Error> {
         let mut active_memtable =
             MemTable::with_specified_capacity_and_rate(size_unit, config.write_buffer_size, config.false_positive_rate);
         // if ValueLog is empty then we want to insert both tail and head
@@ -289,7 +290,7 @@ impl DataStore<'static, Key> {
         // insert tail and head to memtable
         active_memtable.insert(&tail_entry.to_owned())?;
         active_memtable.insert(&head_entry.to_owned())?;
-        let buckets = BucketMap::new(buckets_path).await;
+        let buckets = BucketMap::new(buckets_path).await?;
         let (flush_signal_tx, flush_signal_rx) = broadcast(DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE);
         let read_only_memtables = IndexMap::new();
         let filters = Arc::new(RwLock::new(Vec::new()));
@@ -342,8 +343,8 @@ impl DataStore<'static, Key> {
         });
     }
 
-    fn get_bucket_id_from_full_bucket_path(full_path: PathBuf) -> String {
-        let full_path_as_str = full_path.to_string_lossy().to_string();
+    fn get_bucket_id_from_full_bucket_path<P: AsRef<Path> + Send + Sync>(full_path: P) -> String {
+        let full_path_as_str = full_path.as_ref().to_string_lossy().to_string();
         let mut bucket_id = String::new();
         // Find the last occurrence of "bucket" in the file path
         if let Some(idx) = full_path_as_str.rfind("bucket") {

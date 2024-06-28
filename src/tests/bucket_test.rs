@@ -16,9 +16,10 @@ mod tests {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("."));
         let new_bucket = Bucket::new(path.to_owned()).await;
+        assert!(new_bucket.is_ok());
+        let new_bucket = new_bucket.unwrap();
         let new_dir = new_bucket.dir.to_str().unwrap();
         let prefix = new_dir.rfind("bucket").unwrap();
-
         assert_eq!(&new_dir[..prefix - 1], path.to_str().unwrap());
         assert_eq!(new_bucket.size, 0);
         assert_eq!(new_bucket.avarage_size, 0);
@@ -94,7 +95,7 @@ mod tests {
     async fn test_sstcount_exceed_threshold() {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("."));
-        let new_bucket = Bucket::new(path.to_owned()).await;
+        let new_bucket = Bucket::new(path.to_owned()).await.unwrap();
         let sst_count = 5;
         let sst_samples = fixtures::sst::generate_ssts(sst_count).await;
         for s in sst_samples {
@@ -111,7 +112,7 @@ mod tests {
     async fn test_extract_sstable_to_compact() {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("."));
-        let new_bucket = Bucket::new(path.to_owned()).await;
+        let new_bucket = Bucket::new(path.to_owned()).await.unwrap();
         let sst_count = 5;
         let sst_samples = fixtures::sst::generate_ssts(sst_count).await;
         let sst_meta = sst_samples
@@ -140,7 +141,7 @@ mod tests {
     async fn table_fits_into_bucket() {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("."));
-        let mut new_bucket = Bucket::new(path.to_owned()).await;
+        let mut new_bucket = Bucket::new(path.to_owned()).await.unwrap();
         let sst_sample = fixtures::sst::generate_ssts(2).await;
         for s in sst_sample {
             new_bucket.sstables.write().await.push(s)
@@ -167,7 +168,8 @@ mod tests {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("."));
         let bucket_map = BucketMap::new(path.to_owned()).await;
-
+        assert!(bucket_map.is_ok());
+        let bucket_map = bucket_map.unwrap();
         assert_eq!(bucket_map.dir, path);
         assert_eq!(bucket_map.buckets.len(), 0);
     }
@@ -176,31 +178,31 @@ mod tests {
     async fn test_bucket_map_extract_imbalanced_buckets() {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("."));
-        let new_bucket1 = Bucket::new(path.to_owned()).await;
+        let new_bucket1 = Bucket::new(path.to_owned()).await.unwrap();
         let sst_count = 6;
         let sst_samples = fixtures::sst::generate_ssts(sst_count).await;
         for s in sst_samples.to_owned() {
             new_bucket1.sstables.write().await.push(s)
         }
 
-        let new_bucket2 = Bucket::new(path.to_owned()).await;
+        let new_bucket2 = Bucket::new(path.to_owned()).await.unwrap();
         for s in sst_samples.to_owned() {
             new_bucket2.sstables.write().await.push(s)
         }
 
-        let new_bucket3 = Bucket::new(path.to_owned()).await;
+        let new_bucket3 = Bucket::new(path.to_owned()).await.unwrap();
         for s in sst_samples.to_owned() {
             new_bucket3.sstables.write().await.push(s)
         }
 
-        let new_bucket4 = Bucket::new(path.to_owned()).await;
+        let new_bucket4 = Bucket::new(path.to_owned()).await.unwrap();
         for s in sst_samples.to_owned() {
             new_bucket4.sstables.write().await.push(s)
         }
 
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("."));
-        let mut bucket_map = BucketMap::new(path.to_owned()).await;
+        let mut bucket_map = BucketMap::new(path.to_owned()).await.unwrap();
         bucket_map.buckets.insert(new_bucket1.id, new_bucket1.to_owned());
         bucket_map.buckets.insert(new_bucket2.id, new_bucket2);
         bucket_map.buckets.insert(new_bucket3.id, new_bucket3);
@@ -246,31 +248,31 @@ mod tests {
     async fn test_bucket_map_is_balanced() {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("."));
-        let new_bucket1 = Bucket::new(path.to_owned()).await;
+        let new_bucket1 = Bucket::new(path.to_owned()).await.unwrap();
         let sst_count = 6;
         let sst_samples = fixtures::sst::generate_ssts(sst_count).await;
         for s in sst_samples.to_owned() {
             new_bucket1.sstables.write().await.push(s)
         }
 
-        let new_bucket2 = Bucket::new(path.to_owned()).await;
+        let new_bucket2 = Bucket::new(path.to_owned()).await.unwrap();
         for s in sst_samples.to_owned() {
             new_bucket2.sstables.write().await.push(s)
         }
 
-        let new_bucket3 = Bucket::new(path.to_owned()).await;
+        let new_bucket3 = Bucket::new(path.to_owned()).await.unwrap();
         for s in sst_samples.to_owned() {
             new_bucket3.sstables.write().await.push(s)
         }
 
-        let new_bucket4 = Bucket::new(path.to_owned()).await;
+        let new_bucket4 = Bucket::new(path.to_owned()).await.unwrap();
         for s in sst_samples.to_owned() {
             new_bucket4.sstables.write().await.push(s)
         }
 
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("."));
-        let mut bucket_map = BucketMap::new(path.to_owned()).await;
+        let mut bucket_map = BucketMap::new(path.to_owned()).await.unwrap();
         bucket_map.buckets.insert(new_bucket1.id, new_bucket1.to_owned());
         bucket_map.buckets.insert(new_bucket2.id, new_bucket2);
         bucket_map.buckets.insert(new_bucket3.id, new_bucket3);
@@ -296,7 +298,7 @@ mod tests {
     async fn table_insert_to_appropriate_bucket() {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("."));
-        let mut bucket_map = BucketMap::new(path.to_owned()).await;
+        let mut bucket_map = BucketMap::new(path.to_owned()).await.unwrap();
 
         let sst_within_size_range = generate_ssts(1).await[0].to_owned();
         let mut sst_with_entries = sst_within_size_range.load_entries_from_file().await.unwrap();
@@ -325,36 +327,36 @@ mod tests {
     async fn test_delete_sstables() {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("."));
-        let new_bucket1 = Bucket::new(path.to_owned()).await;
+        let new_bucket1 = Bucket::new(path.to_owned()).await.unwrap();
         let sst_count = 6;
         let sst_samples = fixtures::sst::generate_ssts(sst_count).await;
         for s in sst_samples.to_owned() {
             new_bucket1.sstables.write().await.push(s)
         }
 
-        let new_bucket2 = Bucket::new(path.to_owned()).await;
+        let new_bucket2 = Bucket::new(path.to_owned()).await.unwrap();
         for s in sst_samples.to_owned() {
             new_bucket2.sstables.write().await.push(s)
         }
 
-        let new_bucket3 = Bucket::new(path.to_owned()).await;
+        let new_bucket3 = Bucket::new(path.to_owned()).await.unwrap();
         for s in sst_samples.to_owned() {
             new_bucket3.sstables.write().await.push(s)
         }
 
-        let new_bucket4 = Bucket::new(path.to_owned()).await;
+        let new_bucket4 = Bucket::new(path.to_owned()).await.unwrap();
         for s in sst_samples.to_owned() {
             new_bucket4.sstables.write().await.push(s)
         }
 
-        let new_bucket5 = Bucket::new(path.to_owned()).await;
+        let new_bucket5 = Bucket::new(path.to_owned()).await.unwrap();
         for s in sst_samples.to_owned() {
             new_bucket5.sstables.write().await.push(s)
         }
 
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("."));
-        let mut bucket_map = BucketMap::new(path.to_owned()).await;
+        let mut bucket_map = BucketMap::new(path.to_owned()).await.unwrap();
         bucket_map.buckets.insert(new_bucket1.id, new_bucket1.to_owned());
         bucket_map.buckets.insert(new_bucket2.id, new_bucket2);
         bucket_map.buckets.insert(new_bucket3.id, new_bucket3);

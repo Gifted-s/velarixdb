@@ -1,6 +1,4 @@
-use std::fs::OpenOptions;
-use std::io::{self, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 
@@ -15,11 +13,11 @@ pub struct Meta {
 }
 
 impl Meta {
-    pub fn new(path: &PathBuf) -> Self {
+    pub fn new<P: AsRef<Path> + Send + Sync>(path: P) -> Self {
         let created_at = Utc::now();
         let last_modified = Utc::now();
         Self {
-            path: PathBuf::from(path),
+            path: path.as_ref().to_path_buf(),
             v_log_tail: 0,
             v_log_head: 0,
             created_at,

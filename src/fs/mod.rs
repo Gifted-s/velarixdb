@@ -1,22 +1,26 @@
-use async_trait::async_trait;
-use crossbeam_skiplist::SkipMap;
-use std::{fmt::Debug, fs::Metadata, io::SeekFrom, path::PathBuf, sync::Arc};
-use tokio::{
-    fs::{self, File, OpenOptions},
-    io::{self, AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
-    sync::{RwLock, RwLockReadGuard, RwLockWriteGuard},
-};
-
 use crate::{
     consts::{EOF, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8},
     err::Error::{self, *},
     index::RangeOffset,
     load_buffer,
-    memtable::{Entry, SkipMapValue},
-    types::{CreationTime, IsTombStone, Key, NoBytesRead, SkipMapEntries, ValOffset},
-    value_log::ValueLogEntry,
+    mem::{Entry, SkipMapValue},
+    types::{CreationTime, IsTombStone, Key, NoBytesRead, SkipMapEntries, ValOffset, Value},
+    vlog::ValueLogEntry,
 };
-
+use async_trait::async_trait;
+use crossbeam_skiplist::SkipMap;
+use std::{
+    fmt::Debug,
+    fs::Metadata,
+    io::SeekFrom,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+use tokio::{
+    fs::{self, File, OpenOptions},
+    io::{self, AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
+    sync::{RwLock, RwLockReadGuard, RwLockWriteGuard},
+};
 #[derive(Debug, Clone)]
 pub enum FileType {
     Index,
@@ -29,13 +33,13 @@ pub type WGuard<'a, T> = RwLockWriteGuard<'a, T>;
 
 #[async_trait]
 pub trait FileAsync: Send + Sync + Debug + Clone {
-    async fn create(path: PathBuf) -> Result<File, Error>;
+    async fn create<P: AsRef<Path> + Send + Sync>(path: P) -> Result<File, Error>;
 
-    async fn create_dir_all(path: PathBuf) -> Result<(), Error>;
+    async fn create_dir_all<P: AsRef<Path> + Send + Sync>(path: P) -> Result<(), Error>;
 
     async fn metadata(&self) -> Result<Metadata, Error>;
 
-    async fn open(path: PathBuf) -> Result<File, Error>;
+    async fn open<P: AsRef<Path> + Send + Sync>(path: P) -> Result<File, Error>;
 
     async fn read_buf(&self, buf: &mut Buf) -> Result<usize, Error>;
 
@@ -64,7 +68,7 @@ pub trait FileAsync: Send + Sync + Debug + Clone {
 
 #[async_trait]
 pub trait DataFs: Send + Sync + Debug + Clone {
-    async fn new(path: PathBuf, file_type: FileType) -> Result<Self, Error>;
+    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<Self, Error>;
     async fn load_entries(&self) -> Result<(SkipMapEntries<Key>, usize), Error>;
 
     async fn find_entry(
@@ -73,14 +77,14 @@ pub trait DataFs: Send + Sync + Debug + Clone {
         searched_key: &[u8],
     ) -> Result<Option<(ValOffset, CreationTime, IsTombStone)>, Error>;
 
-    async fn load_entries_within_range(&self, range_offset: RangeOffset) -> Result<Vec<Entry<Vec<u8>, usize>>, Error>;
+    async fn load_entries_within_range(&self, range_offset: RangeOffset) -> Result<Vec<Entry<Key, usize>>, Error>;
 }
 
 #[async_trait]
 pub trait VLogFs: Send + Sync + Debug + Clone {
-    async fn new(path: PathBuf, file_type: FileType) -> Result<Self, Error>;
+    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<Self, Error>;
 
-    async fn get(&self, start_offset: usize) -> Result<Option<(Vec<u8>, bool)>, Error>;
+    async fn get(&self, start_offset: usize) -> Result<Option<(Key, bool)>, Error>;
 
     async fn recover(&self, start_offset: usize) -> Result<Vec<ValueLogEntry>, Error>;
 
@@ -93,7 +97,7 @@ pub trait VLogFs: Send + Sync + Debug + Clone {
 
 #[async_trait]
 pub trait IndexFs: Send + Sync + Debug + Clone {
-    async fn new(path: PathBuf, file_type: FileType) -> Result<Self, Error>;
+    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<Self, Error>;
 
     async fn get_from_index(&self, searched_key: &[u8]) -> Result<Option<u32>, Error>;
 
@@ -108,33 +112,38 @@ pub struct FileNode {
 }
 
 impl FileNode {
-    pub async fn new(path: PathBuf, file_type: FileType) -> Result<Self, Error> {
-        let file = FileNode::create(path.to_owned()).await?;
+    pub async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<Self, Error> {
+        let file = FileNode::create(path.as_ref()).await?;
         return Ok(Self {
             file_type,
             file: Arc::new(RwLock::new(file)),
-            file_path: path,
+            file_path: path.as_ref().to_path_buf(),
         });
     }
 }
 
 #[async_trait]
 impl FileAsync for FileNode {
-    async fn create(path: PathBuf) -> Result<File, Error> {
+    async fn create<P: AsRef<Path> + Send + Sync>(path: P) -> Result<File, Error> {
         Ok(OpenOptions::new()
             .read(true)
             .append(true)
             .create(true)
-            .open(path.clone())
+            .open(path.as_ref())
             .await
-            .map_err(|err| FileCreationError { path, error: err })?)
+            .map_err(|err| FileCreationError {
+                path: path.as_ref().to_path_buf(),
+                error: err,
+            })?)
     }
 
-    async fn create_dir_all(dir: PathBuf) -> Result<(), Error> {
+    async fn create_dir_all<P: AsRef<Path> + Send + Sync>(dir: P) -> Result<(), Error> {
+        let dir = dir.as_ref();
         if !dir.exists() {
-            return Ok(fs::create_dir_all(&dir)
-                .await
-                .map_err(|err| DirCreationError { path: dir, error: err })?);
+            return Ok(fs::create_dir_all(&dir).await.map_err(|err| DirCreationError {
+                path: dir.to_path_buf(),
+                error: err,
+            })?);
         }
         Ok(())
     }
@@ -144,10 +153,11 @@ impl FileAsync for FileNode {
         Ok(file.metadata().await.map_err(|err| GetFileMetaDataError(err))?)
     }
 
-    async fn open(path: PathBuf) -> Result<File, Error> {
-        Ok(File::open(path.to_owned())
-            .await
-            .map_err(|err| FileOpenError { path, error: err })?)
+    async fn open<P: AsRef<Path> + Send + Sync>(path: P) -> Result<File, Error> {
+        Ok(File::open(path.as_ref()).await.map_err(|err| FileOpenError {
+            path: path.as_ref().to_path_buf(),
+            error: err,
+        })?)
     }
 
     async fn read_buf(&self, mut buf: &mut Buf) -> Result<usize, Error> {
@@ -209,7 +219,7 @@ pub struct DataFileNode {
 
 #[async_trait]
 impl DataFs for DataFileNode {
-    async fn new(path: PathBuf, file_type: FileType) -> Result<DataFileNode, Error> {
+    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<DataFileNode, Error> {
         let node = FileNode::new(path, file_type).await?;
         Ok(DataFileNode { node })
     }
@@ -320,7 +330,7 @@ impl DataFs for DataFileNode {
         }
     }
 
-    async fn load_entries_within_range(&self, range_offset: RangeOffset) -> Result<Vec<Entry<Vec<u8>, usize>>, Error> {
+    async fn load_entries_within_range(&self, range_offset: RangeOffset) -> Result<Vec<Entry<Key, ValOffset>>, Error> {
         let mut entries = Vec::new();
         let mut total_bytes_read = 0;
         let path = &self.node.file_path;
@@ -385,11 +395,11 @@ pub struct VLogFileNode {
 
 #[async_trait]
 impl VLogFs for VLogFileNode {
-    async fn new(path: PathBuf, file_type: FileType) -> Result<VLogFileNode, Error> {
+    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<VLogFileNode, Error> {
         let node = FileNode::new(path, file_type).await?;
         Ok(VLogFileNode { node })
     }
-    async fn get(&self, start_offset: usize) -> Result<Option<(Vec<u8>, bool)>, Error> {
+    async fn get(&self, start_offset: usize) -> Result<Option<(Value, bool)>, Error> {
         let path = &self.node.file_path;
         let mut file = self.node.file.write().await;
         file.seek(std::io::SeekFrom::Start((start_offset) as u64))
@@ -578,7 +588,7 @@ pub struct IndexFileNode {
 }
 #[async_trait]
 impl IndexFs for IndexFileNode {
-    async fn new(path: PathBuf, file_type: FileType) -> Result<IndexFileNode, Error> {
+    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<IndexFileNode, Error> {
         let node = FileNode::new(path, file_type).await?;
         Ok(IndexFileNode { node })
     }

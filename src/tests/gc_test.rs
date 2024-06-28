@@ -5,13 +5,14 @@ mod tests {
     use crate::gc::gc::GC;
     use crate::storage::{DataStore, SizeUnit};
     use crate::tests::workload::Workload;
+    use crate::types::Key;
     use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::tempdir;
     use tokio::fs::{self};
     use tokio::sync::RwLock;
 
-    async fn setup(store: Arc<RwLock<DataStore<'static, Vec<u8>>>>, workload: &Workload) -> Result<(), Error> {
+    async fn setup(store: Arc<RwLock<DataStore<'static, Key>>>, workload: &Workload) -> Result<(), Error> {
         let _ = env_logger::builder().is_test(true).try_init();
         let (_, data) = workload.generate_workload_data_as_vec();
         workload.insert_parallel(&data, store).await
@@ -110,8 +111,8 @@ mod tests {
         }
         let storage_reader = store.read().await;
         let config = storage_reader.gc.config.clone();
-        let initial_tail_offset =  storage_reader.gc_log.read().await.tail_offset;
-       
+        let initial_tail_offset = storage_reader.gc_log.read().await.tail_offset;
+
         let _ = GC::gc_handler(
             &config,
             Arc::clone(&storage_reader.gc_table),
@@ -145,7 +146,7 @@ mod tests {
         let vaue_len = 3;
         let storage_reader = store.read().await;
         let mut config = storage_reader.gc.config.clone();
-       
+
         let initial_tail_offset = storage_reader.gc_log.read().await.tail_offset;
         config.gc_chunk_size = bytes_to_scan_for_garbage_colection;
         let _ = GC::gc_handler(

@@ -3,25 +3,22 @@
 // each identified SSTable might still contain data outside your desired range. For heavily range query-focused workloads, LCS or TWSC should be considered
 // Although this stratedy is not available for now, It will be implmented in the future
 
-use crate::consts::{DEFAULT_ALLOW_PREFETCH, DEFAULT_PREFETCH_SIZE, HEAD_ENTRY_KEY};
+use crate::consts::HEAD_ENTRY_KEY;
 use crate::err::Error;
-use crate::index::Index;
-use crate::memtable::{Entry, MemTable};
+// use crate::index::Index;
+use crate::mem::Entry;
 use crate::storage::DataStore;
 use crate::types::{Key, ValOffset, Value};
-use crate::value_log::ValueLog;
-use async_trait::async_trait;
+use crate::vlog::ValueLog;
+// use async_trait::async_trait;
 use futures::future::join_all;
-use futures::stream::StreamExt;
 use log::error;
 use std::collections::BTreeMap;
-use std::path::PathBuf;
-use std::pin::Pin;
+// use std::path::PathBuf;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 use std::{cmp::Ordering, collections::HashMap};
-use tokio::fs::{File, OpenOptions};
-use tokio::sync::RwLock;
+// use tokio::fs::{File, OpenOptions};
+// use tokio::sync::RwLock;
 #[derive(Debug, Clone)]
 pub struct FetchedEntry {
     pub key: Key,

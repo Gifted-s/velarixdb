@@ -1,8 +1,5 @@
 use std::{
-    cmp::{self},
-    collections::HashMap,
-    path::PathBuf,
-    sync::Arc,
+    cmp, collections::HashMap, hash::Hash, ops::Deref, path::PathBuf, sync::Arc
 };
 
 use crossbeam_skiplist::SkipMap;
@@ -16,11 +13,11 @@ use crate::{
     bucket::{Bucket, BucketsToCompact, InsertableToBucket, SSTablesToRemove},
     err::Error,
     filter::BloomFilter,
-    memtable::Entry,
+    mem::Entry,
     sst::Table,
     types::{BloomFilterHandle, Bool, BucketMapHandle, Key, KeyRangeHandle, ValOffset},
 };
-use crate::{err::Error::*, memtable::SkipMapValue};
+use crate::{err::Error::*, mem::SkipMapValue};
 
 #[derive(Debug, Clone)]
 pub struct SizedTierRunner<'a> {
@@ -305,8 +302,8 @@ impl<'a> SizedTierRunner<'a> {
 
     fn tombstone_check(
         &mut self,
-        entry: &Entry<Vec<u8>, usize>,
-        merged_entries: &mut Vec<Entry<Vec<u8>, usize>>,
+        entry: &Entry<Key, usize>,
+        merged_entries: &mut Vec<Entry<Key, usize>>,
     ) -> Result<Bool, Error> {
         let mut should_insert = false;
         if self.tombstones.contains_key(&entry.key) {
@@ -314,7 +311,7 @@ impl<'a> SizedTierRunner<'a> {
             if entry.created_at > tomb_insert_time {
                 if entry.is_tombstone {
                     self.tombstones.insert(entry.key.to_owned(), entry.created_at);
-                    should_insert = !entry.has_expired(self.config.tombstone_ttl);
+                    should_insert = !entry.to_owned().has_expired(self.config.tombstone_ttl);
                 } else {
                     if self.config.use_ttl {
                         should_insert = !entry.has_expired(self.config.entry_ttl);
@@ -325,7 +322,7 @@ impl<'a> SizedTierRunner<'a> {
             }
         } else {
             if entry.is_tombstone {
-                self.tombstones.insert(entry.key.clone(), entry.created_at);
+                self.tombstones.insert(entry.key.to_owned(), entry.created_at);
                 should_insert = !entry.has_expired(self.config.tombstone_ttl);
             } else {
                 if self.config.use_ttl {

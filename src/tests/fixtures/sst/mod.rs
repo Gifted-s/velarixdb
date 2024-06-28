@@ -1,4 +1,7 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use crossbeam_skiplist::SkipMap;
 use tokio::{fs::File, sync::RwLock};
@@ -9,17 +12,17 @@ use crate::{
     sst::{DataFile, Table},
 };
 
-struct SSTContructor {
+pub struct SSTContructor {
     dir: PathBuf,
     data_path: PathBuf,
     index_path: PathBuf,
 }
 impl SSTContructor {
-    fn new(dir: PathBuf, data_path: PathBuf, index_path: PathBuf) -> Self {
+    fn new<P: AsRef<Path> + Send + Sync>(dir: P, data_path: P, index_path: P) -> Self {
         return Self {
-            dir,
-            data_path,
-            index_path,
+            dir: dir.as_ref().to_path_buf(),
+            data_path: data_path.as_ref().to_path_buf(),
+            index_path: index_path.as_ref().to_path_buf(),
         };
     }
 }

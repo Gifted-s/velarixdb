@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use crossbeam_skiplist::SkipMap;
 use std::{
     cmp::Ordering,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
     time::SystemTime,
 };
@@ -15,7 +15,7 @@ use crate::{
     filter::BloomFilter,
     fs::{DataFileNode, DataFs, FileAsync, FileNode, IndexFileNode, IndexFs},
     index::{Index, IndexFile, RangeOffset},
-    memtable::{Entry, SkipMapValue},
+    mem::{Entry, SkipMapValue},
     types::{CreationTime, IsTombStone, Key, SkipMapEntries, ValOffset},
 };
 
@@ -34,8 +34,11 @@ impl<F> DataFile<F>
 where
     F: DataFs,
 {
-    pub fn new(path: PathBuf, file: F) -> Self {
-        Self { path, file }
+    pub fn new<P: AsRef<Path> + Send + Sync>(path: P, file: F) -> Self {
+        Self {
+            path: path.as_ref().to_path_buf(),
+            file,
+        }
     }
 }
 
@@ -57,26 +60,26 @@ impl InsertableToBucket for Table {
     fn size(&self) -> usize {
         self.size
     }
-    fn find_biggest_key(&self) -> Result<Vec<u8>, Error> {
+    fn find_biggest_key(&self) -> Result<Key, Error> {
         let largest_entry = self.entries.iter().next_back();
         match largest_entry {
-            Some(e) => return Ok(e.key().to_vec()),
+            Some(e) => Ok(e.key().to_vec()),
             None => Err(BiggestKeyIndexError),
         }
     }
 
-    fn find_smallest_key(&self) -> Result<Vec<u8>, Error> {
+    fn find_smallest_key(&self) -> Result<Key, Error> {
         let largest_entry = self.entries.iter().next();
         match largest_entry {
-            Some(e) => return Ok(e.key().to_vec()),
+            Some(e) => Ok(e.key().to_vec()),
             None => Err(LowestKeyIndexError),
         }
     }
 }
 
 impl Table {
-    pub async fn new(dir: PathBuf) -> Result<Table, Error> {
-        let (data_file_path, index_file_path, creation_time) = Table::generate_file_path(dir.to_owned()).await?;
+    pub async fn new<P: AsRef<Path> + Send + Sync>(dir: P) -> Result<Table, Error> {
+        let (data_file_path, index_file_path, creation_time) = Table::generate_file_path(dir.as_ref()).await?;
         let data_file = DataFileNode::new(data_file_path.to_owned(), crate::fs::FileType::Data)
             .await
             .unwrap();
@@ -85,7 +88,7 @@ impl Table {
             .unwrap();
 
         Ok(Self {
-            dir,
+            dir: dir.as_ref().to_path_buf(),
             hotness: 0,
             index_file: IndexFile::new(index_file_path, index_file),
             data_file: DataFile::new(data_file_path, data_file),
@@ -105,23 +108,25 @@ impl Table {
         self.hotness
     }
 
-    pub async fn generate_file_path(dir: PathBuf) -> Result<(PathBuf, PathBuf, DateTime<Utc>), Error> {
+    pub async fn generate_file_path<P: AsRef<Path> + Send + Sync>(
+        dir: P,
+    ) -> Result<(PathBuf, PathBuf, DateTime<Utc>), Error> {
         let created_at = Utc::now();
-        let _ = FileNode::create_dir_all(dir.to_owned()).await?;
+        let _ = FileNode::create_dir_all(dir.as_ref()).await?;
         let data_file_name = format!("data_{}_.db", created_at.timestamp_millis());
         let index_file_name = format!("index_{}_.db", created_at.timestamp_millis());
 
-        let data_file_path = dir.join(data_file_name.to_owned());
-        let index_file_path = dir.join(index_file_name.to_owned());
+        let data_file_path = dir.as_ref().join(data_file_name);
+        let index_file_path = dir.as_ref().join(index_file_name);
         Ok((data_file_path, index_file_path, created_at))
     }
 
-    pub(crate) async fn get(
+    pub(crate) async fn get<K: AsRef<[u8]>>(
         &self,
         start_offset: u32,
-        searched_key: &[u8],
+        searched_key: K,
     ) -> Result<Option<(ValOffset, CreationTime, IsTombStone)>, Error> {
-        self.data_file.file.find_entry(start_offset, searched_key).await
+        self.data_file.file.find_entry(start_offset, searched_key.as_ref()).await
     }
 
     pub(crate) async fn load_entries_from_file(&self) -> Result<Table, Error> {
@@ -137,16 +142,20 @@ impl Table {
         })
     }
 
-    pub(crate) async fn build_from(dir: PathBuf, data_file_path: PathBuf, index_file_path: PathBuf) -> Table {
+    pub(crate) async fn build_from<P: AsRef<Path> + Send + Sync + Clone>(
+        dir: P,
+        data_file_path: P,
+        index_file_path: PathBuf,
+    ) -> Table {
         let mut table = Table {
-            dir,
+            dir: dir.as_ref().to_path_buf(),
             hotness: 1,
             created_at: Utc::now().timestamp_millis() as u64,
             data_file: DataFile {
                 file: DataFileNode::new(data_file_path.to_owned(), crate::fs::FileType::Data)
                     .await
                     .unwrap(),
-                path: data_file_path,
+                path: data_file_path.as_ref().to_path_buf(),
             },
             index_file: IndexFile {
                 file: IndexFileNode::new(index_file_path.to_owned(), crate::fs::FileType::Index)
@@ -217,7 +226,8 @@ impl Table {
         Ok(())
     }
 
-    pub(crate) async fn range(&self, range_offset: RangeOffset) -> Result<Vec<Entry<Vec<u8>, usize>>, Error> {
+    #[allow(dead_code)]
+    pub(crate) async fn range(&self, range_offset: RangeOffset) -> Result<Vec<Entry<Key, usize>>, Error> {
         self.data_file.file.load_entries_within_range(range_offset).await
     }
 

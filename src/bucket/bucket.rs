@@ -6,6 +6,7 @@ use crate::types::{Bool, Key, SkipMapEntries};
 use chrono::Utc;
 use indexmap::IndexMap;
 use std::fmt::Debug;
+use std::path::Path;
 use std::{path::PathBuf, sync::Arc};
 use tokio::fs;
 use tokio::sync::RwLock;
@@ -39,17 +40,18 @@ pub trait InsertableToBucket: Debug + Send + Sync {
 }
 
 impl Bucket {
-    pub async fn new(dir: PathBuf) -> Self {
+    pub async fn new<P: AsRef<Path>>(dir: P) -> Result<Bucket, Error> {
+        let dir = dir.as_ref();
         let id = Uuid::new_v4();
         let dir = dir.join(BUCKET_DIRECTORY_PREFIX.to_string() + id.to_string().as_str());
-        let _ = FileNode::create_dir_all(dir.to_owned()).await;
-        Self {
+        FileNode::create_dir_all(dir.to_owned()).await?;
+        Ok(Self {
             id,
             dir,
             size: 0,
             avarage_size: 0,
             sstables: Arc::new(RwLock::new(Vec::new())),
-        }
+        })
     }
     pub async fn from(
         dir: PathBuf,
@@ -113,12 +115,13 @@ impl Bucket {
 }
 
 impl BucketMap {
-    pub async fn new(dir: PathBuf) -> Self {
-        let _ = FileNode::create_dir_all(dir.to_owned()).await;
-        Self {
-            dir,
+    pub async fn new<P: AsRef<Path>>(dir: P) -> Result<BucketMap, Error> {
+        let dir = dir.as_ref();
+        let _ = FileNode::create_dir_all(dir.to_path_buf()).await;
+        Ok(Self {
+            dir: dir.to_path_buf(),
             buckets: IndexMap::new(),
-        }
+        })
     }
     pub fn set_buckets(&mut self, buckets: IndexMap<BucketID, Bucket>) {
         self.buckets = buckets
@@ -153,7 +156,7 @@ impl BucketMap {
 
         // create a new bucket if none of the condition above was satisfied
         if !added_to_bucket {
-            let mut bucket = Bucket::new(self.dir.clone()).await;
+            let mut bucket = Bucket::new(self.dir.clone()).await?;
             let sst_dir = bucket
                 .dir
                 .join(format!("{}_{}", SST_PREFIX, created_at.timestamp_millis()));

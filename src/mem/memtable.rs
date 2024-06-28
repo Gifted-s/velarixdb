@@ -16,12 +16,17 @@ use crossbeam_skiplist::SkipMap;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 use std::cmp::{self, Ordering};
+use std::fmt::Debug;
 use Error::*;
 
 use std::{hash::Hash, sync::Arc};
 
+pub trait K: AsRef<[u8]> + Hash + Ord + Send + Sync + Clone + Debug {}
+
+impl<T> K for T where T: AsRef<[u8]> + Hash + Ord + Send + Sync + Clone + Debug {}
+
 #[derive(PartialOrd, PartialEq, Copy, Clone, Debug)]
-pub struct Entry<K: Hash, V> {
+pub struct Entry<K, V> {
     pub key: K,
     pub val_offset: V,
     pub created_at: u64,
@@ -45,8 +50,8 @@ impl<V: Ord> SkipMapValue<V> {
 }
 
 #[derive(Clone, Debug)]
-pub struct MemTable<K: Hash + cmp::Ord> {
-    pub entries: SkipMapEntries<K>,
+pub struct MemTable<Key: K> {
+    pub entries: SkipMapEntries<Key>,
     pub bloom_filter: BloomFilter,
     pub false_positive_rate: f64,
     pub size: usize,
@@ -54,7 +59,7 @@ pub struct MemTable<K: Hash + cmp::Ord> {
     pub capacity: usize,
     pub created_at: DateTime<Utc>,
     pub read_only: bool,
-    pub most_recent_entry: Entry<K, ValOffset>,
+    pub most_recent_entry: Entry<Key, ValOffset>,
 }
 
 #[allow(dead_code)]
@@ -81,7 +86,7 @@ impl InsertableToBucket for MemTable<Key> {
     fn find_biggest_key(&self) -> Result<Key, Error> {
         let largest_entry = self.entries.iter().next_back();
         match largest_entry {
-            Some(e) => return Ok(e.key().to_vec()),
+            Some(e) => Ok(e.key().to_vec()),
             None => Err(BiggestKeyIndexError),
         }
     }
@@ -89,16 +94,21 @@ impl InsertableToBucket for MemTable<Key> {
     fn find_smallest_key(&self) -> Result<Key, Error> {
         let smallest_entry = self.entries.iter().next();
         match smallest_entry {
-            Some(e) => return Ok(e.key().to_vec()),
+            Some(e) => Ok(e.key().to_vec()),
             None => Err(LowestKeyIndexError),
         }
     }
 }
 
 impl Entry<Key, ValOffset> {
-    pub(crate) fn new(key: Key, val_offset: ValOffset, created_at: CreationTime, is_tombstone: IsTombStone) -> Self {
+    pub(crate) fn new<EntryKey: K>(
+        key: EntryKey,
+        val_offset: ValOffset,
+        created_at: CreationTime,
+        is_tombstone: IsTombStone,
+    ) -> Self {
         Entry {
-            key,
+            key: key.as_ref().to_vec(),
             val_offset,
             created_at,
             is_tombstone,
@@ -166,9 +176,9 @@ impl MemTable<Key> {
         Ok(())
     }
 
-    pub fn get(&self, key: &Vec<u8>) -> Option<SkipMapValue<ValOffset>> {
-        if self.bloom_filter.contains(key) {
-            if let Some(entry) = self.entries.get(key) {
+    pub fn get<EntryKey: K>(&self, key: EntryKey) -> Option<SkipMapValue<ValOffset>> {
+        if self.bloom_filter.contains(&key.as_ref().to_vec()) {
+            if let Some(entry) = self.entries.get(key.as_ref()) {
                 return Some(entry.value().to_owned()); // returns value offset
             }
         }
@@ -186,7 +196,7 @@ impl MemTable<Key> {
         Ok(())
     }
 
-    pub fn upsert(&mut self, entry: &Entry<Vec<u8>, usize>) -> Result<(), Error> {
+    pub fn upsert(&mut self, entry: &Entry<Key, usize>) -> Result<(), Error> {
         self.insert(&entry)
     }
 
@@ -213,15 +223,15 @@ impl MemTable<Key> {
         self.size + key_len + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8 >= self.capacity()
     }
 
-    pub fn is_entry_within_range<'a>(
+    pub fn is_entry_within_range<CustomKey: AsRef<[u8]>>(
         e: &crossbeam_skiplist::map::Entry<Key, (ValOffset, CreationTime, IsTombStone)>,
-        start: &'a [u8],
-        end: &'a [u8],
+        start: CustomKey,
+        end: CustomKey,
     ) -> bool {
-        e.key().cmp(&start.to_vec()) == Ordering::Greater
-            || e.key().cmp(&start.to_vec()) == Ordering::Equal
-            || e.key().cmp(&end.to_vec()) == Ordering::Less
-            || e.key().cmp(&end.to_vec()) == Ordering::Equal
+        e.key().cmp(&start.as_ref().to_vec()) == Ordering::Greater
+            || e.key().cmp(&start.as_ref().to_vec()) == Ordering::Equal
+            || e.key().cmp(&end.as_ref().to_vec()) == Ordering::Less
+            || e.key().cmp(&end.as_ref().to_vec()) == Ordering::Equal
     }
 
     pub fn false_positive_rate(&mut self) -> f64 {
@@ -514,17 +524,18 @@ mod tests {
         map.insert(keys[3].to_owned(), (val_offset, created_at, is_tombstone));
         map.insert(keys[4].to_owned(), (val_offset, created_at, is_tombstone));
 
-        let within_range = MemTable::is_entry_within_range(&map.get(&keys[0]).unwrap(), &keys[0], &keys[3]);
+        let within_range =
+            MemTable::is_entry_within_range(&map.get(&keys[0]).unwrap(), keys[0].to_owned(), keys[3].to_owned());
         assert_eq!(within_range, true);
 
-        let start_invalid = &vec![10, 20, 30, 40];
-        let end_invalid = &vec![0, 0, 0, 0];
-        let within_range = MemTable::is_entry_within_range(&map.get(&keys[0]).unwrap(), &start_invalid, &end_invalid);
+        let start_invalid = vec![10, 20, 30, 40];
+        let end_invalid = vec![0, 0, 0, 0];
+        let within_range = MemTable::is_entry_within_range(&map.get(&keys[0]).unwrap(), start_invalid, end_invalid);
         assert_eq!(within_range, false);
 
         let start_valid = &keys[0];
-        let end_invalid = &vec![0, 0, 0, 0];
-        let within_range = MemTable::is_entry_within_range(&map.get(&keys[0]).unwrap(), &start_valid, &end_invalid);
+        let end_invalid = vec![0, 0, 0, 0];
+        let within_range = MemTable::is_entry_within_range(&map.get(&keys[0]).unwrap(), start_valid, &end_invalid);
         assert_eq!(within_range, true);
     }
 

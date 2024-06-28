@@ -79,31 +79,25 @@
 //! - **Is Tombstone**: A 1 byte field representing a boolean of deleted or not deleted entry
 
 use crate::{
-    consts::{EOF, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, VLOG_FILE_NAME},
+    consts::{SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, VLOG_FILE_NAME},
     err::Error,
-    fs::{FileAsync, FileNode, VLogFileNode, VLogFs},
+    fs::{FileAsync, FileNode, VLogFileNode, VLogFs}, types::{IsTombStone, Key, Value},
 };
-use log::error;
-use std::{mem, path::PathBuf};
-use tokio::io::{self};
-
+use std::path::{Path, PathBuf};
 type TotalBytesRead = usize;
 
 #[derive(Debug, Clone)]
-pub struct VFile<F>
-where
-    F: VLogFs,
-{
-    pub(crate) file: F,
-    pub(crate) path: PathBuf,
+pub struct VFile<F: VLogFs> {
+    pub file: F,
+    pub path: PathBuf,
 }
 
-impl<F> VFile<F>
-where
-    F: VLogFs,
-{
-    pub fn new(path: PathBuf, file: F) -> Self {
-        Self { path, file }
+impl<F: VLogFs> VFile<F> {
+    pub fn new<P: AsRef<Path> + Send + Sync>(path: P, file: F) -> Self {
+        Self {
+            path: path.as_ref().to_path_buf(),
+            file,
+        }
     }
 }
 
@@ -126,10 +120,9 @@ pub struct ValueLogEntry {
 }
 
 impl ValueLog {
-    pub async fn new(dir: &PathBuf) -> Result<Self, Error> {
-        let dir_path = PathBuf::from(dir);
-        FileNode::create_dir_all(dir_path.to_owned()).await?;
-        let file_path = dir_path.join(VLOG_FILE_NAME);
+    pub async fn new<P: AsRef<Path> + Send + Sync>(dir: P) -> Result<Self, Error> {
+        FileNode::create_dir_all(dir.as_ref()).await?;
+        let file_path = dir.as_ref().join(VLOG_FILE_NAME);
         let file = VLogFileNode::new(file_path.to_owned(), crate::fs::FileType::ValueLog)
             .await
             .unwrap();
@@ -141,18 +134,18 @@ impl ValueLog {
         })
     }
 
-    pub async fn append(
+    pub async fn append<T: AsRef<[u8]>>(
         &mut self,
-        key: &Vec<u8>,
-        value: &Vec<u8>,
+        key: T,
+        value: T,
         created_at: u64,
         is_tombstone: bool,
     ) -> Result<usize, Error> {
         let v_log_entry = ValueLogEntry::new(
-            key.len(),
-            value.len(),
-            key.to_vec(),
-            value.to_vec(),
+            key.as_ref().len(),
+            value.as_ref().len(),
+            key.as_ref().to_vec(),
+            value.as_ref().to_vec(),
             created_at,
             is_tombstone,
         );
@@ -165,7 +158,7 @@ impl ValueLog {
         Ok(last_offset as usize)
     }
 
-    pub async fn get(&self, start_offset: usize) -> Result<Option<(Vec<u8>, bool)>, Error> {
+    pub async fn get(&self, start_offset: usize) -> Result<Option<(Value, IsTombStone)>, Error> {
         self.content.file.get(start_offset).await
     }
 
@@ -208,12 +201,12 @@ impl ValueLog {
 }
 
 impl ValueLogEntry {
-    pub fn new(ksize: usize, vsize: usize, key: Vec<u8>, value: Vec<u8>, created_at: u64, is_tombstone: bool) -> Self {
+    pub fn new<T: AsRef<[u8]>>(ksize: usize, vsize: usize, key: T, value: T, created_at: u64, is_tombstone: bool) -> Self {
         Self {
             ksize,
             vsize,
-            key,
-            value,
+            key: key.as_ref().to_vec(),
+            value: value.as_ref().to_vec(),
             created_at,
             is_tombstone,
         }
@@ -242,8 +235,7 @@ impl ValueLogEntry {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
-    fn test_serialized_deserialized() {}
+    fn test_serialized() {}
 }

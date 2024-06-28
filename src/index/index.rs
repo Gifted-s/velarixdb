@@ -2,7 +2,7 @@ use crate::consts::SIZE_OF_U32;
 use crate::err::Error;
 use crate::fs::{FileAsync, IndexFileNode, IndexFs};
 use crate::types::Key;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use Error::*;
 type Offset = u32;
@@ -20,14 +20,17 @@ impl<F> IndexFile<F>
 where
     F: IndexFs,
 {
-    pub fn new(path: PathBuf, file: F) -> Self {
-        Self { path, file }
+    pub fn new<P: AsRef<Path> + Send + Sync>(path: P, file: F) -> Self {
+        Self {
+            path: path.as_ref().to_path_buf(),
+            file,
+        }
     }
 }
 #[derive(Debug, Clone)]
 pub struct IndexEntry {
     pub key_prefix: u32,
-    pub key: Vec<u8>,
+    pub key: Key,
     pub block_handle: u32,
 }
 #[derive(Debug, Clone)]
@@ -51,7 +54,7 @@ impl RangeOffset {
 }
 
 impl Index {
-    pub fn new(path: PathBuf, file: IndexFileNode) -> Self {
+    pub fn new<P: AsRef<Path> + Send + Sync>(path: P, file: IndexFileNode) -> Self {
         Self {
             entries: Vec::new(),
             file: IndexFile::new(path, file),
@@ -92,8 +95,8 @@ impl Index {
         Ok(entry_vec)
     }
 
-    pub(crate) async fn get(&self, searched_key: &[u8]) -> Result<Option<u32>, Error> {
-        self.file.file.get_from_index(searched_key).await
+    pub(crate) async fn get<K: AsRef<[u8]>>(&self, searched_key: K) -> Result<Option<u32>, Error> {
+        self.file.file.get_from_index(searched_key.as_ref()).await
     }
 
     // pub(crate) async fn get_block_offset_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<RangeOffset, Error> {

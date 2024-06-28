@@ -22,7 +22,7 @@ impl InsertableToBucket for TableInsertor {
     fn find_biggest_key(&self) -> Result<Key, Error> {
         let largest_entry = self.entries.iter().next_back();
         match largest_entry {
-            Some(e) => return Ok(e.key().to_vec()),
+            Some(e) => Ok(e.key().to_vec()),
             None => Err(BiggestKeyIndexError),
         }
     }
@@ -30,7 +30,7 @@ impl InsertableToBucket for TableInsertor {
     fn find_smallest_key(&self) -> Result<Key, Error> {
         let largest_entry = self.entries.iter().next();
         match largest_entry {
-            Some(e) => return Ok(e.key().to_vec()),
+            Some(e) => Ok(e.key().to_vec()),
             None => Err(LowestKeyIndexError),
         }
     }

@@ -1,8 +1,8 @@
 use crate::bucket::bucket::InsertableToBucket;
 use crate::consts::FLUSH_SIGNAL;
-use crate::flusher::flusher::Error::FlushError;
+use crate::flush::flusher::Error::FlushError;
 use crate::types::{self, BloomFilterHandle, BucketMapHandle, FlushSignal, ImmutableMemTable, KeyRangeHandle};
-use crate::{err::Error, memtable::MemTable};
+use crate::{err::Error, mem::MemTable};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -66,9 +66,9 @@ impl Flusher {
         Ok(())
     }
 
-    pub fn flush_handler(
+    pub fn flush_handler<Id: 'static + AsRef<[u8]> + Send + Sync>(
         &mut self,
-        table_id: Vec<u8>,
+        table_id: Id,
         table_to_flush: InActiveMemtable,
         flush_tx: async_broadcast::Sender<FlushSignal>,
     ) {
@@ -82,7 +82,7 @@ impl Flusher {
             match flusher.flush(table_to_flush).await {
                 Ok(_) => {
                     let mut tables = read_only_memtable.write().await;
-                    tables.shift_remove(&table_id);
+                    tables.shift_remove(&table_id.as_ref().to_vec());
                     if let Err(err) = tx.try_broadcast(FLUSH_SIGNAL) {
                         match err {
                             async_broadcast::TrySendError::Full(_) => {

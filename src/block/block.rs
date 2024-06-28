@@ -66,7 +66,7 @@ use err::Error::*;
 use crate::{
     consts::{SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8},
     err::{self, Error},
-    fs::{FileAsync, FileNode},
+    fs::{FileAsync, FileNode}, types::Key,
 };
 type BytesWritten = usize;
 const BLOCK_SIZE: usize = 4 * 1024; // 4KB
@@ -104,23 +104,23 @@ impl Block {
     ///
     /// Returns an `Result` indicating success or failure. An error is returned if the Block
     /// is already full and cannot accommodate the new entry.
-    pub fn set_entry(
+    pub fn set_entry<K: AsRef<[u8]>>(
         &mut self,
         key_prefix: u32,
-        key: Vec<u8>,
+        key: K,
         value_offset: u32,
         creation_date: u64,
         is_tombstone: bool,
     ) -> Result<(), Error> {
         // Key + Key Prefix + Value Offset +  Creation Date + Tombstone Marker
-        let entry_size = key.len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
+        let entry_size = key.as_ref().len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
 
         if self.is_full(entry_size) {
             return Err(Error::BlockIsFullError);
         }
 
         let entry = BlockEntry {
-            key,
+            key: key.as_ref().to_vec(),
             key_prefix,
             creation_date,
             is_tombstone,
@@ -141,7 +141,7 @@ impl Block {
         for entry in &self.entries {
             let serialized_entry = self.serialize(entry)?;
             file.write_all(&serialized_entry).await?;
-            bytes_written+=serialized_entry.len();
+            bytes_written += serialized_entry.len();
         }
         Ok(bytes_written)
     }
@@ -160,7 +160,7 @@ impl Block {
     /// Serializes the entries in the block as a byte vector
     ///
     /// Returns `Ok(entry_vec)`or Error if not
-    pub(crate) fn serialize(&self, entry: &BlockEntry) -> Result<Vec<u8>, Error> {
+    pub(crate) fn serialize(&self, entry: &BlockEntry) -> Result<Key, Error> {
         let entry_len = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
         let mut entry_vec = Vec::with_capacity(entry_len);
         entry_vec.extend_from_slice(&(entry.key_prefix).to_le_bytes());
@@ -189,7 +189,7 @@ impl Block {
 mod tests {
 
     use super::*;
-    use std::{fs, sync::Arc};
+    use std::sync::Arc;
     use tempfile::NamedTempFile;
     use tokio::{fs::File, sync::RwLock};
 
@@ -211,7 +211,7 @@ mod tests {
     #[test]
     fn test_set_entry() {
         let mut block = Block::new();
-        let key: Vec<u8> = vec![1, 2, 3];
+        let key: Key = vec![1, 2, 3];
         let value_offset: u32 = 1000;
         let creation_date: u64 = 16345454545;
         let is_tombstone: bool = false;
@@ -238,7 +238,7 @@ mod tests {
     #[test]
     fn test_serialize() {
         let block = Block::new();
-        let key: Vec<u8> = vec![1, 2, 3];
+        let key: Key= vec![1, 2, 3];
         let value_offset: u32 = 1000;
         let creation_date: u64 = 16345454545;
         let is_tombstone: bool = false;
@@ -262,7 +262,7 @@ mod tests {
     #[tokio::test]
     async fn test_write_to_file() {
         let mut block = Block::new();
-        let key: Vec<u8> = vec![1, 2, 3];
+        let key: Key = vec![1, 2, 3];
         let value_offset: u32 = 1000;
         let creation_date: u64 = 16345454545;
         let is_tombstone: bool = false;
@@ -295,12 +295,13 @@ mod tests {
         };
         let write_res = block.write_to_file(file.clone()).await;
         assert!(write_res.is_ok());
+        assert_eq!(write_res.unwrap(), block.size)
     }
 
     #[test]
     fn test_get_entry() {
         let mut block = Block::new();
-        let key: Vec<u8> = vec![1, 2, 3];
+        let key: Key = vec![1, 2, 3];
         let value_offset: u32 = 1000;
         let creation_date: u64 = 16345454545;
         let is_tombstone: bool = false;
@@ -322,7 +323,7 @@ mod tests {
     fn test_get_value_nonexistent_key() {
         let block = Block::new();
         // Test case to check getting a value for a non-existent key
-        let key: Vec<u8> = vec![1, 2, 3];
+        let key: Key = vec![1, 2, 3];
         let value = block.get_entry(&key);
         assert!(value.is_none());
     }
@@ -331,7 +332,7 @@ mod tests {
     fn test_set_entry_full_block() {
         // Test case to check setting an entry when the block is already full
         let mut block = Block::new();
-        let key: Vec<u8> = vec![1, 2, 3];
+        let key: Key = vec![1, 2, 3];
         let value_offset: u32 = 1000;
         let creation_date: u64 = 16345454545;
         let is_tombstone: bool = false;

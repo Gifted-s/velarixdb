@@ -7,13 +7,11 @@ use super::TableInsertor;
 ///
 /// Unexpired Tombstones: If a tombstone is not expired, it means the data it shadows might still be relevant on other tiers.  In
 /// this case, VikingsDB keeps both the tombstone and the data in the new SSTable. This ensures consistency across the tiers and allows for repairs if needed.
-use crate::bucket::{BucketMap, InsertableToBucket};
+use crate::bucket::InsertableToBucket;
 use crate::types::{BloomFilterHandle, Bool, BucketMapHandle, Duration, FlushReceiver, KeyRangeHandle};
 use crate::{err::Error, filter::BloomFilter};
 use futures::lock::Mutex;
 use std::sync::Arc;
-use tokio::sync::mpsc::Receiver;
-use tokio::sync::RwLock;
 use tokio::time::sleep;
 use Error::*;
 
@@ -182,6 +180,7 @@ impl Compactor {
         }
     }
     /// FUTURE: Maybe trigger tombstone compaction on interval in addtion to normal periodic sstable compaction
+    #[allow(unused_variables)]
     pub fn tombstone_compaction_condition_background_checker(
         &self,
         bucket_map: BucketMapHandle,
