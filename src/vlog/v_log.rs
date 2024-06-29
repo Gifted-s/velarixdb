@@ -84,7 +84,7 @@ use crate::{
     consts::{SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, VLOG_FILE_NAME},
     err::Error,
     fs::{FileAsync, FileNode, VLogFileNode, VLogFs},
-    types::{CreatedAt, IsTombStone, Key, Value},
+    types::{CreatedAt, IsTombStone, Value},
 };
 use std::path::{Path, PathBuf};
 type TotalBytesRead = usize;

@@ -17,7 +17,7 @@ use crate::flush::Flusher;
 use crate::gc::gc::GC;
 use crate::helpers;
 use crate::key_range::KeyRange;
-use crate::mem::{Entry, MemTable, K};
+use crate::mem::{Entry, MemTable};
 use crate::meta::Meta;
 use crate::sst::Table;
 use crate::types::{Key, MemtableId};
@@ -26,7 +26,6 @@ use async_broadcast::broadcast;
 use chrono::Utc;
 use crossbeam_skiplist::SkipMap;
 use indexmap::IndexMap;
-use std::hash::Hash;
 use std::sync::Arc;
 use tokio::fs::read_dir;
 use tokio::sync::RwLock;
@@ -97,7 +96,8 @@ impl DataStore<'static, Key> {
                 // Sort to make order deterministic
                 sst_files.sort();
                 let bucket_id = Self::get_bucket_id_from_full_bucket_path(sst_dir.path());
-                if sst_files.len() < 2 {
+                // continue from here tommorrow
+                if sst_files.len() < 3 {
                     return Err(InvalidSSTableDirectoryError {
                         input_string: sst_dir.path().to_owned().to_string_lossy().to_string(),
                     });

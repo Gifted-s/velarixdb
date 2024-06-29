@@ -1,6 +1,7 @@
 use crate::{
     consts::{EOF, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8},
     err::Error::{self, *},
+    filter::{BloomFilter, FalsePositive, NoHashFunc, NoOfElements},
     helpers,
     index::RangeOffset,
     load_buffer,
@@ -27,6 +28,7 @@ pub enum FileType {
     Index,
     Data,
     ValueLog,
+    Filter,
 }
 pub type Buf = [u8];
 pub type RGuard<'a, T> = RwLockReadGuard<'a, T>;
@@ -94,6 +96,14 @@ pub trait VLogFs: Send + Sync + Debug + Clone {
         bytes_to_collect: usize,
         offset: u64,
     ) -> Result<(Vec<ValueLogEntry>, NoBytesRead), Error>;
+}
+
+#[async_trait]
+pub trait FilterFs: Send + Sync + Debug + Clone {
+    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<Self, Error>;
+
+    async fn recover<P: AsRef<Path> + Send + Sync>(path: P)
+        -> Result<(FalsePositive, NoHashFunc, NoOfElements), Error>;
 }
 
 #[async_trait]
@@ -696,6 +706,48 @@ impl IndexFs for IndexFileNode {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct FilterFileNode {
+    pub node: FileNode,
+}
+
+#[async_trait]
+impl FilterFs for FilterFileNode {
+    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<FilterFileNode, Error> {
+        let node = FileNode::new(path, file_type).await?;
+        Ok(FilterFileNode { node })
+    }
+
+    async fn recover<P: AsRef<Path> + Send + Sync>(
+        path: P,
+    ) -> Result<(FalsePositive, NoHashFunc, NoOfElements), Error> {
+        let mut file = FileNode::open(path.as_ref())
+            .await
+            .map_err(|_| return FilterFileOpenError(path.as_ref().to_owned()))?;
+
+        let mut no_hash_func_bytes = [0; SIZE_OF_U32];
+        let mut bytes_read = load_buffer!(file, &mut no_hash_func_bytes, path.as_ref().to_path_buf())?;
+        if bytes_read == 0 {
+            return Err(FileNode::unexpected_eof());
+        }
+        let no_of_hash_func = u32::from_le_bytes(no_hash_func_bytes);
+
+        let mut no_of_elements_bytes = [0; SIZE_OF_U32];
+        bytes_read = load_buffer!(file, &mut no_of_elements_bytes, path.as_ref().to_path_buf())?;
+        if bytes_read == 0 {
+            return Err(FileNode::unexpected_eof());
+        }
+        let no_of_elements = u32::from_le_bytes(no_of_elements_bytes);
+
+        let false_positive_rate_bytes = [0; SIZE_OF_U64];
+        let false_positive_rate = helpers::float_from_le_bytes(&false_positive_rate_bytes);
+        if false_positive_rate == None {
+            return Err(FileNode::unexpected_eof());
+        }
+
+        return Ok((false_positive_rate.unwrap(), no_of_hash_func, no_of_elements));
+    }
+}
 impl FileNode {
     fn unexpected_eof() -> Error {
         return UnexpectedEOF(io::Error::new(io::ErrorKind::UnexpectedEof, EOF));

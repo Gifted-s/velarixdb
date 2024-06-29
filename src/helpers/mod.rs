@@ -16,3 +16,28 @@ pub fn milliseconds_to_datetime(milliseconds: u64) -> DateTime<Utc> {
 pub fn default_datetime() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(1970, 1, 1, 0, 0, 0).unwrap()
 }
+
+pub fn float_to_le_bytes(f: f64) -> [u8; 8] {
+    // Convert f64 to its bit representation (u64)
+    let bits: u64 = f.to_bits();
+
+    // Convert the u64 to an array of 8 bytes in little-endian order
+    let bytes: [u8; 8] = bits.to_le_bytes().try_into().unwrap();
+
+    return bytes;
+}
+
+pub fn float_from_le_bytes(bytes: &[u8]) -> Option<f64> {
+    // Ensure the byte array has the correct size for f32
+    if bytes.len() != 8 {
+        return None;
+    }
+
+    // Convert the byte array to a u32 in little-endian order
+    let bits: u64 = u64::from_le_bytes(bytes.try_into().unwrap());
+
+    // Convert the u32 bit representation back to f32
+    let float: f64 = f64::from_bits(bits);
+
+    return Some(float);
+}

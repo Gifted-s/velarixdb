@@ -2,9 +2,9 @@ use crate::{
     compact,
     consts::{
         DEFAULT_ALLOW_PREFETCH, DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL, DEFAULT_COMPACTION_INTERVAL,
-        DEFAULT_ENABLE_TTL, DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MAX_WRITE_BUFFER_NUMBER,
-        DEFAULT_ONLINE_GC_INTERVAL, DEFAULT_PREFETCH_SIZE, DEFAULT_TOMBSTONE_COMPACTION_INTERVAL,
-        DEFAULT_TOMBSTONE_TTL, ENTRY_TTL, GC_CHUNK_SIZE, WRITE_BUFFER_SIZE,
+        DEFAULT_ENABLE_TTL, DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MAX_WRITE_BUFFER_NUMBER, DEFAULT_ONLINE_GC_INTERVAL,
+        DEFAULT_PREFETCH_SIZE, DEFAULT_TOMBSTONE_COMPACTION_INTERVAL, DEFAULT_TOMBSTONE_TTL, ENTRY_TTL, GC_CHUNK_SIZE,
+        WRITE_BUFFER_SIZE,
     },
 };
 
@@ -14,15 +14,6 @@ pub struct Config {
     /// False positive rate for the Bloom filter. The lower the value, the more accurate,
     /// but it incurs extra cost on the CPU for more accuracy.
     pub false_positive_rate: f64,
-
-    /// Should we delete entries that have exceeded their time to live (TTL)?
-    pub enable_ttl: bool,
-
-    /// Time for an entry to exist before it is removed automatically (in days).
-    pub entry_ttl_millis: std::time::Duration,
-
-    /// Time for a tombstone to exist before it is removed automatically (in days).
-    pub tombstone_ttl: std::time::Duration,
 
     /// Should we prefetch upcoming values in case of range queries?
     pub allow_prefetch: bool,
@@ -35,6 +26,15 @@ pub struct Config {
 
     /// How many memtables should we have
     pub max_buffer_write_number: usize,
+
+    /// Should we delete entries that have exceeded their time to live (TTL)?
+    pub enable_ttl: bool,
+
+    /// Time for an entry to exist before it is removed automatically (in days).
+    pub entry_ttl_millis: std::time::Duration,
+
+    /// Time for a tombstone to exist before it is removed automatically (in days).
+    pub tombstone_ttl: std::time::Duration,
 
     /// Interval at which compaction checks if a flush has been made (in seconds)
     pub compactor_flush_listener_interval: std::time::Duration,

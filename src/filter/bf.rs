@@ -1,13 +1,25 @@
-use crate::sst::Table;
+use crate::filter::bf::Error::FilterFileOpenError;
+use crate::filter::bf::Error::FilterFilePathNotProvided;
+use crate::{
+    consts::{FILTER_FILE_NAME, SIZE_OF_U32, SIZE_OF_U64},
+    err::Error,
+    fs::{FileAsync, FileNode, FilterFileNode, FilterFs},
+    helpers,
+    sst::Table,
+};
 use bit_vec::BitVec;
 use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU32, Ordering},
         Arc, Mutex,
     },
 };
+pub type FalsePositive = f64;
+pub type NoHashFunc = u32;
+pub type NoOfElements = u32;
 
 #[derive(Debug)]
 pub struct BloomFilter {
@@ -15,13 +27,15 @@ pub struct BloomFilter {
     pub no_of_hash_func: usize,
     pub no_of_elements: AtomicU32,
     pub bit_vec: Arc<Mutex<BitVec>>,
+    pub false_positive_rate: f64,
+    pub file_path: Option<PathBuf>,
 }
 
 impl BloomFilter {
     pub fn new(false_positive_rate: f64, no_of_elements: usize) -> Self {
         assert!(
             false_positive_rate >= 0.0,
-            "False positive rate can not be les than or equal to zero"
+            "False positive rate can not be less than or equal to zero"
         );
         assert!(no_of_elements > 0, "No of elements should be greater than 0");
 
@@ -34,6 +48,8 @@ impl BloomFilter {
             no_of_hash_func,
             sst: None,
             bit_vec: Arc::new(Mutex::new(bv)),
+            false_positive_rate,
+            file_path: None,
         }
     }
     pub(crate) fn set<K: Hash + Copy>(&mut self, key: K) {
@@ -56,6 +72,45 @@ impl BloomFilter {
             }
         }
         true
+    }
+
+    // TODO: return alias
+    pub async fn write<P: AsRef<Path> + Send + Sync>(&mut self, dir: P) -> Result<(), Error> {
+        let file_path = dir.as_ref().join(FILTER_FILE_NAME);
+        let file = FilterFileNode::new(file_path.to_owned(), crate::fs::FileType::Filter)
+            .await
+            .unwrap();
+        let serialized_data = self.serialize();
+        file.node.write_all(&serialized_data).await?;
+        return Ok(());
+    }
+
+    pub async fn recover(&mut self) -> Result<(), Error> {
+        if self.file_path == None {
+            return Err(FilterFilePathNotProvided);
+        };
+        let (false_pos, no_hash_func, no_elements) = FilterFileNode::recover(self.file_path.as_ref().unwrap()).await?;
+        self.false_positive_rate = false_pos;
+        self.no_of_hash_func = no_hash_func as usize;
+        self.no_of_elements = AtomicU32::new(no_elements);
+        return Ok(());
+    }
+
+    // TODO: return alias
+    fn serialize(&self) -> Vec<u8> {
+        // No of Hash Function + No of Elements  + False Positive
+        let entry_len = SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64;
+
+        let mut serialized_data = Vec::with_capacity(entry_len);
+
+        serialized_data.extend_from_slice(&(self.no_of_hash_func as u32).to_le_bytes());
+
+        serialized_data
+            .extend_from_slice(&(AtomicU32::load(&self.no_of_elements, Ordering::Relaxed) as u32).to_le_bytes());
+
+        serialized_data.extend_from_slice(&helpers::float_to_le_bytes(self.false_positive_rate));
+
+        serialized_data
     }
 
     pub fn set_sstable(&mut self, sst: Table) {
@@ -92,6 +147,8 @@ impl BloomFilter {
             no_of_hash_func,
             no_of_elements: AtomicU32::new(0),
             bit_vec: Arc::new(Mutex::new(bit_vec)),
+            false_positive_rate: self.false_positive_rate,
+            file_path: None,
         }
     }
 
@@ -145,6 +202,8 @@ impl Clone for BloomFilter {
             no_of_hash_func: self.no_of_hash_func,
             no_of_elements: AtomicU32::load(&self.no_of_elements, Ordering::Relaxed).into(),
             bit_vec: self.bit_vec.clone(),
+            false_positive_rate: self.false_positive_rate,
+            file_path: self.file_path.to_owned(),
         }
     }
 }

@@ -17,6 +17,8 @@ pub const BUCKET_DIRECTORY_PREFIX: &str = "bucket";
 
 pub const VLOG_FILE_NAME: &str = "val_log.bin";
 
+pub const FILTER_FILE_NAME: &str = "filter.db";
+
 pub const META_DIRECTORY_NAME: &str = "meta";
 
 pub const TOMB_STONE_MARKER: &str = "*";

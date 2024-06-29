@@ -16,11 +16,18 @@ pub enum Error {
     #[error("Directory deletion error")]
     DirDeleteError(#[source] io::Error),
 
+    #[error("Filter file path not provided")]
+    FilterFilePathNotProvided,
+
+    #[error("Filter file open error: path `{0}`")]
+    FilterFileOpenError(PathBuf),
+
     #[error("File deletion error")]
     FileDeleteError(#[source] io::Error),
 
     #[error("Failed to open file")]
     FileOpenError { path: PathBuf, error: io::Error },
+
 
     #[error("Failed to get file metadata")]
     GetFileMetaDataError(#[source] std::io::Error),
