@@ -8,7 +8,7 @@
 //! +----------------------------------+
 //! |             Block                |
 //! +----------------------------------+
-//! |  - entries: Vec<Entry>           |   // entries entries within the block
+//! |  - entries: Vec<Entry>           |   // entries within the block
 //! |                                  |
 //! |  - entry_count: usize            |   // Number of entries in the block
 //! |                                  |
@@ -61,12 +61,14 @@
 // NOTE: For creation time while a 32-bit integer can technically hold milliseconds, the usable range is limited,
 // making it unsuitable for long-term timekeeping applications. For those scenarios, 64-bit(8 byte) integers are typically used.
 
+use chrono::{DateTime, Utc};
 use err::Error::*;
 
 use crate::{
     consts::{SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8},
     err::{self, Error},
-    fs::{FileAsync, FileNode}, types::Key,
+    fs::{FileAsync, FileNode},
+    types::Key,
 };
 type BytesWritten = usize;
 const BLOCK_SIZE: usize = 4 * 1024; // 4KB
@@ -76,6 +78,7 @@ pub struct Block {
     pub entries: Vec<BlockEntry>,
     pub size: usize,
     pub entry_count: usize,
+    // TODO: pub: checksum
 }
 
 #[derive(Debug, Clone)]
@@ -83,7 +86,7 @@ pub struct BlockEntry {
     pub key_prefix: u32,
     pub key: Vec<u8>,
     pub value_offset: u32,
-    pub creation_date: u64,
+    pub creation_date: DateTime<Utc>,
     pub is_tombstone: bool,
 }
 impl Block {
@@ -96,10 +99,6 @@ impl Block {
         }
     }
 
-    pub fn get_last_entry(&self) -> BlockEntry {
-        self.entries[self.entries.len() - 1].to_owned()
-    }
-
     /// Sets an entry with the provided key and value offset in the Block.
     ///
     /// Returns an `Result` indicating success or failure. An error is returned if the Block
@@ -109,7 +108,7 @@ impl Block {
         key_prefix: u32,
         key: K,
         value_offset: u32,
-        creation_date: u64,
+        creation_date: DateTime<Utc>,
         is_tombstone: bool,
     ) -> Result<(), Error> {
         // Key + Key Prefix + Value Offset +  Creation Date + Tombstone Marker
@@ -151,6 +150,11 @@ impl Block {
         self.size + entry_size > BLOCK_SIZE
     }
 
+    pub fn get_last_entry(&self) -> BlockEntry {
+        return self.entries.last().unwrap().to_owned();
+       
+    }
+
     #[cfg(test)]
     /// Get entry count
     pub fn get_entry_count(&self) -> usize {
@@ -166,7 +170,7 @@ impl Block {
         entry_vec.extend_from_slice(&(entry.key_prefix).to_le_bytes());
         entry_vec.extend_from_slice(&entry.key);
         entry_vec.extend_from_slice(&(entry.value_offset as u32).to_le_bytes());
-        entry_vec.extend_from_slice(&entry.creation_date.to_le_bytes());
+        entry_vec.extend_from_slice(&entry.creation_date.timestamp_millis().to_le_bytes());
         entry_vec.push(entry.is_tombstone as u8);
         if entry_len != entry_vec.len() {
             return Err(SerializationError("Invalid input"));
@@ -213,7 +217,7 @@ mod tests {
         let mut block = Block::new();
         let key: Key = vec![1, 2, 3];
         let value_offset: u32 = 1000;
-        let creation_date: u64 = 16345454545;
+        let creation_date = Utc::now();
         let is_tombstone: bool = false;
 
         let res = block.set_entry(
@@ -238,9 +242,9 @@ mod tests {
     #[test]
     fn test_serialize() {
         let block = Block::new();
-        let key: Key= vec![1, 2, 3];
+        let key: Key = vec![1, 2, 3];
         let value_offset: u32 = 1000;
-        let creation_date: u64 = 16345454545;
+        let creation_date = Utc::now();
         let is_tombstone: bool = false;
 
         let entry = BlockEntry {
@@ -264,7 +268,7 @@ mod tests {
         let mut block = Block::new();
         let key: Key = vec![1, 2, 3];
         let value_offset: u32 = 1000;
-        let creation_date: u64 = 16345454545;
+        let creation_date = Utc::now();
         let is_tombstone: bool = false;
 
         let res = block.set_entry(
@@ -303,7 +307,7 @@ mod tests {
         let mut block = Block::new();
         let key: Key = vec![1, 2, 3];
         let value_offset: u32 = 1000;
-        let creation_date: u64 = 16345454545;
+        let creation_date = Utc::now();
         let is_tombstone: bool = false;
 
         let res = block.set_entry(
@@ -334,7 +338,7 @@ mod tests {
         let mut block = Block::new();
         let key: Key = vec![1, 2, 3];
         let value_offset: u32 = 1000;
-        let creation_date: u64 = 16345454545;
+        let creation_date = Utc::now();
         let is_tombstone: bool = false;
 
         // Fill the block to its maximum capacity

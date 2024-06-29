@@ -1,8 +1,9 @@
+
 use crate::storage::SizeUnit;
 
-pub const GC_CHUNK_SIZE: usize = SizeUnit::Kilobytes.to_bytes(1);
 pub const KB: usize = 1024;
-pub const WRITE_BUFFER_SIZE: usize = SizeUnit::Kilobytes.to_bytes(50);
+
+pub const DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE: usize = 1;
 
 pub const DEFAULT_MAX_WRITE_BUFFER_NUMBER: usize = 2;
 
@@ -20,33 +21,35 @@ pub const META_DIRECTORY_NAME: &str = "meta";
 
 pub const TOMB_STONE_MARKER: &str = "*";
 
-// This is a minimum time that must pass since the last compaction attempt for a specific data file (SSTable).
-// This prevents continuous re-compactions of the same file.
-pub const DEFAULT_TOMBSTONE_COMPACTION_INTERVAL_MILLI: u64 = 10 * 86400000;
+/// TODO: Many lightweight computations here, benchmark against Lazy initialization
+
+/// 1KB
+pub static  GC_CHUNK_SIZE: usize =  SizeUnit::Kilobytes.to_bytes(1);
+
+/// 50KB
+pub const WRITE_BUFFER_SIZE: usize = SizeUnit::Kilobytes.to_bytes(50);
+
+/// 5 days
+pub const DEFAULT_TOMBSTONE_COMPACTION_INTERVAL: std::time::Duration = std::time::Duration::from_millis(5 * 86400000);
 
 // 1 Hour
-pub const DEFAULT_COMPACTION_INTERVAL_MILLI: u64 = 3600000;
+pub const DEFAULT_COMPACTION_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1 * 1000 * 60 * 60);
 
-// 1 Min
-//pub const DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI: u64 = 60000;
-pub const DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL_MILLI: u64 = 1000 * 20;
+/// 1 Min
+pub const DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1000 * 60);
 
-//pub const DEFAULT_ONLINE_GARBAGE_COLLECTION_INTERVAL_MILLI: 10 hours
-pub const DEFAULT_ONLINE_GARBAGE_COLLECTION_INTERVAL_MILLI: u64 = 36000000;
+/// 10 hours
+pub const DEFAULT_ONLINE_GC_INTERVAL: std::time::Duration =
+    std::time::Duration::from_millis(10 * 1000 * 60 * 60);
 
-pub const DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE: usize = 1;
+/// If entry TTL enabled, it is automatically deleted after 1 year
+pub const ENTRY_TTL: std::time::Duration = std::time::Duration::from_millis(365 * 86400000);
 
-// tombstone should only be removed after 120 days to guarantee that obsolete data don't
-// resurrect by prematurelly deleting tombstone
-pub const DEFAULT_TOMBSTONE_TTL: u64 = 120 * 86400000;
+/// Tombstone should only be removed after 120 days to guarantee that obsolete data don't
+/// resurrect by prematurelly deleting tombstone
+pub const DEFAULT_TOMBSTONE_TTL: std::time::Duration = std::time::Duration::from_millis(120 * 86400000);
 
-pub const DEFUALT_ENABLE_TTL: bool = false;
-
-// When data is written with a TTL, it is automatically deleted after the specified time.
-// For now this is set to a year in milliseconds
-//pub const ENTRY_TTL: u64 = 365 * 86400000;
-
-pub const ENTRY_TTL: u64 = 1 * 86400000;
+pub const DEFAULT_ENABLE_TTL: bool = false;
 
 pub const BUCKET_LOW: f64 = 0.5;
 
@@ -71,14 +74,6 @@ pub const TAIL_ENTRY_KEY: &[u8; 4] = b"tail";
 pub const HEAD_ENTRY_VALUE: &[u8; 4] = b"head";
 
 pub const TAIL_ENTRY_VALUE: &[u8; 4] = b"tail";
-// 4 bytes to store length of key "head"
-// 4 bytes to store the actual key "head"
-// 4 bytes to store the head offset
-// 8 bytes to store the head entry creation date
-// 1 byte for tombstone marker
-// pub const HEAD_ENTRY_LENGTH: usize = 21;
-
-// pub const VLOG_TAIL_ENTRY_LENGTH: usize = 21;
 
 pub const SIZE_OF_USIZE: usize = std::mem::size_of::<usize>();
 

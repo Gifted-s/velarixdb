@@ -3,6 +3,7 @@ use std::{
     sync::Arc,
 };
 
+use chrono::Utc;
 use crossbeam_skiplist::SkipMap;
 use tokio::{fs::File, sync::RwLock};
 
@@ -108,7 +109,7 @@ pub async fn generate_ssts(number: u32) -> Vec<Table> {
             dir: sst_contructor[i as usize].dir.to_owned(),
             hotness: 100,
             size: 4096,
-            created_at: 1655580700,
+            created_at: Utc::now(),
             data_file: DataFile {
                 file: DataFileNode {
                     node: FileNode {

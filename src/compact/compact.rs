@@ -1,14 +1,12 @@
-use super::sized::SizedTierRunner;
-use super::TableInsertor;
 /// Compaction involves merging multiple SSTables into a new, optimized one. During this process, VikingsDB considers both data and tombstones.
 ///
-/// Expired Tombstones: If a tombstone's timestamp is older than a specific threshold (defined by tombstone_ttl), it's considered expired.
+/// Expired Tombstones: If a tombstone's timestamp is older than a specific threshold (defined by `tombstone_ttl``), it's considered expired.
 /// These expired tombstones are removed entirely during compaction, freeing up disk space.
 ///
 /// Unexpired Tombstones: If a tombstone is not expired, it means the data it shadows might still be relevant on other tiers.  In
 /// this case, VikingsDB keeps both the tombstone and the data in the new SSTable. This ensures consistency across the tiers and allows for repairs if needed.
 use crate::bucket::InsertableToBucket;
-use crate::types::{BloomFilterHandle, Bool, BucketMapHandle, Duration, FlushReceiver, KeyRangeHandle};
+use crate::types::{BloomFilterHandle, Bool, BucketMapHandle, FlushReceiver, KeyRangeHandle};
 use crate::{err::Error, filter::BloomFilter};
 use futures::lock::Mutex;
 use std::sync::Arc;
@@ -32,19 +30,19 @@ pub struct Config {
     pub use_ttl: Bool,
 
     /// entry expected time to live
-    pub entry_ttl: Duration,
+    pub entry_ttl: std::time::Duration,
 
     /// tombstone expected time to live
-    pub tombstone_ttl: Duration,
+    pub tombstone_ttl: std::time::Duration,
 
     /// interval to listen for flush event
-    pub flush_listener_interval: Duration,
+    pub flush_listener_interval: std::time::Duration,
 
     /// interval to trigger background compaction
-    pub background_interval: Duration,
+    pub background_interval: std::time::Duration,
 
     /// interval to trigger background tombstone compaction
-    pub tombstone_compaction_interval: Duration,
+    pub tombstone_compaction_interval: std::time::Duration,
 
     /// compaction strategy
     pub strategy: Strategy,
@@ -54,11 +52,11 @@ pub struct Config {
 impl Config {
     pub fn new(
         use_ttl: Bool,
-        entry_ttl: Duration,
-        tombstone_ttl: Duration,
-        flush_listener_interval: Duration,
-        background_interval: Duration,
-        tombstone_compaction_interval: Duration,
+        entry_ttl: std::time::Duration,
+        tombstone_ttl: std::time::Duration,
+        flush_listener_interval: std::time::Duration,
+        background_interval: std::time::Duration,
+        tombstone_compaction_interval: std::time::Duration,
         strategy: Strategy,
         filter_false_positive: f64,
     ) -> Self {
@@ -133,7 +131,7 @@ pub struct MergedSSTable {
 impl Clone for MergedSSTable {
     fn clone(&self) -> Self {
         Self {
-            sstable: Box::new(TableInsertor::from(self.sstable.get_entries())),
+            sstable: Box::new(super::TableInsertor::from(self.sstable.get_entries())),
             hotness: self.hotness,
             filter: self.filter.clone(),
         }
@@ -153,11 +151,11 @@ impl MergedSSTable {
 impl Compactor {
     pub fn new(
         use_ttl: Bool,
-        entry_ttl: Duration,
-        tombstone_ttl: Duration,
-        background_interval: Duration,
-        flush_listener_interval: Duration,
-        tombstone_compaction_interval: Duration,
+        entry_ttl: std::time::Duration,
+        tombstone_ttl: std::time::Duration,
+        background_interval: std::time::Duration,
+        flush_listener_interval: std::time::Duration,
+        tombstone_compaction_interval: std::time::Duration,
         strategy: Strategy,
         reason: CompactionReason,
         filter_false_positive: f64,
@@ -278,8 +276,12 @@ impl Compactor {
     ) -> Result<(), Error> {
         match cfg.strategy {
             Strategy::STCS => {
-                let mut runner =
-                    SizedTierRunner::new(Arc::clone(&buckets), Arc::clone(&filter), Arc::clone(&key_range), cfg);
+                let mut runner = super::sized::SizedTierRunner::new(
+                    Arc::clone(&buckets),
+                    Arc::clone(&filter),
+                    Arc::clone(&key_range),
+                    cfg,
+                );
                 return runner.run_compaction().await;
             }
             Strategy::LCS => {
@@ -301,7 +303,7 @@ impl Compactor {
         }
     }
 
-    async fn sleep_compaction(duration: Duration) {
-        sleep(core::time::Duration::from_millis(duration)).await;
+    async fn sleep_compaction(duration: std::time::Duration) {
+        sleep(duration).await;
     }
 }

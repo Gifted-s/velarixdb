@@ -1,5 +1,5 @@
 use crate::cfg::Config;
-use crate::compactors::Compactor;
+use crate::compact::Compactor;
 use crate::consts::{
     BUCKETS_DIRECTORY_NAME, HEAD_ENTRY_KEY, KB, META_DIRECTORY_NAME, TOMB_STONE_MARKER, VALUE_LOG_DIRECTORY_NAME,
 };
@@ -9,17 +9,18 @@ use crate::filter::BloomFilter;
 
 use crate::flush::Flusher;
 use crate::gc::gc::GC;
+use crate::helpers;
 use crate::index::Index;
 use crate::key_range::KeyRange;
 use crate::mem::{Entry, MemTable, K};
 use crate::meta::Meta;
 use crate::range::RangeIterator;
 use crate::types::{
-    self, BloomFilterHandle, Bool, BucketMapHandle, CreationTime, FlushSignal, GCUpdatedEntries, ImmutableMemTable,
-    Key, KeyRangeHandle, Value,
+    self, BloomFilterHandle, Bool, BucketMapHandle, CreatedAt, FlushSignal, GCUpdatedEntries, ImmutableMemTable, Key,
+    KeyRangeHandle, Value,
 };
 use crate::vlog::ValueLog;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
 use std::path::{Path, PathBuf};
 use std::{hash::Hash, sync::Arc};
@@ -132,7 +133,7 @@ impl DataStore<'static, Key> {
         }
         drop(gc_entries_reader);
         let is_tombstone = std::str::from_utf8(val.as_ref()).unwrap() == TOMB_STONE_MARKER;
-        let created_at = Utc::now().timestamp_millis() as u64;
+        let created_at = Utc::now();
         let v_offset = self
             .val_log
             .append(key.as_ref(), val.as_ref(), created_at, is_tombstone)
@@ -147,12 +148,7 @@ impl DataStore<'static, Key> {
 
             // reset head in vLog
             self.val_log.set_head(head_offset as usize);
-            let head_entry = Entry::new(
-                HEAD_ENTRY_KEY.to_vec(),
-                head_offset,
-                Utc::now().timestamp_millis() as u64,
-                false,
-            );
+            let head_entry = Entry::new(HEAD_ENTRY_KEY.to_vec(), head_offset, Utc::now(), false);
             self.active_memtable.insert(&head_entry)?;
             self.active_memtable.read_only = true;
             self.read_only_memtables.write().await.insert(
@@ -193,7 +189,7 @@ impl DataStore<'static, Key> {
         self.put(key.as_ref(), value).await
     }
 
-    pub async fn get<K: AsRef<[u8]>>(&self, key: K) -> Result<(Value, CreationTime), Error> {
+    pub async fn get<K: AsRef<[u8]>>(&self, key: K) -> Result<(Value, CreatedAt), Error> {
         let gc_entries_reader = self.gc_updated_entries.read().await;
         if !gc_entries_reader.is_empty() {
             let res = gc_entries_reader.get(key.as_ref());
@@ -207,7 +203,8 @@ impl DataStore<'static, Key> {
         }
         drop(gc_entries_reader);
         let mut offset = 0;
-        let mut most_recent_insert_time = 0;
+        let mut most_recent_insert_time = helpers::default_datetime();
+        let lowest_insert_date = helpers::default_datetime();
         // Step 1: Check the active memtable
         if let Some(value) = self.active_memtable.get(key.as_ref()) {
             if value.is_tombstone {
@@ -226,7 +223,7 @@ impl DataStore<'static, Key> {
                     }
                 }
             }
-            if self.found_in_table(most_recent_insert_time) {
+            if self.found_in_table(most_recent_insert_time, lowest_insert_date) {
                 if is_deleted {
                     return Err(NotFoundInDB);
                 }
@@ -269,7 +266,7 @@ impl DataStore<'static, Key> {
                         Err(err) => log::error!("{}", err),
                     }
                 }
-                if self.found_in_table(most_recent_insert_time) {
+                if self.found_in_table(most_recent_insert_time, lowest_insert_date) {
                     if is_deleted {
                         return Err(NotFoundInDB);
                     }
@@ -281,15 +278,15 @@ impl DataStore<'static, Key> {
         Err(NotFoundInDB)
     }
 
-    pub fn found_in_table(&self, most_recent_insert_time: u64) -> bool {
-        most_recent_insert_time > 0
+    pub fn found_in_table(&self, most_recent_insert_time: CreatedAt, lowest_insert_date: CreatedAt) -> bool {
+        most_recent_insert_time > lowest_insert_date
     }
 
     pub async fn get_value_from_vlog(
         &self,
         offset: usize,
-        creation_time: CreationTime,
-    ) -> Result<(Value, CreationTime), Error> {
+        creation_time: CreatedAt,
+    ) -> Result<(Value, CreatedAt), Error> {
         let res = self.val_log.get(offset).await?;
         match res {
             Some((value, is_tombstone)) => {

@@ -78,10 +78,13 @@
 //! - **Created At**: A 8-byte field representing the time of insertion in bytes.
 //! - **Is Tombstone**: A 1 byte field representing a boolean of deleted or not deleted entry
 
+use chrono::{DateTime, Utc};
+
 use crate::{
     consts::{SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, VLOG_FILE_NAME},
     err::Error,
-    fs::{FileAsync, FileNode, VLogFileNode, VLogFs}, types::{IsTombStone, Key, Value},
+    fs::{FileAsync, FileNode, VLogFileNode, VLogFs},
+    types::{CreatedAt, IsTombStone, Key, Value},
 };
 use std::path::{Path, PathBuf};
 type TotalBytesRead = usize;
@@ -115,7 +118,7 @@ pub struct ValueLogEntry {
     pub vsize: usize,
     pub key: Vec<u8>,
     pub value: Vec<u8>,
-    pub created_at: u64,
+    pub created_at: DateTime<Utc>,
     pub is_tombstone: bool,
 }
 
@@ -138,7 +141,7 @@ impl ValueLog {
         &mut self,
         key: T,
         value: T,
-        created_at: u64,
+        created_at: CreatedAt,
         is_tombstone: bool,
     ) -> Result<usize, Error> {
         let v_log_entry = ValueLogEntry::new(
@@ -201,7 +204,14 @@ impl ValueLog {
 }
 
 impl ValueLogEntry {
-    pub fn new<T: AsRef<[u8]>>(ksize: usize, vsize: usize, key: T, value: T, created_at: u64, is_tombstone: bool) -> Self {
+    pub fn new<T: AsRef<[u8]>>(
+        ksize: usize,
+        vsize: usize,
+        key: T,
+        value: T,
+        created_at: CreatedAt,
+        is_tombstone: bool,
+    ) -> Self {
         Self {
             ksize,
             vsize,
@@ -221,7 +231,7 @@ impl ValueLogEntry {
 
         serialized_data.extend_from_slice(&(self.value.len() as u32).to_le_bytes());
 
-        serialized_data.extend_from_slice(&self.created_at.to_le_bytes());
+        serialized_data.extend_from_slice(&self.created_at.timestamp_millis().to_le_bytes());
 
         serialized_data.push(self.is_tombstone as u8);
 

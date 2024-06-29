@@ -5,7 +5,7 @@ use super::{storage::DirPath, DataStore, SizeUnit};
 use crate::bucket::bucket::InsertableToBucket;
 use crate::bucket::{Bucket, BucketID, BucketMap};
 use crate::cfg::Config;
-use crate::compactors::{self, Compactor};
+use crate::compact::{self, Compactor};
 use crate::consts::{
     DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE, HEAD_ENTRY_KEY, HEAD_ENTRY_VALUE, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8,
     TAIL_ENTRY_KEY, TAIL_ENTRY_VALUE,
@@ -15,6 +15,7 @@ use crate::err::Error::*;
 use crate::filter::BloomFilter;
 use crate::flush::Flusher;
 use crate::gc::gc::GC;
+use crate::helpers;
 use crate::key_range::KeyRange;
 use crate::mem::{Entry, MemTable, K};
 use crate::meta::Meta;
@@ -25,12 +26,12 @@ use async_broadcast::broadcast;
 use chrono::Utc;
 use crossbeam_skiplist::SkipMap;
 use indexmap::IndexMap;
+use std::hash::Hash;
 use std::sync::Arc;
 use tokio::fs::read_dir;
 use tokio::sync::RwLock;
-use std::hash::Hash;
 
-impl DataStore<'static, Key>{
+impl DataStore<'static, Key> {
     pub async fn recover<P: AsRef<Path> + Send + Sync + Clone>(
         dir: DirPath,
         buckets_path: P,
@@ -42,9 +43,9 @@ impl DataStore<'static, Key>{
     ) -> Result<DataStore<'static, Key>, Error> {
         let mut recovered_buckets: IndexMap<BucketID, Bucket> = IndexMap::new();
         let mut filters: Vec<BloomFilter> = Vec::new();
-        let mut most_recent_head_timestamp = 0;
+        let mut most_recent_head_timestamp = helpers::default_datetime();
         let mut most_recent_head_offset = 0;
-        let mut most_recent_tail_timestamp = 0;
+        let mut most_recent_tail_timestamp = helpers::default_datetime();
         let mut most_recent_tail_offset = 0;
 
         // Get bucket diretories streams
@@ -199,7 +200,7 @@ impl DataStore<'static, Key>{
                         config.compactor_flush_listener_interval,
                         config.tombstone_compaction_interval,
                         config.compaction_strategy,
-                        compactors::CompactionReason::MaxSize,
+                        compact::CompactionReason::MaxSize,
                         config.false_positive_rate,
                     ),
                     config: config.clone(),
@@ -275,7 +276,7 @@ impl DataStore<'static, Key>{
         let mut active_memtable =
             MemTable::with_specified_capacity_and_rate(size_unit, config.write_buffer_size, config.false_positive_rate);
         // if ValueLog is empty then we want to insert both tail and head
-        let created_at = Utc::now().timestamp_millis() as u64;
+        let created_at = Utc::now();
         let tail_offset = vlog
             .append(&TAIL_ENTRY_KEY.to_vec(), &TAIL_ENTRY_VALUE.to_vec(), created_at, false)
             .await?;
@@ -321,7 +322,7 @@ impl DataStore<'static, Key>{
                 config.compactor_flush_listener_interval,
                 config.tombstone_compaction_interval,
                 config.compaction_strategy,
-                compactors::CompactionReason::MaxSize,
+                compact::CompactionReason::MaxSize,
                 config.false_positive_rate,
             ),
             config: config.clone(),

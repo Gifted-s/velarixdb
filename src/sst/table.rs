@@ -1,4 +1,43 @@
-use chrono::{DateTime, Utc};
+//! # SSTable Data Block
+//!
+//! The `Data Block` manages multiple `Block` instancesand each block stores entries
+//! A block size is 4KB on disk but as the project evolve, we will introduce 
+//! Snappy Compression, Checksum and also have block cache for fast recovery
+//!
+//! The data block structure 
+//!
+//! ```text
+//! +----------------------------------+
+//! |            Entry 1               |
+//! |            Entry 2               |  // Block 1 (4KB- Uncompressed)
+//! |            Entry 3               |
+//! +----------------------------------+
+//! |            Entry 4               |   
+//! |            Entry 5               |  // Block 2 (4KB- Uncompressed)
+//! |            Entry 6               |
+//! +----------------------------------+
+//! |            Entry 7               |
+//! |            Enrty 8               |  // Block 3 (4KB- Uncompressed)
+//! |            Entry 9               |
+//! +----------------------------------+
+//! |            Entry 10              |
+//! |            Entry 11              |  // Block 4 (4KB- Uncompressed)
+//! |            Entry 12              |
+//! +----------------------------------+
+//! |                                  |
+//! |             ...                  |  // ...
+//! |                                  |
+//! +----------------------------------+
+//! ```
+//!
+//! In the diagram:
+//! - The `Block` stores entries until it is 4KB in size and then writes to data file
+//! - TODO: In the future we will introduce Snappy Compression to reduce the size on the disk and also 
+//! introduce checksum to ensure the data has not been corrupted
+
+
+
+use chrono::Utc;
 use crossbeam_skiplist::SkipMap;
 use std::{
     cmp::Ordering,
@@ -14,9 +53,10 @@ use crate::{
     err::Error,
     filter::BloomFilter,
     fs::{DataFileNode, DataFs, FileAsync, FileNode, IndexFileNode, IndexFs},
+    helpers,
     index::{Index, IndexFile, RangeOffset},
     mem::{Entry, SkipMapValue},
-    types::{CreationTime, IsTombStone, Key, SkipMapEntries, ValOffset},
+    types::{CreatedAt, IsTombStone, Key, SkipMapEntries, ValOffset},
 };
 
 use Error::*;
@@ -47,7 +87,7 @@ pub struct Table {
     pub(crate) dir: PathBuf,
     pub(crate) hotness: u64,
     pub(crate) size: usize,
-    pub(crate) created_at: CreationTime,
+    pub(crate) created_at: CreatedAt,
     pub(crate) data_file: DataFile<DataFileNode>,
     pub(crate) index_file: IndexFile<IndexFileNode>,
     pub(crate) entries: SkipMapEntries<Key>,
@@ -79,7 +119,7 @@ impl InsertableToBucket for Table {
 
 impl Table {
     pub async fn new<P: AsRef<Path> + Send + Sync>(dir: P) -> Result<Table, Error> {
-        let (data_file_path, index_file_path, creation_time) = Table::generate_file_path(dir.as_ref()).await?;
+        let (data_file_path, index_file_path, created_at) = Table::generate_file_path(dir.as_ref()).await?;
         let data_file = DataFileNode::new(data_file_path.to_owned(), crate::fs::FileType::Data)
             .await
             .unwrap();
@@ -92,7 +132,7 @@ impl Table {
             hotness: 0,
             index_file: IndexFile::new(index_file_path, index_file),
             data_file: DataFile::new(data_file_path, data_file),
-            created_at: creation_time.timestamp_millis() as u64,
+            created_at,
             entries: Arc::new(SkipMap::new()),
             size: 0,
         })
@@ -110,7 +150,7 @@ impl Table {
 
     pub async fn generate_file_path<P: AsRef<Path> + Send + Sync>(
         dir: P,
-    ) -> Result<(PathBuf, PathBuf, DateTime<Utc>), Error> {
+    ) -> Result<(PathBuf, PathBuf, CreatedAt), Error> {
         let created_at = Utc::now();
         let _ = FileNode::create_dir_all(dir.as_ref()).await?;
         let data_file_name = format!("data_{}_.db", created_at.timestamp_millis());
@@ -125,8 +165,11 @@ impl Table {
         &self,
         start_offset: u32,
         searched_key: K,
-    ) -> Result<Option<(ValOffset, CreationTime, IsTombStone)>, Error> {
-        self.data_file.file.find_entry(start_offset, searched_key.as_ref()).await
+    ) -> Result<Option<(ValOffset, CreatedAt, IsTombStone)>, Error> {
+        self.data_file
+            .file
+            .find_entry(start_offset, searched_key.as_ref())
+            .await
     }
 
     pub(crate) async fn load_entries_from_file(&self) -> Result<Table, Error> {
@@ -150,7 +193,7 @@ impl Table {
         let mut table = Table {
             dir: dir.as_ref().to_path_buf(),
             hotness: 1,
-            created_at: Utc::now().timestamp_millis() as u64,
+            created_at: Utc::now(),
             data_file: DataFile {
                 file: DataFileNode::new(data_file_path.to_owned(), crate::fs::FileType::Data)
                     .await
@@ -169,8 +212,8 @@ impl Table {
         table.size = table.data_file.file.node.size().await;
         let modified_time = table.data_file.file.node.metadata().await.unwrap().modified().unwrap();
         let epoch = SystemTime::UNIX_EPOCH;
-        let elapsed_nanos = modified_time.duration_since(epoch).unwrap().as_nanos();
-        table.created_at = (elapsed_nanos / 1_000_000) as u64;
+        let elapsed_nanos = modified_time.duration_since(epoch).unwrap().as_nanos() as u64;
+        table.created_at = helpers::milliseconds_to_datetime(elapsed_nanos / 1_000_000);
         return table;
     }
 
@@ -184,7 +227,7 @@ impl Table {
         }
         for e in self.entries.iter() {
             let entry = Entry::new(
-                e.key().clone(),
+                e.key(),
                 e.value().val_offset,
                 e.value().created_at,
                 e.value().is_tombstone,

@@ -1,3 +1,55 @@
+//! # SSTable Index
+//!
+//! The `Index` is used for fast scan on the sstable.
+//!
+//! The Index structure
+//!
+//! ```text
+//! +----------------------------------+
+//! |             Index                |
+//! +----------------------------------+
+//! |  - entries: Vec<IndexEntry>      |   // entries within the index
+//! |                                  |
+//! |  - file: IndexFile               |   // Index File
+//! +----------------------------------+
+//! |         Index Entries            |
+//! |   +------------------------+     |
+//! |   |   Entry 1              |     |
+//! |   | +-------------------+  |     |
+//! |   | |   Key Prefix      |  |     |
+//! |   | | (4 bytes, little- |  |     |
+//! |   | |   endian format)  |  |     |
+//! |   | +-------------------+  |     |
+//! |   | |       Key         |  |     |
+//! |   | | (variable length) |  |     |
+//! |   | +-------------------+  |     |
+//! |   | |   Block Handle    |  |     |     
+//! |   | | (4 bytes,little-  |  |     |
+//! |   | |   endian format)  |  |     |
+//! |   | +-------------------+  |     |
+//! |   | |  TODO[Compressed  |  |     |
+//! |   | |    Block Size]    |  |     |
+//! |   | | (4 bytes, little- |  |     |
+//! |   | |  endian format)   |  |     |
+//! |   | +-------------------+  |     |
+//! |   +------------------------+     |
+//! |   |   Entry 2              |     |
+//! |   |       ...              |     |
+//! |   +------------------------+     |
+//! +----------------------------------+
+//! ```
+//!
+//! In the diagram:
+//! - The `Index` struct represents the index for the sstable.
+//! - The `entries` field of the `Index` is a vector (`Vec<IndexEntry>`) that stores the index entries
+//!
+//! Each entry within the block consists of four parts:
+//! 1. Length Prefix: A 4-byte length prefix in little-endian format, indicating the length of the last key in the block.
+//! 2. Key: Variable-length key bytes, representing the last key in the block.
+//! 3. Block Handle: A 4-byte length prefix in little-endian format, indicating the start of the block in the data file
+//! TODO: Block compresion size:  A 4-byte length prefix in little-endian format, indicating the compressed size of the block
+//!
+//! 
 use crate::consts::SIZE_OF_U32;
 use crate::err::Error;
 use crate::fs::{FileAsync, IndexFileNode, IndexFs};
@@ -32,6 +84,7 @@ pub struct IndexEntry {
     pub key_prefix: u32,
     pub key: Key,
     pub block_handle: u32,
+    // TODO: pub: compressed_size
 }
 #[derive(Debug, Clone)]
 pub struct Index {

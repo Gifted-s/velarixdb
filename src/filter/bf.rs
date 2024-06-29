@@ -36,20 +36,20 @@ impl BloomFilter {
             bit_vec: Arc::new(Mutex::new(bv)),
         }
     }
-    pub(crate) fn set<K: AsRef<[u8]> + Hash>(&mut self, key: K) {
+    pub(crate) fn set<K: Hash + Copy>(&mut self, key: K) {
         let mut bits = self.bit_vec.lock().expect("Failed to lock file");
         for i in 0..self.no_of_hash_func {
-            let hash = self.calculate_hash(key.as_ref(), i);
+            let hash = self.calculate_hash(key, i);
             let index = (hash % bits.len() as u64) as usize;
             bits.set(index, true)
         }
         self.no_of_elements.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(crate) fn contains<K: AsRef<[u8]> + Hash>(&self, key: K) -> bool {
+    pub(crate) fn contains<K: Hash + Copy>(&self, key: K) -> bool {
         let bits = self.bit_vec.lock().expect("Failed to lock file");
         for i in 0..self.no_of_hash_func {
-            let hash = self.calculate_hash(key.as_ref(), i);
+            let hash = self.calculate_hash(key, i);
             let index = (hash % bits.len() as u64) as usize;
             if !bits[index] {
                 return false;
@@ -119,9 +119,9 @@ impl BloomFilter {
         self.sst.as_ref().unwrap()
     }
 
-    fn calculate_hash<K: AsRef<[u8]>>(&self, key: K, seed: usize) -> u64 {
+    fn calculate_hash<K: Hash>(&self, key: K, seed: usize) -> u64 {
         let mut hasher = DefaultHasher::new();
-        key.as_ref().hash(&mut hasher);
+        key.hash(&mut hasher);
         hasher.write_u64(seed as u64);
         hasher.finish()
     }
@@ -181,8 +181,7 @@ mod tests {
         let mut bloom_filter = BloomFilter::new(false_positive_rate, no_of_elements);
 
         for i in 0..10 {
-            let key = vec![i];
-            bloom_filter.set(key)
+            bloom_filter.set(i)
         }
 
         assert_eq!(bloom_filter.num_elements(), 10)
@@ -201,8 +200,7 @@ mod tests {
 
         // Insert elements into the Bloom Filter.
         for i in 0..num_elements {
-            let key = vec![i as u8];
-            bloom.set(key);
+            bloom.set(i);
         }
 
         let mut false_positives = 0;
@@ -211,8 +209,7 @@ mod tests {
         // Test all non-inserted elements for containment.
         // Count the number of false positives.
         for i in num_elements..num_elements + num_tested_elements {
-            let key = vec![i as u8];
-            if bloom.contains(key) {
+            if bloom.contains(i) {
                 false_positives += 1;
             }
         }
@@ -245,8 +242,7 @@ mod tests {
 
         // Insert elements into the Bloom Filter.
         for i in 0..num_elements {
-            let key = vec![i as u8];
-            bloom.set(key);
+            bloom.set(i);
         }
 
         let mut false_positives = 0;
@@ -255,8 +251,7 @@ mod tests {
         // Test all non-inserted elements for containment.
         // Count the number of false positives.
         for i in num_elements..num_elements + num_tested_elements {
-            let key = vec![i as u8];
-            if bloom.contains(key) {
+            if bloom.contains(i) {
                 false_positives += 1;
             }
         }
@@ -289,8 +284,7 @@ mod tests {
 
         // Insert elements into the Bloom Filter.
         for i in 0..num_elements {
-            let key = vec![i as u8];
-            bloom.set(key);
+            bloom.set(i);
         }
 
         let mut false_positives = 0;
@@ -299,8 +293,7 @@ mod tests {
         // Test all non-inserted elements for containment.
         // Count the number of false positives.
         for i in num_elements..num_elements + num_tested_elements {
-            let key = vec![i as u8];
-            if bloom.contains(key) {
+            if bloom.contains(i) {
                 false_positives += 1;
             }
         }

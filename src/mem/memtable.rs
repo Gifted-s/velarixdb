@@ -10,12 +10,12 @@ use crate::consts::{DEFAULT_FALSE_POSITIVE_RATE, SIZE_OF_U32, SIZE_OF_U64, SIZE_
 use crate::err::Error;
 use crate::filter::BloomFilter;
 use crate::storage::SizeUnit;
-use crate::types::{CreationTime, IsTombStone, Key, SkipMapEntries, ValOffset, Value};
+use crate::types::{CreatedAt, IsTombStone, Key, SkipMapEntries, ValOffset, Value};
 use chrono::{DateTime, Utc};
 use crossbeam_skiplist::SkipMap;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
-use std::cmp::{self, Ordering};
+use std::cmp::Ordering;
 use std::fmt::Debug;
 use Error::*;
 
@@ -26,21 +26,21 @@ pub trait K: AsRef<[u8]> + Hash + Ord + Send + Sync + Clone + Debug {}
 impl<T> K for T where T: AsRef<[u8]> + Hash + Ord + Send + Sync + Clone + Debug {}
 
 #[derive(PartialOrd, PartialEq, Copy, Clone, Debug)]
-pub struct Entry<K, V> {
-    pub key: K,
+pub struct Entry<Key: K, V: Ord> {
+    pub key: Key,
     pub val_offset: V,
-    pub created_at: u64,
+    pub created_at: CreatedAt,
     pub is_tombstone: bool,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct SkipMapValue<V: Ord> {
     pub val_offset: V,
-    pub created_at: CreationTime,
+    pub created_at: CreatedAt,
     pub is_tombstone: IsTombStone,
 }
 
 impl<V: Ord> SkipMapValue<V> {
-    pub(crate) fn new(val_offset: V, created_at: CreationTime, is_tombstone: IsTombStone) -> Self {
+    pub(crate) fn new(val_offset: V, created_at: CreatedAt, is_tombstone: IsTombStone) -> Self {
         SkipMapValue {
             val_offset,
             created_at,
@@ -57,7 +57,7 @@ pub struct MemTable<Key: K> {
     pub size: usize,
     pub size_unit: SizeUnit,
     pub capacity: usize,
-    pub created_at: DateTime<Utc>,
+    pub created_at: CreatedAt,
     pub read_only: bool,
     pub most_recent_entry: Entry<Key, ValOffset>,
 }
@@ -104,7 +104,7 @@ impl Entry<Key, ValOffset> {
     pub(crate) fn new<EntryKey: K>(
         key: EntryKey,
         val_offset: ValOffset,
-        created_at: CreationTime,
+        created_at: CreatedAt,
         is_tombstone: IsTombStone,
     ) -> Self {
         Entry {
@@ -115,10 +115,11 @@ impl Entry<Key, ValOffset> {
         }
     }
 
-    pub(crate) fn has_expired(&self, ttl: u64) -> bool {
+    pub(crate) fn has_expired(&self, ttl: std::time::Duration) -> bool {
         let current_time = Utc::now();
         let current_timestamp = current_time.timestamp_millis() as u64;
-        current_timestamp > (self.created_at + ttl)
+        // TODO: proper conversion
+        current_timestamp > (self.created_at.timestamp_millis() as u64 + ttl.as_millis() as u64)
     }
 }
 
@@ -139,7 +140,7 @@ impl MemTable<Key> {
         let max_no_of_entries = capacity_to_bytes / avg_entry_size as usize;
         let bf = BloomFilter::new(false_positive_rate, max_no_of_entries);
         let entries = SkipMap::new();
-        let now: DateTime<Utc> = Utc::now();
+        let now = Utc::now();
         Self {
             entries: Arc::new(entries),
             bloom_filter: bf,
@@ -149,7 +150,7 @@ impl MemTable<Key> {
             created_at: now,
             false_positive_rate,
             read_only: false,
-            most_recent_entry: Entry::new(vec![], 0, Utc::now().timestamp_millis() as u64, false),
+            most_recent_entry: Entry::new(vec![], 0, Utc::now(), false),
         }
     }
 
@@ -210,11 +211,10 @@ impl MemTable<Key> {
         if !self.bloom_filter.contains(&entry.key) {
             return Err(KeyNotFoundInMemTable);
         }
-        let created_at = Utc::now().timestamp_millis() as u64;
         // Insert thumb stone to indicate deletion
         self.entries.insert(
             entry.key.to_vec(),
-            SkipMapValue::new(entry.val_offset, created_at, entry.is_tombstone),
+            SkipMapValue::new(entry.val_offset, Utc::now(), entry.is_tombstone),
         );
         Ok(())
     }
@@ -224,7 +224,7 @@ impl MemTable<Key> {
     }
 
     pub fn is_entry_within_range<CustomKey: AsRef<[u8]>>(
-        e: &crossbeam_skiplist::map::Entry<Key, (ValOffset, CreationTime, IsTombStone)>,
+        e: &crossbeam_skiplist::map::Entry<Key, (ValOffset, CreatedAt, IsTombStone)>,
         start: CustomKey,
         end: CustomKey,
     ) -> bool {
@@ -313,7 +313,7 @@ mod tests {
         let key = vec![1, 2, 3, 4];
         let val_offset = 400;
         let is_tombstone = false;
-        let created_at = Utc::now().timestamp_millis() as u64;
+        let created_at = Utc::now();
         let entry = Entry::new(key, val_offset, created_at, is_tombstone);
         let expected_len = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
 
@@ -336,7 +336,7 @@ mod tests {
         let key = vec![1, 2, 3, 4];
         let val_offset = 400;
         let is_tombstone = false;
-        let created_at = Utc::now().timestamp_millis() as u64;
+        let created_at = Utc::now();
         let entry = Entry::new(key.to_owned(), val_offset, created_at, is_tombstone);
         let expected_len = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
 
@@ -368,7 +368,7 @@ mod tests {
             vec![5, 2, 3, 4],
         ];
         let is_tombstone = false;
-        let created_at = Utc::now().timestamp_millis() as u64;
+        let created_at = Utc::now();
         for i in 0..5 {
             let keys_clone = keys.clone();
             let m = mem_table.clone();
@@ -436,7 +436,7 @@ mod tests {
         let key = vec![1, 2, 3, 4];
         let val_offset = 400;
         let is_tombstone = false;
-        let created_at = Utc::now().timestamp_millis() as u64;
+        let created_at = Utc::now();
         let mut entry = Entry::new(key, val_offset, created_at, is_tombstone);
 
         let _ = mem_table.insert(&entry);
@@ -475,7 +475,7 @@ mod tests {
         let key = vec![1, 2, 3, 4];
         let val_offset = 400;
         let is_tombstone = false;
-        let created_at = Utc::now().timestamp_millis() as u64;
+        let created_at = Utc::now();
         let mut entry = Entry::new(key, val_offset, created_at, is_tombstone);
 
         let _ = mem_table.insert(&entry);
@@ -516,7 +516,7 @@ mod tests {
         ];
         let map = SkipMap::new();
         let is_tombstone = false;
-        let created_at = Utc::now().timestamp_millis() as u64;
+        let created_at = Utc::now();
         let val_offset = 500;
         map.insert(keys[0].to_owned(), (val_offset, created_at, is_tombstone));
         map.insert(keys[1].to_owned(), (val_offset, created_at, is_tombstone));
@@ -551,7 +551,7 @@ mod tests {
         let buffer_size = 51200;
         let false_pos_rate = 1e-300;
         let is_tombstone = false;
-        let created_at = Utc::now().timestamp_millis() as u64;
+        let created_at = Utc::now();
         let mut mem_table = MemTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
         for i in 0..5 {
             let entry = Entry::new(keys[i].to_owned(), i, created_at, is_tombstone);
@@ -575,7 +575,7 @@ mod tests {
         let buffer_size = 51200;
         let false_pos_rate = 1e-300;
         let is_tombstone = false;
-        let created_at = Utc::now().timestamp_millis() as u64;
+        let created_at = Utc::now();
         let mut mem_table = MemTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
         for i in 0..5 {
             let entry = Entry::new(keys[i].to_owned(), i, created_at, is_tombstone);

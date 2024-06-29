@@ -4,6 +4,7 @@ use crate::{
     key_range::KeyRange,
     mem::{MemTable, SkipMapValue},
 };
+use chrono::{DateTime, Utc};
 use crossbeam_skiplist::SkipMap;
 use indexmap::IndexMap;
 use std::sync::Arc;
@@ -20,7 +21,7 @@ pub type Value = Vec<u8>;
 pub type ValOffset = usize;
 
 /// Represents the creation time of an entry
-pub type CreationTime = u64;
+pub type CreatedAt = DateTime<Utc>;
 
 /// Represents a tombstone marker (true if entry is deleted)
 pub type IsTombStone = bool;
@@ -48,9 +49,6 @@ pub type KeyRangeHandle = Arc<RwLock<KeyRange>>;
 
 /// Represents an immutable MemTable
 pub type ImmutableMemTable<K> = Arc<RwLock<IndexMap<K, Arc<RwLock<MemTable<K>>>>>>;
-
-/// Represents a duration in milliseconds
-pub type Duration = u64;
 
 /// Alias for a boolean value
 pub type Bool = bool;

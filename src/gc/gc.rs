@@ -8,14 +8,11 @@ use crate::filter::BloomFilter;
 use crate::fs::{FileAsync, FileNode};
 use crate::index::Index;
 use crate::mem::{Entry, MemTable, SkipMapValue, K};
-use crate::types::{
-    BloomFilterHandle, CreationTime, ImmutableMemTable, Key, KeyRangeHandle, ValOffset,
-    Value,
-};
+use crate::types::{BloomFilterHandle, CreatedAt, ImmutableMemTable, Key, KeyRangeHandle, ValOffset, Value};
 use crate::vlog::{ValueLog, ValueLogEntry};
-use crate::{err, types};
+use crate::{err, helpers};
 use crate::{err::Error, storage::*};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use crossbeam_skiplist::SkipMap;
 use err::Error::*;
 use futures::future::join_all;
@@ -23,7 +20,7 @@ use nix::libc::{c_int, off_t};
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+
 use tokio::sync::RwLock;
 use tokio::time::sleep;
 
@@ -34,11 +31,23 @@ extern "C" {
 const FALLOC_FL_PUNCH_HOLE: c_int = 0x2;
 const FALLOC_FL_KEEP_SIZE: c_int = 0x1;
 
+/// thread-safe memtable type for garbage collector
 type GCTable = Arc<RwLock<MemTable<Key>>>;
+
+/// thread-safe log for garbage collector
 type GCLog = Arc<RwLock<ValueLog>>;
+
+/// thread-safe valid entries to re-insert
 type ValidEntries = Arc<RwLock<Vec<(Key, Value, ValOffset)>>>;
+
+/// thread-safe invalid entries to remove
 type InvalidEntries = Arc<RwLock<Vec<ValueLogEntry>>>;
+
+/// thread-safe valid etries synced to disk
 type SyncedEntries = Arc<RwLock<Vec<(Key, Value, ValOffset)>>>;
+
+/// thread-safe entries map keeping track of valid entries not
+/// yet inserted to main store active memtable
 type GCUpdatedEntries<K> = Arc<RwLock<SkipMap<K, SkipMapValue<ValOffset>>>>;
 
 #[derive(Debug)]
@@ -49,12 +58,12 @@ pub struct GC {
 }
 #[derive(Clone, Debug)]
 pub struct Config {
-    pub online_gc_interval: u64,
+    pub online_gc_interval: std::time::Duration,
     pub gc_chunk_size: usize,
 }
 
 impl GC {
-    pub fn new(online_gc_interval: u64, gc_chunk_size: usize, table: GCTable, vlog: GCLog) -> Self {
+    pub fn new(online_gc_interval: std::time::Duration, gc_chunk_size: usize, table: GCTable, vlog: GCLog) -> Self {
         Self {
             table,
             vlog,
@@ -131,6 +140,7 @@ impl GC {
                     let filters_ref = Arc::clone(&filters);
                     let key_range_ref = Arc::clone(&key_range);
                     let read_only_memtables_ref = Arc::clone(&read_only_memtables);
+
                     tokio::spawn(async move {
                         let most_recent_value = GC::get(
                             std::str::from_utf8(&entry.key).unwrap(),
@@ -226,7 +236,7 @@ impl GC {
             .append(
                 &TAIL_ENTRY_KEY.to_vec(),
                 &new_tail_offset.to_le_bytes().to_vec(),
-                Utc::now().timestamp_millis() as u64,
+                Utc::now(),
                 false,
             )
             .await
@@ -241,8 +251,8 @@ impl GC {
         gc_updated_entries.write().await.clear();
         for (key, value, existing_v_offset) in valid_entries.to_owned().read().await.iter() {
             if let Err(err) = GC::put(
-                std::str::from_utf8(&key).unwrap(),
-                std::str::from_utf8(&value).unwrap(),
+                key,
+                value,
                 *existing_v_offset,
                 Arc::clone(&table),
                 gc_updated_entries.clone(),
@@ -264,11 +274,7 @@ impl GC {
         vlog: GCLog,
     ) -> Result<(), Error> {
         for (key, value) in valid_entries.to_owned().read().await.iter() {
-            let append_res = vlog
-                .write()
-                .await
-                .append(&key, &value, Utc::now().timestamp_millis() as u64, false)
-                .await;
+            let append_res = vlog.write().await.append(&key, &value, Utc::now(), false).await;
 
             match append_res {
                 Ok(v_offset) => {
@@ -305,7 +311,11 @@ impl GC {
         }
     }
 
-    pub async fn punch_holes<P: AsRef<Path>>(file_path: P, offset: off_t, length: off_t) -> std::result::Result<(), Error> {
+    pub async fn punch_holes<P: AsRef<Path>>(
+        file_path: P,
+        offset: off_t,
+        length: off_t,
+    ) -> std::result::Result<(), Error> {
         let file = FileNode::open(file_path.as_ref()).await?;
         let fd = file.as_raw_fd();
         unsafe {
@@ -329,14 +339,14 @@ impl GC {
         gc_updated_entries: GCUpdatedEntries<Key>,
     ) -> Result<bool, Error> {
         let is_tombstone = value.as_ref().len() == 0;
-        let created_at = Utc::now().timestamp_millis() as u64;
+        let created_at = Utc::now();
         let v_offset = val_offset;
         let entry = Entry::new(key.as_ref(), v_offset, created_at, is_tombstone);
         memtable.write().await.insert(&entry)?;
-        gc_updated_entries
-            .write()
-            .await
-            .insert(key.as_ref().to_vec(), SkipMapValue::new(v_offset, created_at, is_tombstone));
+        gc_updated_entries.write().await.insert(
+            key.as_ref().to_vec(),
+            SkipMapValue::new(v_offset, created_at, is_tombstone),
+        );
         Ok(true)
     }
 
@@ -347,10 +357,11 @@ impl GC {
         key_range: KeyRangeHandle,
         vlog: Arc<RwLock<ValueLog>>,
         read_only_memtables: ImmutableMemTable<Key>,
-    ) -> Result<(Value, CreationTime), Error> {
+    ) -> Result<(Value, CreatedAt), Error> {
         let key = key.as_ref().to_vec();
         let mut offset = 0;
-        let mut most_recent_insert_time = 0;
+        let lowest_possible_date = helpers::default_datetime();
+        let mut most_recent_insert_time = helpers::default_datetime();
         // Step 1: Check the active memtable
         if let Some(value) = memtable.read().await.get(&key) {
             if value.is_tombstone {
@@ -369,7 +380,7 @@ impl GC {
                     }
                 }
             }
-            if most_recent_insert_time > 0 {
+            if most_recent_insert_time > lowest_possible_date {
                 if is_deleted {
                     return Err(NotFoundInDB);
                 }
@@ -412,7 +423,7 @@ impl GC {
                         Err(err) => log::error!("{}", err),
                     }
                 }
-                if most_recent_insert_time > 0 {
+                if most_recent_insert_time > lowest_possible_date {
                     if is_deleted {
                         return Err(NotFoundInDB);
                     }
@@ -427,15 +438,15 @@ impl GC {
     pub async fn get_value_from_vlog(
         val_log: Arc<RwLock<ValueLog>>,
         offset: usize,
-        creation_time: CreationTime,
-    ) -> Result<(Value, CreationTime), Error> {
+        creation_at: CreatedAt,
+    ) -> Result<(Value, CreatedAt), Error> {
         let res = val_log.read().await.get(offset).await?;
         match res {
             Some((value, is_tombstone)) => {
                 if is_tombstone {
                     return Err(KeyFoundAsTombstoneInValueLogError);
                 }
-                return Ok((value, creation_time));
+                return Ok((value, creation_at));
             }
             None => return Err(KeyNotFoundInValueLogError),
         };
@@ -482,6 +493,6 @@ impl GC {
 
 impl DataStore<'static, Key> {}
 
-async fn sleep_gc_task(duration: u64) {
-    sleep(Duration::from_millis(duration)).await;
+async fn sleep_gc_task(duration: std::time::Duration) {
+    sleep(duration).await;
 }

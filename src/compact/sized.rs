@@ -1,5 +1,6 @@
 use std::{cmp, collections::HashMap, hash::Hash, ops::Deref, path::PathBuf, sync::Arc};
 
+use chrono::{DateTime, Utc};
 use crossbeam_skiplist::SkipMap;
 use uuid::Uuid;
 
@@ -8,12 +9,12 @@ use super::{
     MergedSSTable, TableInsertor,
 };
 use crate::{
-    bucket::{Bucket, BucketsToCompact, InsertableToBucket, SSTablesToRemove},
+    bucket::{Bucket, ImbalancedBuckets, InsertableToBucket, SSTablesToRemove},
     err::Error,
     filter::BloomFilter,
     mem::Entry,
     sst::Table,
-    types::{BloomFilterHandle, Bool, BucketMapHandle, Key, KeyRangeHandle, ValOffset},
+    types::{BloomFilterHandle, Bool, BucketMapHandle, CreatedAt, Key, KeyRangeHandle, ValOffset},
 };
 use crate::{err::Error::*, mem::SkipMapValue};
 
@@ -23,7 +24,7 @@ pub struct SizedTierRunner<'a> {
     filters: BloomFilterHandle,
     key_range: KeyRangeHandle,
     config: &'a Config,
-    tombstones: HashMap<Key, u64>,
+    tombstones: HashMap<Key, CreatedAt>,
 }
 
 impl<'a> SizedTierRunner<'a> {
@@ -41,7 +42,7 @@ impl<'a> SizedTierRunner<'a> {
             config,
         }
     }
-    pub async fn fetch_imbalanced_buckets(bucket_map: BucketMapHandle) -> BucketsToCompact {
+    pub async fn fetch_imbalanced_buckets(bucket_map: BucketMapHandle) -> ImbalancedBuckets {
         bucket_map.read().await.extract_imbalanced_buckets().await
     }
     pub async fn run_compaction(&mut self) -> Result<(), Error> {

@@ -1,10 +1,11 @@
 use crate::{
     consts::{EOF, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8},
     err::Error::{self, *},
+    helpers,
     index::RangeOffset,
     load_buffer,
     mem::{Entry, SkipMapValue},
-    types::{CreationTime, IsTombStone, Key, NoBytesRead, SkipMapEntries, ValOffset, Value},
+    types::{CreatedAt, IsTombStone, Key, NoBytesRead, SkipMapEntries, ValOffset, Value},
     vlog::ValueLogEntry,
 };
 use async_trait::async_trait;
@@ -75,7 +76,7 @@ pub trait DataFs: Send + Sync + Debug + Clone {
         &self,
         offset: u32,
         searched_key: &[u8],
-    ) -> Result<Option<(ValOffset, CreationTime, IsTombStone)>, Error>;
+    ) -> Result<Option<(ValOffset, CreatedAt, IsTombStone)>, Error>;
 
     async fn load_entries_within_range(&self, range_offset: RangeOffset) -> Result<Vec<Entry<Key, usize>>, Error>;
 }
@@ -272,7 +273,14 @@ impl DataFs for DataFileNode {
             let created_at = u64::from_le_bytes(created_at_bytes);
             let value_offset = u32::from_le_bytes(val_offset_bytes);
             let is_tombstone = is_tombstone_byte[0] == 1;
-            entries.insert(key, SkipMapValue::new(value_offset as usize, created_at, is_tombstone));
+            entries.insert(
+                key,
+                SkipMapValue::new(
+                    value_offset as usize,
+                    helpers::milliseconds_to_datetime(created_at),
+                    is_tombstone,
+                ),
+            );
         }
         return Ok((entries, total_bytes_read));
     }
@@ -281,7 +289,7 @@ impl DataFs for DataFileNode {
         &self,
         offset: u32,
         searched_key: &[u8],
-    ) -> Result<Option<(ValOffset, CreationTime, IsTombStone)>, Error> {
+    ) -> Result<Option<(ValOffset, CreatedAt, IsTombStone)>, Error> {
         let path = &self.node.file_path;
         let mut file = self.node.file.write().await;
         file.seek(std::io::SeekFrom::Start(offset.into()))
@@ -325,7 +333,11 @@ impl DataFs for DataFileNode {
             let value_offset = u32::from_le_bytes(val_offset_bytes);
             let is_tombstone = is_tombstone_byte[0] == 1;
             if key == searched_key {
-                return Ok(Some((value_offset as usize, created_at, is_tombstone)));
+                return Ok(Some((
+                    value_offset as usize,
+                    helpers::milliseconds_to_datetime(created_at),
+                    is_tombstone,
+                )));
             }
         }
     }
@@ -379,7 +391,12 @@ impl DataFs for DataFileNode {
             let created_at = u64::from_le_bytes(created_at_bytes);
             let value_offset = u32::from_le_bytes(val_offset_bytes) as usize;
             let is_tombstone = is_tombstone_byte[0] == 1;
-            entries.push(Entry::new(key, value_offset, created_at, is_tombstone));
+            entries.push(Entry::new(
+                key,
+                value_offset,
+                helpers::milliseconds_to_datetime(created_at),
+                is_tombstone,
+            ));
 
             if total_bytes_read as u32 >= range_offset.end_offset {
                 return Ok(entries);
@@ -501,7 +518,7 @@ impl VLogFs for VLogFileNode {
                 vsize: val_len as usize,
                 key,
                 value,
-                created_at,
+                created_at: helpers::milliseconds_to_datetime(created_at),
                 is_tombstone,
             })
         }
@@ -570,7 +587,7 @@ impl VLogFs for VLogFileNode {
                 vsize: val_len as usize,
                 key,
                 value,
-                created_at,
+                created_at: helpers::milliseconds_to_datetime(created_at),
                 is_tombstone,
             });
 

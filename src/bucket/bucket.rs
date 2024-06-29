@@ -14,8 +14,13 @@ use uuid::Uuid;
 use Error::*;
 
 static SST_PREFIX: &str = "sstable";
+
+/// sstables to remove from each bucket
 pub type SSTablesToRemove = Vec<(BucketID, Vec<Table>)>;
-pub type BucketsToCompact = Result<(Vec<Bucket>, SSTablesToRemove), Error>;
+
+/// imbalanced buckets
+pub type ImbalancedBuckets = Result<(Vec<Bucket>, SSTablesToRemove), Error>;
+
 pub type BucketID = Uuid;
 
 #[derive(Debug, Clone)]
@@ -117,7 +122,7 @@ impl Bucket {
 impl BucketMap {
     pub async fn new<P: AsRef<Path>>(dir: P) -> Result<BucketMap, Error> {
         let dir = dir.as_ref();
-        let _ = FileNode::create_dir_all(dir.to_path_buf()).await;
+        FileNode::create_dir_all(dir.to_path_buf()).await?;
         Ok(Self {
             dir: dir.to_path_buf(),
             buckets: IndexMap::new(),
@@ -175,8 +180,8 @@ impl BucketMap {
         Err(ConditionsToInsertToBucketNotMetError)
     }
 
-    pub async fn extract_imbalanced_buckets(&self) -> BucketsToCompact {
-        let mut ssts_to_delete: Vec<(BucketID, Vec<Table>)> = Vec::new();
+    pub async fn extract_imbalanced_buckets(&self) -> ImbalancedBuckets {
+        let mut ssts_to_delete: SSTablesToRemove = Vec::new();
         let mut imbalanced_buckets: Vec<Bucket> = Vec::new();
         for (_, (bucket_id, bucket)) in self.buckets.iter().enumerate() {
             let (ssts, avg) = Bucket::extract_sstables(&bucket).await?;
@@ -193,6 +198,7 @@ impl BucketMap {
         }
         Ok((imbalanced_buckets, ssts_to_delete))
     }
+
     pub async fn is_balanced(&self) -> bool {
         for (_, bucket) in self.buckets.iter() {
             if bucket.sstable_count_exceeds_threshhold().await {
@@ -205,6 +211,7 @@ impl BucketMap {
     pub async fn delete_ssts(&mut self, ssts_to_delete: &SSTablesToRemove) -> Result<bool, Error> {
         let mut all_ssts_deleted = true;
         let mut buckets_to_delete: Vec<&BucketID> = Vec::new();
+
         for (bucket_id, ssts) in ssts_to_delete {
             if let Some(bucket) = self.buckets.get_mut(bucket_id) {
                 let bucket_clone = bucket.clone();
@@ -226,6 +233,7 @@ impl BucketMap {
                     }
                 }
             }
+
             for sst in ssts {
                 if fs::metadata(&sst.dir).await.is_ok() {
                     if let Err(err) = fs::remove_dir_all(&sst.dir).await {
@@ -235,6 +243,7 @@ impl BucketMap {
                 }
             }
         }
+
         if !buckets_to_delete.is_empty() {
             buckets_to_delete.iter().for_each(|&bucket_id| {
                 self.buckets.shift_remove(bucket_id);

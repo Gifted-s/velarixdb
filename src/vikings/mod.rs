@@ -5,7 +5,7 @@ use chrono::Duration;
 use libc::sleep;
 use tokio::sync::RwLock;
 
-use crate::consts::{DEFAULT_ONLINE_GARBAGE_COLLECTION_INTERVAL_MILLI, DEFAULT_PREFETCH_SIZE, GC_CHUNK_SIZE};
+use crate::consts::{DEFAULT_ONLINE_GC_INTERVAL, DEFAULT_PREFETCH_SIZE, GC_CHUNK_SIZE};
 use crate::gc::gc::Config;
 use crate::types::DBName;
 use crate::{storage::DataStore, types::Key};
