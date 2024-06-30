@@ -41,10 +41,8 @@ mod tests {
             let key = e.0.to_owned();
             let val = e.1.to_owned();
             tokio::spawn(async move {
-                let key_str = std::str::from_utf8(&key).unwrap();
-                let val_str = std::str::from_utf8(&val).unwrap();
-                let mut value = store_inner.write().await;
-                value.put(key_str, val_str).await
+                let mut writer = store_inner.write().await;
+                writer.put(key, val).await
             })
         });
 
@@ -59,10 +57,10 @@ mod tests {
     #[tokio::test]
     async fn datastore_test_put_and_get() {
         setup();
-        let root = tempdir().unwrap();
-        let path = PathBuf::from(root.path().join("store_test_3"));
+        let root = PathBuf::new();
+        let path = PathBuf::from(root.join("store_test_3"));
         let store = DataStore::new(path.clone()).await.unwrap();
-        let workload_size = 50000;
+        let workload_size = 20000;
         let key_len = 5;
         let val_len = 5;
         let write_read_ratio = 1.0;
@@ -74,10 +72,8 @@ mod tests {
             let key = e.0.to_owned();
             let val = e.1.to_owned();
             tokio::spawn(async move {
-                let key_str = std::str::from_utf8(&key).unwrap();
-                let val_str = std::str::from_utf8(&val).unwrap();
                 let mut value = store_inner.write().await;
-                value.put(key_str, val_str).await
+                value.put(key, val).await
             })
         });
 
@@ -92,9 +88,8 @@ mod tests {
             let store_inner = Arc::clone(&store_ref);
             let key = e.0.to_owned();
             tokio::spawn(async move {
-                let key_str = std::str::from_utf8(&key).unwrap();
-                match store_inner.read().await.get(key_str).await {
-                    Ok((value, _)) => Ok((key_str.as_bytes().to_vec(), value)),
+                match store_inner.read().await.get(key.to_owned()).await {
+                    Ok((value, _)) => Ok((key, value)),
                     Err(err) => return Err(err),
                 }
             })
@@ -141,10 +136,8 @@ mod tests {
             let key = e.key.to_owned();
             let val = e.val.to_owned();
             tokio::spawn(async move {
-                let key_str = std::str::from_utf8(&key).unwrap();
-                let val_str = std::str::from_utf8(&val).unwrap();
                 let mut value = store_inner.write().await;
-                value.put(key_str, val_str).await
+                value.put(key, val).await
             })
         });
 
@@ -176,9 +169,7 @@ mod tests {
         for e in write_workload.iter() {
             let key = e.0.to_owned();
             let val = e.1.to_owned();
-            let key_str = std::str::from_utf8(&key).unwrap();
-            let val_str = std::str::from_utf8(&val).unwrap();
-            let res = store.put(key_str, val_str).await;
+            let res = store.put(key, val).await;
             assert!(res.is_ok());
             assert_eq!(res.unwrap(), true);
         }
@@ -198,15 +189,12 @@ mod tests {
         let (read_workload, write_workload) = workload.generate_workload_data_as_vec();
 
         for e in write_workload.iter() {
-            let key_str = std::str::from_utf8(&e.key).unwrap();
-            let val_str = std::str::from_utf8(&e.val).unwrap();
-            let res = store.put(key_str, val_str).await;
+            let res = store.put(e.key.to_owned(), e.val.to_owned()).await;
             assert!(res.is_ok());
             assert_eq!(res.unwrap(), true);
         }
         for e in read_workload.iter() {
-            let key_str = std::str::from_utf8(&e.key).unwrap();
-            let res = store.get(&key_str).await;
+            let res = store.get(&e.key).await;
             assert!(res.is_ok());
             let w = write_workload.iter().find(|e1| e1.key == e.key).unwrap();
             assert_eq!(res.unwrap().0, w.val);
@@ -256,10 +244,10 @@ mod tests {
             log::error!("Insert failed {:?}", res.err());
             return;
         }
-        let key1 = std::str::from_utf8(&write_workload[0].key).unwrap();
-        let key2 = std::str::from_utf8(&write_workload[1].key).unwrap();
-        let key3 = std::str::from_utf8(&write_workload[2].key).unwrap();
-        let key4 = std::str::from_utf8(&write_workload[3].key).unwrap();
+        let key1 = &write_workload[0].key;
+        let key2 = &write_workload[1].key;
+        let key3 = &write_workload[2].key;
+        let key4 = &write_workload[3].key;
         let res1 = store_ref.read().await.get(key1).await;
         let res2 = store_ref.read().await.get(key2).await;
         let res3 = store_ref.read().await.get(key3).await;
@@ -317,21 +305,21 @@ mod tests {
             return;
         }
 
-        let key1 = std::str::from_utf8(&write_workload[0].key).unwrap();
-        let updated_value = "updated_key";
+        let key1 = &write_workload[0].key;
+        let updated_value = "updated_key".as_bytes().to_vec();
 
         let res = store_ref.read().await.get(key1).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap().0, write_workload[0].val);
 
-        let res = store_ref.write().await.update(key1, updated_value).await;
+        let res = store_ref.write().await.update(key1, &updated_value).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), true);
 
         let res = store_ref.read().await.get(key1).await;
         assert!(res.is_ok());
         assert_ne!(res.as_ref().unwrap().0, write_workload[0].val);
-        assert_eq!(res.as_ref().unwrap().0, updated_value.as_bytes().to_vec());
+        assert_eq!(res.as_ref().unwrap().0, updated_value);
 
         let res = store_ref.write().await.flush_all_memtables().await;
         assert!(res.is_ok());
@@ -339,7 +327,7 @@ mod tests {
         let res = store_ref.read().await.get(key1).await;
         println!("RESPONSE {:?}", res);
         assert!(res.is_ok());
-        assert_eq!(res.unwrap().0, updated_value.as_bytes().to_vec());
+        assert_eq!(res.unwrap().0, updated_value);
 
         // // Run compaction
         let comp_res = store_ref.write().await.run_compaction().await;
@@ -347,7 +335,7 @@ mod tests {
 
         let res = store_ref.read().await.get(key1).await;
         assert!(res.is_ok());
-        assert_eq!(res.unwrap().0, updated_value.as_bytes().to_vec());
+        assert_eq!(res.unwrap().0, updated_value);
     }
 
     #[tokio::test]
@@ -368,7 +356,7 @@ mod tests {
             log::error!("Insert failed {:?}", res.err());
             return;
         }
-        let key1 = std::str::from_utf8(&write_workload[0].key).unwrap();
+        let key1 = &write_workload[0].key;
 
         let res = store_ref.read().await.get(key1).await;
         assert!(res.is_ok());

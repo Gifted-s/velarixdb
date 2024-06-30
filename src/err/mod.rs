@@ -104,6 +104,12 @@ pub enum Error {
     #[error("Block is full")]
     BlockIsFullError,
 
+    #[error("Filter not provided, needed to flush table to disk")]
+    FilterNotProvidedForFlush,
+
+    #[error("Filter not found")]
+    FilterNotFoundError,
+
     #[error("Error finding biggest key in memtable (None was returned)")]
     BiggestKeyIndexError,
 

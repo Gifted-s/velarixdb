@@ -131,7 +131,7 @@ pub struct MergedSSTable {
 impl Clone for MergedSSTable {
     fn clone(&self) -> Self {
         Self {
-            sstable: Box::new(super::TableInsertor::from(self.sstable.get_entries())),
+            sstable: Box::new(super::TableInsertor::from(self.sstable.get_entries(), &self.filter)),
             hotness: self.hotness,
             filter: self.filter.clone(),
         }

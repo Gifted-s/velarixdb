@@ -1,5 +1,5 @@
 use crate::{
-    compact,
+    compactors,
     consts::{
         DEFAULT_ALLOW_PREFETCH, DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL, DEFAULT_COMPACTION_INTERVAL,
         DEFAULT_ENABLE_TTL, DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MAX_WRITE_BUFFER_NUMBER, DEFAULT_ONLINE_GC_INTERVAL,
@@ -46,7 +46,7 @@ pub struct Config {
     pub tombstone_compaction_interval: std::time::Duration,
 
     /// Which compaction strategy is used STCS, LCS, ICS, TCS or UCS
-    pub compaction_strategy: compact::Strategy,
+    pub compaction_strategy: compactors::Strategy,
 
     /// Interval at which tombstone compaction is triggered (in hours)
     pub online_gc_interval: std::time::Duration,
@@ -67,7 +67,7 @@ impl Config {
         background_compaction_interval: std::time::Duration,
         tombstone_ttl: std::time::Duration,
         tombstone_compaction_interval: std::time::Duration,
-        compaction_strategy: compact::Strategy,
+        compaction_strategy: compactors::Strategy,
         online_gc_interval: std::time::Duration,
         gc_chunk_size: usize,
     ) -> Self {
@@ -104,7 +104,7 @@ impl Default for Config {
             background_compaction_interval: DEFAULT_COMPACTION_INTERVAL,
             tombstone_ttl: DEFAULT_TOMBSTONE_TTL,
             tombstone_compaction_interval: DEFAULT_TOMBSTONE_COMPACTION_INTERVAL,
-            compaction_strategy: compact::Strategy::STCS,
+            compaction_strategy: compactors::Strategy::STCS,
             online_gc_interval: DEFAULT_ONLINE_GC_INTERVAL,
             gc_chunk_size: GC_CHUNK_SIZE,
         }

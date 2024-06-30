@@ -5,7 +5,7 @@ use crate::{
     helpers,
     index::RangeOffset,
     load_buffer,
-    mem::{Entry, SkipMapValue},
+    memtable::{Entry, SkipMapValue},
     types::{CreatedAt, IsTombStone, Key, NoBytesRead, SkipMapEntries, ValOffset, Value},
     vlog::ValueLogEntry,
 };

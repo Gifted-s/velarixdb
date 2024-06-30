@@ -80,9 +80,15 @@ impl InsertableToBucket for MemTable<Key> {
     fn get_entries(&self) -> SkipMapEntries<Key> {
         self.entries.clone()
     }
+
     fn size(&self) -> usize {
         self.size
     }
+
+    fn get_filter(&self) -> BloomFilter {
+        return self.bloom_filter.to_owned();
+    }
+
     fn find_biggest_key(&self) -> Result<Key, Error> {
         let largest_entry = self.entries.iter().next_back();
         match largest_entry {

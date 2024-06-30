@@ -1,5 +1,6 @@
 use crate::consts::{BUCKET_DIRECTORY_PREFIX, BUCKET_HIGH, BUCKET_LOW, MAX_TRESHOLD, MIN_SSTABLE_SIZE, MIN_TRESHOLD};
 use crate::err::Error;
+use crate::filter::BloomFilter;
 use crate::fs::{FileAsync, FileNode};
 use crate::sst::Table;
 use crate::types::{Bool, Key, SkipMapEntries};
@@ -28,6 +29,11 @@ pub struct BucketMap {
     pub dir: PathBuf,
     pub buckets: IndexMap<BucketID, Bucket>,
 }
+
+pub(crate) enum InsertionType {
+    New,
+    Exisiting,
+}
 #[derive(Debug, Clone)]
 pub struct Bucket {
     pub(crate) id: BucketID,
@@ -42,6 +48,7 @@ pub trait InsertableToBucket: Debug + Send + Sync {
     fn size(&self) -> usize;
     fn find_biggest_key(&self) -> Result<Key, Error>;
     fn find_smallest_key(&self) -> Result<Key, Error>;
+    fn get_filter(&self) -> BloomFilter;
 }
 
 impl Bucket {
@@ -93,7 +100,7 @@ impl Bucket {
         Ok(all_sstable_size / sst.len() as u64 as usize)
     }
 
-    pub fn fits_into_bucket<T: InsertableToBucket + ?Sized>(&mut self, table: Arc<Box<T>>) -> Bool {
+    pub fn fits_into_bucket<T: InsertableToBucket + ?Sized>(&self, table: Arc<Box<T>>) -> Bool {
         (self.avarage_size as f64 * BUCKET_LOW < table.size() as f64)
             && (table.size() < (self.avarage_size as f64 * BUCKET_HIGH) as usize)
             || (table.size() < MIN_SSTABLE_SIZE && self.avarage_size < MIN_SSTABLE_SIZE)
@@ -136,17 +143,40 @@ impl BucketMap {
         &mut self,
         table: Arc<Box<T>>,
     ) -> Result<Table, Error> {
-        let added_to_bucket = false;
-        let created_at = Utc::now();
-        for (_, bucket) in &mut self.buckets.clone() {
+        for (_, bucket) in self.buckets.iter() {
             if bucket.fits_into_bucket(table.clone()) {
-                let sst_dir = bucket
-                    .dir
-                    .join(format!("{}_{}", SST_PREFIX, created_at.timestamp_millis()));
-                let mut sst = Table::new(sst_dir).await?;
-                sst.set_entries(table.get_entries());
-                sst.write_to_file().await?;
-                bucket.sstables.write().await.push(sst.clone());
+                return self.insert_to_bucket(bucket.to_owned(), table, InsertionType::Exisiting).await;
+            }
+        }
+
+        let bucket = Bucket::new(self.dir.clone()).await?;
+        return self.insert_to_bucket(bucket, table, InsertionType::New).await;
+    }
+
+    async fn insert_to_bucket<T: InsertableToBucket + ?Sized>(
+        &mut self,
+        mut bucket: Bucket,
+        table: Arc<Box<T>>,
+        insert_type: InsertionType,
+    ) -> Result<Table, Error> {
+        let created_at = Utc::now();
+        let sst_dir = bucket
+            .dir
+            .join(format!("{}_{}", SST_PREFIX, created_at.timestamp_millis()));
+        let mut sst = Table::new(sst_dir).await?;
+        sst.set_entries(table.get_entries());
+        sst.filter = Some(table.get_filter());
+        sst.write_to_file().await?;
+        bucket.sstables.write().await.push(sst.to_owned());
+        match insert_type {
+            InsertionType::New => {
+                bucket.avarage_size = fs::metadata(sst.clone().data_file.path)
+                    .await
+                    .map_err(|err| GetFileMetaDataError(err))?
+                    .len() as usize;
+                self.buckets.insert(bucket.id, bucket);
+            }
+            InsertionType::Exisiting => {
                 bucket
                     .sstables
                     .write()
@@ -155,29 +185,11 @@ impl BucketMap {
                     .for_each(|s| s.increase_hotness());
                 bucket.avarage_size = Bucket::cal_average_size((&bucket.sstables.read().await).to_vec()).await?;
                 bucket.size = bucket.avarage_size * bucket.sstables.read().await.len();
-                return Ok(sst);
+                self.buckets.insert(bucket.id, bucket);
             }
         }
 
-        // create a new bucket if none of the condition above was satisfied
-        if !added_to_bucket {
-            let mut bucket = Bucket::new(self.dir.clone()).await?;
-            let sst_dir = bucket
-                .dir
-                .join(format!("{}_{}", SST_PREFIX, created_at.timestamp_millis()));
-            let mut sst = Table::new(sst_dir).await?;
-            sst.set_entries(table.get_entries());
-            sst.write_to_file().await?;
-            bucket.sstables.write().await.push(sst.clone());
-            bucket.avarage_size = fs::metadata(sst.clone().data_file.path)
-                .await
-                .map_err(|err| GetFileMetaDataError(err))?
-                .len() as usize;
-            self.buckets.insert(bucket.id, bucket.clone());
-            return Ok(sst);
-        }
-
-        Err(ConditionsToInsertToBucketNotMetError)
+        return Ok(sst);
     }
 
     pub async fn extract_imbalanced_buckets(&self) -> ImbalancedBuckets {

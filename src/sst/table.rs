@@ -1,10 +1,10 @@
 //! # SSTable Data Block
 //!
 //! The `Data Block` manages multiple `Block` instancesand each block stores entries
-//! A block size is 4KB on disk but as the project evolve, we will introduce 
+//! A block size is 4KB on disk but as the project evolve, we will introduce
 //! Snappy Compression, Checksum and also have block cache for fast recovery
 //!
-//! The data block structure 
+//! The data block structure
 //!
 //! ```text
 //! +----------------------------------+
@@ -32,10 +32,8 @@
 //!
 //! In the diagram:
 //! - The `Block` stores entries until it is 4KB in size and then writes to data file
-//! - TODO: In the future we will introduce Snappy Compression to reduce the size on the disk and also 
+//! - TODO: In the future we will introduce Snappy Compression to reduce the size on the disk and also
 //! introduce checksum to ensure the data has not been corrupted
-
-
 
 use chrono::Utc;
 use crossbeam_skiplist::SkipMap;
@@ -55,7 +53,7 @@ use crate::{
     fs::{DataFileNode, DataFs, FileAsync, FileNode, IndexFileNode, IndexFs},
     helpers,
     index::{Index, IndexFile, RangeOffset},
-    mem::{Entry, SkipMapValue},
+    memtable::{Entry, SkipMapValue},
     types::{CreatedAt, IsTombStone, Key, SkipMapEntries, ValOffset},
 };
 
@@ -91,15 +89,22 @@ pub struct Table {
     pub(crate) data_file: DataFile<DataFileNode>,
     pub(crate) index_file: IndexFile<IndexFileNode>,
     pub(crate) entries: SkipMapEntries<Key>,
+    pub(crate) filter: Option<BloomFilter>,
 }
 
 impl InsertableToBucket for Table {
     fn get_entries(&self) -> SkipMapEntries<Key> {
         self.entries.clone()
     }
+
     fn size(&self) -> usize {
         self.size
     }
+
+    fn get_filter(&self) -> BloomFilter {
+        return self.filter.as_ref().unwrap().to_owned();
+    }
+
     fn find_biggest_key(&self) -> Result<Key, Error> {
         let largest_entry = self.entries.iter().next_back();
         match largest_entry {
@@ -135,6 +140,7 @@ impl Table {
             created_at,
             entries: Arc::new(SkipMap::new()),
             size: 0,
+            filter: None,
         })
     }
     pub fn increase_hotness(&mut self) {
@@ -174,6 +180,7 @@ impl Table {
 
     pub(crate) async fn load_entries_from_file(&self) -> Result<Table, Error> {
         let (entries, bytes_read) = self.data_file.file.load_entries().await?;
+        //TODO: review should only return entries not an entire table
         Ok(Table {
             entries,
             size: bytes_read,
@@ -182,13 +189,14 @@ impl Table {
             created_at: self.created_at,
             data_file: self.data_file.to_owned(),
             index_file: self.index_file.to_owned(),
+            filter: self.filter.to_owned(),
         })
     }
 
     pub(crate) async fn build_from<P: AsRef<Path> + Send + Sync + Clone>(
         dir: P,
         data_file_path: P,
-        index_file_path: PathBuf,
+        index_file_path: P,
     ) -> Table {
         let mut table = Table {
             dir: dir.as_ref().to_path_buf(),
@@ -204,10 +212,11 @@ impl Table {
                 file: IndexFileNode::new(index_file_path.to_owned(), crate::fs::FileType::Index)
                     .await
                     .unwrap(),
-                path: index_file_path,
+                path: index_file_path.as_ref().to_path_buf(),
             },
             size: 0,
             entries: Arc::new(SkipMap::new()),
+            filter: None,
         };
         table.size = table.data_file.file.node.size().await;
         let modified_time = table.data_file.file.node.metadata().await.unwrap().modified().unwrap();
@@ -218,6 +227,9 @@ impl Table {
     }
 
     pub(crate) async fn write_to_file(&mut self) -> Result<(), Error> {
+        if self.filter.is_none() {
+            return Err(FilterNotProvidedForFlush);
+        }
         let index_file = &self.index_file;
         let mut blocks: Vec<Block> = Vec::new();
         let mut table_index = Index::new(self.index_file.path.clone(), index_file.file.clone());
@@ -256,6 +268,7 @@ impl Table {
         if current_block.entries.len() > 0 {
             self.write_block(&current_block, &mut table_index).await?;
         }
+        self.filter.as_mut().unwrap().write(self.dir.to_owned()).await?;
         table_index.write_to_file().await?;
         Ok(())
     }
@@ -276,12 +289,6 @@ impl Table {
 
     pub(crate) fn reset_size(&mut self) {
         self.size = 0;
-    }
-
-    pub(crate) fn build_filter_from_sstable(entries: &SkipMapEntries<Key>, false_positive: f64) -> BloomFilter {
-        let mut filter = BloomFilter::new(false_positive, entries.len());
-        entries.iter().for_each(|e| filter.set(e.key()));
-        filter
     }
 
     pub(crate) fn get_value_from_entries<K: AsRef<[u8]>>(&self, key: K) -> Option<SkipMapValue<ValOffset>> {

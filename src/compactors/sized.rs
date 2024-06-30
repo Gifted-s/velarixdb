@@ -12,11 +12,11 @@ use crate::{
     bucket::{Bucket, ImbalancedBuckets, InsertableToBucket, SSTablesToRemove},
     err::Error,
     filter::BloomFilter,
-    mem::Entry,
+    memtable::Entry,
     sst::Table,
     types::{BloomFilterHandle, Bool, BucketMapHandle, CreatedAt, Key, KeyRangeHandle, ValOffset},
 };
-use crate::{err::Error::*, mem::SkipMapValue};
+use crate::{err::Error::*, memtable::SkipMapValue};
 
 #[derive(Debug, Clone)]
 pub struct SizedTierRunner<'a> {
@@ -81,10 +81,9 @@ impl<'a> SizedTierRunner<'a> {
                                     sst.data_file.path,
                                     sst.index_file.path
                                 );
-                                // Step 4: Store SST in Filter
+                                // Step 4: Store SST Path in Filter
                                 let data_file_path = sst.get_data_file_path();
-                                merged_sst.filter.set_sstable(sst.clone());
-
+                                merged_sst.filter.set_sstable_path(data_file_path.to_owned());
                                 // Step 5: Store Filter in Filters Vec
                                 filters.write().await.push(merged_sst.filter);
                                 let biggest_key = merged_sst.sstable.find_biggest_key()?;
@@ -107,13 +106,13 @@ impl<'a> SizedTierRunner<'a> {
                                 // Remove merged sstables written to disk so far to prevent stale data
                                 while tracker.actual > 0 {
                                     if let Some(filter) = filters.write().await.pop() {
-                                        let table = filter.get_sst().to_owned();
-                                        if let Err(err) = tokio::fs::remove_dir_all(table.dir).await {
+                                        let sst_dir = filter.get_sst_dir().to_owned();
+                                        if let Err(err) = tokio::fs::remove_dir_all(sst_dir.to_owned()).await {
                                             log::error!("{}", CompactionFailed(Box::new(DirDeleteError(err))));
                                             tracker.actual -= 1;
                                             continue;
                                         }
-                                        key_range.write().await.remove(table.data_file.path);
+                                        key_range.write().await.remove(sst_dir.to_owned());
                                     }
                                     tracker.actual -= 1;
                                 }
@@ -181,7 +180,7 @@ impl<'a> SizedTierRunner<'a> {
             .read()
             .await
             .iter()
-            .map(|b| (b.get_sst().dir.to_owned(), b.to_owned()))
+            .map(|b| (b.sst_dir.to_owned().unwrap(), b.to_owned()))
             .collect();
         ssts_to_delete.iter().for_each(|(_, tables)| {
             tables.iter().for_each(|t| {
@@ -209,7 +208,9 @@ impl<'a> SizedTierRunner<'a> {
                     .await
                     .map_err(|err| CompactionFailed(Box::new(err)))?;
             }
-            let filter = Table::build_filter_from_sstable(&merged_sst.get_entries(), self.config.filter_false_positive);
+            let entries = &merged_sst.get_entries();
+            let mut filter = BloomFilter::new(self.config.filter_false_positive, entries.len());
+            filter.build_filter_from_entries(entries);
             merged_ssts.push(MergedSSTable::new(merged_sst, filter, hotness));
         }
         if merged_ssts.is_empty() {
@@ -223,7 +224,7 @@ impl<'a> SizedTierRunner<'a> {
         sst1: Box<dyn InsertableToBucket>,
         sst2: Box<dyn InsertableToBucket>,
     ) -> Result<Box<dyn InsertableToBucket>, Error> {
-        let mut new_sst = TableInsertor::new();
+        let mut new_sst = TableInsertor::default();
         let new_sst_map = Arc::new(SkipMap::new());
         let mut merged_entries = Vec::new();
         let entries1 = sst1

@@ -1,5 +1,5 @@
 use crate::cfg::Config;
-use crate::compact::Compactor;
+use crate::compactors::Compactor;
 use crate::consts::{
     BUCKETS_DIRECTORY_NAME, HEAD_ENTRY_KEY, KB, META_DIRECTORY_NAME, TOMB_STONE_MARKER, VALUE_LOG_DIRECTORY_NAME,
 };
@@ -12,7 +12,7 @@ use crate::gc::gc::GC;
 use crate::helpers;
 use crate::index::Index;
 use crate::key_range::KeyRange;
-use crate::mem::{Entry, MemTable, K};
+use crate::memtable::{Entry, MemTable, K};
 use crate::meta::Meta;
 use crate::range::RangeIterator;
 use crate::types::{
@@ -131,7 +131,10 @@ impl DataStore<'static, Key> {
             }
             gc_entries_reader.clear();
         }
+
         drop(gc_entries_reader);
+        // This ensures that sstables in key range map whose filter is newly loaded(after crash) are mapped to the sstable
+        self.key_range.write().await.update_key_range().await;
         let is_tombstone = std::str::from_utf8(val.as_ref()).unwrap() == TOMB_STONE_MARKER;
         let created_at = Utc::now();
         let v_offset = self
@@ -231,12 +234,7 @@ impl DataStore<'static, Key> {
             } else {
                 // Step 3: Check sstables
                 let key_range = &self.key_range.read().await;
-                let mut ssts = key_range.filter_sstables_by_biggest_key(key.as_ref());
-                if ssts.is_empty() {
-                    return Err(NotFoundInDB);
-                }
-                let filters = &self.filters.read().await;
-                ssts = BloomFilter::ssts_within_key_range(key.as_ref(), filters, &ssts);
+                let ssts = key_range.filter_sstables_by_biggest_key(key.as_ref()).await?;
                 if ssts.is_empty() {
                     return Err(NotFoundInDB);
                 }

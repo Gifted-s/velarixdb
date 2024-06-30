@@ -5,7 +5,7 @@ use super::{storage::DirPath, DataStore, SizeUnit};
 use crate::bucket::bucket::InsertableToBucket;
 use crate::bucket::{Bucket, BucketID, BucketMap};
 use crate::cfg::Config;
-use crate::compact::{self, Compactor};
+use crate::compactors::{self, Compactor};
 use crate::consts::{
     DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE, HEAD_ENTRY_KEY, HEAD_ENTRY_VALUE, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8,
     TAIL_ENTRY_KEY, TAIL_ENTRY_VALUE,
@@ -17,7 +17,7 @@ use crate::flush::Flusher;
 use crate::gc::gc::GC;
 use crate::helpers;
 use crate::key_range::KeyRange;
-use crate::mem::{Entry, MemTable};
+use crate::memtable::{Entry, MemTable};
 use crate::meta::Meta;
 use crate::sst::Table;
 use crate::types::{Key, MemtableId};
@@ -103,8 +103,9 @@ impl DataStore<'static, Key> {
                     });
                 }
                 let data_file_path = sst_files[0].to_owned();
-                let index_file_path = sst_files[1].to_owned();
-                let table = Table::build_from(
+                let filter_file_path = sst_files[1].to_owned();
+                let index_file_path = sst_files[2].to_owned();
+                let mut table = Table::build_from(
                     sst_dir.path().to_owned(),
                     data_file_path.to_owned(),
                     index_file_path.to_owned(),
@@ -146,11 +147,13 @@ impl DataStore<'static, Key> {
                         most_recent_tail_timestamp = value.created_at;
                     }
                 }
-                let mut filter = Table::build_filter_from_sstable(&sstable.entries, config.false_positive_rate);
+
                 table.entries.clear();
-                filter.set_sstable(table.clone());
-                filters.push(filter);
-                key_range.set(data_file_path.to_owned(), smallest_key, biggest_key, table);
+                // Store bloomfilter metadata in table but load entries during read
+                let mut new_filter = BloomFilter::default();
+                new_filter.file_path = Some(filter_file_path);
+                table.filter = Some(new_filter);
+                key_range.set(sst_dir.path(), smallest_key, biggest_key, table);
             }
         }
         let mut buckets_map = BucketMap::new(buckets_path.clone()).await?;
@@ -200,7 +203,7 @@ impl DataStore<'static, Key> {
                         config.compactor_flush_listener_interval,
                         config.tombstone_compaction_interval,
                         config.compaction_strategy,
-                        compact::CompactionReason::MaxSize,
+                        compactors::CompactionReason::MaxSize,
                         config.false_positive_rate,
                     ),
                     config: config.clone(),
@@ -322,7 +325,7 @@ impl DataStore<'static, Key> {
                 config.compactor_flush_listener_interval,
                 config.tombstone_compaction_interval,
                 config.compaction_strategy,
-                compact::CompactionReason::MaxSize,
+                compactors::CompactionReason::MaxSize,
                 config.false_positive_rate,
             ),
             config: config.clone(),

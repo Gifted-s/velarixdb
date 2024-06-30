@@ -2,7 +2,7 @@ use crate::{
     bucket::BucketMap,
     filter::BloomFilter,
     key_range::KeyRange,
-    mem::{MemTable, SkipMapValue},
+    memtable::{MemTable, SkipMapValue},
 };
 use chrono::{DateTime, Utc};
 use crossbeam_skiplist::SkipMap;

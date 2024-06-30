@@ -7,12 +7,12 @@ use crate::consts::{TAIL_ENTRY_KEY, TOMB_STONE_MARKER};
 use crate::filter::BloomFilter;
 use crate::fs::{FileAsync, FileNode};
 use crate::index::Index;
-use crate::mem::{Entry, MemTable, SkipMapValue, K};
+use crate::memtable::{Entry, MemTable, SkipMapValue, K};
 use crate::types::{BloomFilterHandle, CreatedAt, ImmutableMemTable, Key, KeyRangeHandle, ValOffset, Value};
 use crate::vlog::{ValueLog, ValueLogEntry};
 use crate::{err, helpers};
-use crate::{err::Error, storage::*};
-use chrono::{DateTime, Utc};
+use crate::err::Error;
+use chrono::Utc;
 use crossbeam_skiplist::SkipMap;
 use err::Error::*;
 use futures::future::join_all;
@@ -388,15 +388,7 @@ impl GC {
             } else {
                 // Step 3: Check sstables
                 let key_range = &key_range.read().await;
-                let mut ssts = key_range.filter_sstables_by_biggest_key(&key);
-                if ssts.is_empty() {
-                    return Err(KeyNotFoundInAnySSTableError);
-                }
-                let filters = &filters.read().await;
-                ssts = BloomFilter::ssts_within_key_range(&key, filters, &ssts);
-                if ssts.is_empty() {
-                    return Err(KeyNotFoundByAnyBloomFilterError);
-                }
+                let ssts = key_range.filter_sstables_by_biggest_key(&key).await?;
                 for sst in ssts.iter() {
                     let index = Index::new(sst.index_file.path.to_owned(), sst.index_file.file.to_owned());
                     let block_handle = index.get(&key).await;
@@ -458,31 +450,13 @@ impl GC {
         err: Error,
     ) -> std::result::Result<(), Error> {
         match err {
-            KeyFoundAsTombstoneInMemtableError => {
-                invalid_entries_ref.write().await.push(entry);
-                Ok(())
-            }
-            KeyNotFoundInAnySSTableError => {
-                invalid_entries_ref.write().await.push(entry);
-                Ok(())
-            }
-            KeyNotFoundByAnyBloomFilterError => {
-                invalid_entries_ref.write().await.push(entry);
-                Ok(())
-            }
-            KeyFoundAsTombstoneInSSTableError => {
-                invalid_entries_ref.write().await.push(entry);
-                Ok(())
-            }
-            KeyFoundAsTombstoneInValueLogError => {
-                invalid_entries_ref.write().await.push(entry);
-                Ok(())
-            }
-            err::Error::KeyNotFoundInValueLogError => {
-                invalid_entries_ref.write().await.push(entry);
-                Ok(())
-            }
-            NotFoundInDB => {
+            KeyFoundAsTombstoneInMemtableError
+            | KeyNotFoundInAnySSTableError
+            | KeyNotFoundByAnyBloomFilterError
+            | KeyFoundAsTombstoneInSSTableError
+            | KeyFoundAsTombstoneInValueLogError
+            | err::Error::KeyNotFoundInValueLogError
+            | NotFoundInDB => {
                 invalid_entries_ref.write().await.push(entry);
                 Ok(())
             }
@@ -490,8 +464,6 @@ impl GC {
         }
     }
 }
-
-impl DataStore<'static, Key> {}
 
 async fn sleep_gc_task(duration: std::time::Duration) {
     sleep(duration).await;

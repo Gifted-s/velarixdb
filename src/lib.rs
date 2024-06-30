@@ -1,7 +1,7 @@
 mod block;
 mod bucket;
 mod cfg;
-mod compact;
+mod compactors;
 mod consts;
 mod err;
 mod filter;
@@ -12,7 +12,7 @@ mod helpers;
 mod index;
 mod key_range;
 mod mac;
-mod mem;
+mod memtable;
 mod meta;
 mod range;
 mod sst;

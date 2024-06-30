@@ -6,7 +6,7 @@
 use crate::consts::HEAD_ENTRY_KEY;
 use crate::err::Error;
 // use crate::index::Index;
-use crate::mem::Entry;
+use crate::memtable::Entry;
 use crate::storage::DataStore;
 use crate::types::{Key, ValOffset, Value};
 use crate::vlog::ValueLog;
@@ -228,33 +228,33 @@ impl<'a> DataStore<'a, Key> {
         //     }
         // }
 
-        let sstables_within_range = {
-            let mut sstable_path = HashMap::new();
+        // let sstables_within_range = {
+        //     let mut sstable_path = HashMap::new();
 
-            for b in self.filters.read().await.to_owned().into_iter() {
-                let bf_inner = b.to_owned();
-                let bf_sstable = bf_inner.sst.to_owned().unwrap();
-                let data_path = bf_sstable.data_file.path.to_str().unwrap();
-                if bf_inner.contains(&start.to_vec()) || bf_inner.contains(&end.to_vec()) {
-                    // add to sstable path
-                    sstable_path.insert(data_path.to_owned(), bf_sstable.to_owned());
-                }
-            }
+        //     for b in self.filters.read().await.to_owned().into_iter() {
+        //         let bf_inner = b.to_owned();
+        //         let bf_sstable = bf_inner.sst.to_owned().unwrap();
+        //         let data_path = bf_sstable.data_file.path.to_str().unwrap();
+        //         if bf_inner.contains(&start.to_vec()) || bf_inner.contains(&end.to_vec()) {
+        //             // add to sstable path
+        //             sstable_path.insert(data_path.to_owned(), bf_sstable.to_owned());
+        //         }
+        //     }
 
-            let key_range = self.key_range.read().await;
-            let paths_from_key_range = key_range.range_scan(&start.to_vec(), &end.to_vec());
-            if !paths_from_key_range.is_empty() {
-                for range in paths_from_key_range.iter() {
-                    if !sstable_path.contains_key(range.sst.data_file.path.to_str().unwrap()) {
-                        sstable_path.insert(
-                            range.sst.data_file.path.to_str().unwrap().to_owned(),
-                            range.sst.to_owned(),
-                        );
-                    }
-                }
-            }
-            sstable_path
-        };
+        //     let key_range = self.key_range.read().await;
+        //     let paths_from_key_range = key_range.range_scan(&start.to_vec(), &end.to_vec());
+        //     if !paths_from_key_range.is_empty() {
+        //         for range in paths_from_key_range.iter() {
+        //             if !sstable_path.contains_key(range.sst.data_file.path.to_str().unwrap()) {
+        //                 sstable_path.insert(
+        //                     range.sst.data_file.path.to_str().unwrap().to_owned(),
+        //                     range.sst.to_owned(),
+        //                 );
+        //             }
+        //         }
+        //     }
+        //     sstable_path
+        // };
 
         // for (_, sst) in sstables_within_range {
         //     let sparse_index = SparseIndex::new(sst.index_file_path.clone(), sst).await;

@@ -2,7 +2,7 @@ use crate::bucket::bucket::InsertableToBucket;
 use crate::consts::FLUSH_SIGNAL;
 use crate::flush::flusher::Error::FlushError;
 use crate::types::{self, BloomFilterHandle, BucketMapHandle, FlushSignal, ImmutableMemTable, KeyRangeHandle};
-use crate::{err::Error, mem::MemTable};
+use crate::{err::Error, memtable::MemTable};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -52,16 +52,11 @@ impl Flusher {
             .key_range
             .write()
             .await
-            .set(data_file_path, smallest_key, biggest_key, sst.clone());
-        filter.set_sstable(sst);
+            .set(data_file_path.to_owned(), smallest_key, biggest_key, sst.clone());
+        filter.set_sstable_path(data_file_path);
         flush_data.filters.write().await.push(filter.to_owned());
 
-        // sort bloom filter by hotness
-        flush_data
-            .filters
-            .write()
-            .await
-            .sort_by(|a, b| b.get_sst().get_hotness().cmp(&a.get_sst().get_hotness()));
+        // TODO: sort bloom filter by hotness
 
         Ok(())
     }

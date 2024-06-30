@@ -1,5 +1,7 @@
 use crate::filter::bf::Error::FilterFileOpenError;
 use crate::filter::bf::Error::FilterFilePathNotProvided;
+use crate::types::Key;
+use crate::types::SkipMapEntries;
 use crate::{
     consts::{FILTER_FILE_NAME, SIZE_OF_U32, SIZE_OF_U64},
     err::Error,
@@ -23,7 +25,7 @@ pub type NoOfElements = u32;
 
 #[derive(Debug)]
 pub struct BloomFilter {
-    pub sst: Option<Table>,
+    pub sst_dir: Option<PathBuf>,
     pub no_of_hash_func: usize,
     pub no_of_elements: AtomicU32,
     pub bit_vec: Arc<Mutex<BitVec>>,
@@ -46,7 +48,7 @@ impl BloomFilter {
         Self {
             no_of_elements: AtomicU32::new(0),
             no_of_hash_func,
-            sst: None,
+            sst_dir: None,
             bit_vec: Arc::new(Mutex::new(bv)),
             false_positive_rate,
             file_path: None,
@@ -82,10 +84,15 @@ impl BloomFilter {
             .unwrap();
         let serialized_data = self.serialize();
         file.node.write_all(&serialized_data).await?;
+        self.file_path = Some(file_path.to_owned());
         return Ok(());
     }
 
-    pub async fn recover(&mut self) -> Result<(), Error> {
+    pub(crate) fn build_filter_from_entries(&mut self, entries: &SkipMapEntries<Key>) {
+        entries.iter().for_each(|e| self.set(e.key()));
+    }
+
+    pub async fn recover_meta(&mut self) -> Result<(), Error> {
         if self.file_path == None {
             return Err(FilterFilePathNotProvided);
         };
@@ -113,26 +120,8 @@ impl BloomFilter {
         serialized_data
     }
 
-    pub fn set_sstable(&mut self, sst: Table) {
-        self.sst = Some(sst);
-    }
-
-    pub fn ssts_within_key_range<'a, K: AsRef<[u8]> + Hash>(
-        key: K,
-        filters: &'a Vec<BloomFilter>,
-        tables: &'a Vec<Table>,
-    ) -> Vec<Table> {
-        let mut ssts: Vec<Table> = Vec::new();
-        filters.iter().for_each(|filter| {
-            tables.iter().for_each(|p| {
-                if filter.get_sst().data_file.path.as_path() == p.get_data_file_path() {
-                    if filter.contains(key.as_ref()) {
-                        ssts.push(filter.get_sst().to_owned());
-                    }
-                }
-            })
-        });
-        ssts
+    pub fn set_sstable_path<P: AsRef<Path>>(&mut self, path: P) {
+        self.sst_dir = Some(path.as_ref().to_path_buf());
     }
 
     pub fn clear(&mut self) -> Self {
@@ -143,7 +132,7 @@ impl BloomFilter {
         let no_of_hash_func = self.no_of_hash_func;
         let bit_vec = BitVec::from_elem(bits.len(), false);
         Self {
-            sst: None,
+            sst_dir: None,
             no_of_hash_func,
             no_of_elements: AtomicU32::new(0),
             bit_vec: Arc::new(Mutex::new(bit_vec)),
@@ -171,9 +160,9 @@ impl BloomFilter {
     }
 
     /// Get SSTable path
-    pub fn get_sst(&self) -> &Table {
+    pub fn get_sst_dir(&self) -> &PathBuf {
         // Retrieve the element count atomically.
-        self.sst.as_ref().unwrap()
+        self.sst_dir.as_ref().unwrap()
     }
 
     fn calculate_hash<K: Hash>(&self, key: K, seed: usize) -> u64 {
@@ -198,12 +187,25 @@ impl Clone for BloomFilter {
     fn clone(&self) -> Self {
         // Implement custom logic here if needed
         BloomFilter {
-            sst: self.sst.clone(),
+            sst_dir: self.sst_dir.clone(),
             no_of_hash_func: self.no_of_hash_func,
             no_of_elements: AtomicU32::load(&self.no_of_elements, Ordering::Relaxed).into(),
             bit_vec: self.bit_vec.clone(),
             false_positive_rate: self.false_positive_rate,
             file_path: self.file_path.to_owned(),
+        }
+    }
+}
+
+impl Default for BloomFilter {
+    fn default() -> Self {
+        Self {
+            sst_dir: None,
+            no_of_hash_func: Default::default(),
+            no_of_elements: Default::default(),
+            bit_vec: Default::default(),
+            false_positive_rate: Default::default(),
+            file_path: Default::default(),
         }
     }
 }
