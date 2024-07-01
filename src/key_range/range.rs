@@ -81,8 +81,8 @@ impl KeyRange {
             if range.biggest_key.as_slice().cmp(key.as_ref()) == Ordering::Greater
                 || range.biggest_key.as_slice().cmp(key.as_ref()) == Ordering::Equal
             {
-                //  If an sstable does not have a bloom filter then 
-                //  it means there has been a crash and we need to restore 
+                //  If an sstable does not have a bloom filter then
+                //  it means there has been a crash and we need to restore
                 //  filter from disk using filter metadata stored on sstable
                 if let None = range.sst.filter.as_ref().unwrap().sst_dir {
                     let mut mut_range = range.to_owned();
@@ -92,8 +92,9 @@ impl KeyRange {
                     filter.sst_dir = Some(mut_range.sst.dir.to_owned());
 
                     let t = mut_range.sst.load_entries_from_file().await?;
-
                     filter.build_filter_from_entries(&t.entries);
+                    // Don't keep sst entries in memory
+                    mut_range.sst.entries.clear();
                     mut_range.sst.filter = Some(filter.to_owned());
                     restored_range_map.insert(mut_range.sst.dir.to_owned(), mut_range.to_owned());
 
@@ -107,7 +108,7 @@ impl KeyRange {
             }
         }
         if !restored_range_map.is_empty() {
-            // store the key ranges with sstables that contains 
+            // store the key ranges with sstables that contains
             // bloom filters just restored to disk in the restored_ranges map we are not
             // updating key_ranges immediatlely to prevent a mutable reference on get operations
             let restored_ranges = self.restored_ranges.clone();

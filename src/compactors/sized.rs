@@ -75,7 +75,7 @@ impl<'a> SizedTierRunner<'a> {
                         let insert_res = bucket.insert_to_appropriate_bucket(Arc::new(table)).await;
                         drop(bucket);
                         match insert_res {
-                            Ok(sst) => {
+                            Ok(mut sst) => {
                                 log::info!(
                                     "SST written, data: {:?}, index {:?}",
                                     sst.data_file.path,
@@ -85,7 +85,7 @@ impl<'a> SizedTierRunner<'a> {
                                 let data_file_path = sst.get_data_file_path();
                                 merged_sst.filter.set_sstable_path(data_file_path.to_owned());
                                 // Step 5: Store Filter in Filters Vec
-                                filters.write().await.push(merged_sst.filter);
+                                filters.write().await.push(merged_sst.filter.to_owned());
                                 let biggest_key = merged_sst.sstable.find_biggest_key()?;
                                 let smallest_key = merged_sst.sstable.find_smallest_key()?;
                                 if biggest_key.is_empty() {
@@ -94,6 +94,9 @@ impl<'a> SizedTierRunner<'a> {
                                 if smallest_key.is_empty() {
                                     return Err(LowestKeyIndexError);
                                 }
+                                // merged filter is now mapped to  new sst path therefore update sst filter
+                                // TODO: updazte should happen in write method
+                                sst.filter= Some(merged_sst.filter);
                                 key_range
                                     .write()
                                     .await

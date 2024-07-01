@@ -13,6 +13,7 @@ use crate::storage::SizeUnit;
 use crate::types::{CreatedAt, IsTombStone, Key, SkipMapEntries, ValOffset, Value};
 use chrono::{DateTime, Utc};
 use crossbeam_skiplist::SkipMap;
+use futures::lock::Mutex;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 use std::cmp::Ordering;
@@ -124,7 +125,6 @@ impl Entry<Key, ValOffset> {
     pub(crate) fn has_expired(&self, ttl: std::time::Duration) -> bool {
         let current_time = Utc::now();
         let current_timestamp = current_time.timestamp_millis() as u64;
-        // TODO: proper conversion
         current_timestamp > (self.created_at.timestamp_millis() as u64 + ttl.as_millis() as u64)
     }
 }
@@ -163,7 +163,7 @@ impl MemTable<Key> {
     pub fn insert(&mut self, entry: &Entry<Key, ValOffset>) -> Result<(), Error> {
         let entry_length_byte = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
         if !self.bloom_filter.contains(&entry.key) {
-            self.bloom_filter.set(&entry.key.clone());
+            self.bloom_filter.set(&entry.key);
             self.entries.insert(
                 entry.key.to_owned(),
                 SkipMapValue::new(entry.val_offset, entry.created_at, entry.is_tombstone),
@@ -179,6 +179,9 @@ impl MemTable<Key> {
             entry.key.to_owned(),
             SkipMapValue::new(entry.val_offset, entry.created_at, entry.is_tombstone),
         );
+        if entry.val_offset > self.most_recent_entry.val_offset {
+            self.most_recent_entry = entry.to_owned();
+        }
         self.size += entry_length_byte;
         Ok(())
     }

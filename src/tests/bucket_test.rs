@@ -4,7 +4,11 @@ mod tests {
         bucket::{Bucket, BucketMap, InsertableToBucket},
         consts::{BUCKET_HIGH, MIN_TRESHOLD},
         err::Error,
-        tests::fixtures::{self, sst::generate_ssts},
+        filter::BloomFilter,
+        tests::{
+            fixtures::{self, sst::generate_ssts},
+            workload::FilterWorkload,
+        },
     };
     use std::{path::PathBuf, sync::Arc};
     use tempfile::tempdir;
@@ -299,9 +303,10 @@ mod tests {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("."));
         let mut bucket_map = BucketMap::new(path.to_owned()).await.unwrap();
-
+        let false_pos = 0.1;
         let sst_within_size_range = generate_ssts(1).await[0].to_owned();
         let mut sst_with_entries = sst_within_size_range.load_entries_from_file().await.unwrap();
+        sst_with_entries.filter = Some(FilterWorkload::new(false_pos, sst_with_entries.entries.to_owned()));
         // bucket insertion is succeeds
         let insert_res = bucket_map
             .insert_to_appropriate_bucket(Arc::new(Box::new(sst_with_entries.to_owned())))

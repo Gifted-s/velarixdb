@@ -78,7 +78,7 @@ impl BloomFilter {
 
     // TODO: return alias
     pub async fn write<P: AsRef<Path> + Send + Sync>(&mut self, dir: P) -> Result<(), Error> {
-        let file_path = dir.as_ref().join(FILTER_FILE_NAME);
+        let file_path = dir.as_ref().join(format!("{}.db", FILTER_FILE_NAME));
         let file = FilterFileNode::new(file_path.to_owned(), crate::fs::FileType::Filter)
             .await
             .unwrap();
@@ -100,6 +100,11 @@ impl BloomFilter {
         self.false_positive_rate = false_pos;
         self.no_of_hash_func = no_hash_func as usize;
         self.no_of_elements = AtomicU32::new(no_elements);
+        let no_of_bits = Self::calculate_no_of_bits(
+            self.no_of_elements.load(Ordering::Relaxed) as usize,
+            self.false_positive_rate,
+        );
+        self.bit_vec = Arc::new(Mutex::new(BitVec::from_elem(no_of_bits as usize, false)));
         return Ok(());
     }
 
@@ -201,11 +206,11 @@ impl Default for BloomFilter {
     fn default() -> Self {
         Self {
             sst_dir: None,
-            no_of_hash_func: Default::default(),
-            no_of_elements: Default::default(),
-            bit_vec: Default::default(),
-            false_positive_rate: Default::default(),
-            file_path: Default::default(),
+            no_of_hash_func: 0,
+            no_of_elements: AtomicU32::new(0),
+            bit_vec: Arc::new(Mutex::new(BitVec::new())),
+            false_positive_rate: 0.0,
+            file_path: None,
         }
     }
 }

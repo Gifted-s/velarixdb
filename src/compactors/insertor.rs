@@ -72,7 +72,7 @@ impl Default for TableInsertor {
         Self {
             entries: Arc::new(SkipMap::new()),
             size: 0,
-            filter: BloomFilter::new(0.0, 0),
+            filter: BloomFilter::default()
         }
     }
 }

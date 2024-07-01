@@ -1,3 +1,5 @@
+use crate::filter::BloomFilter;
+use crate::memtable::SkipMapValue;
 use crate::tests::workload::Error::TokioJoinError;
 use crate::{
     err::Error,
@@ -5,6 +7,7 @@ use crate::{
     storage::DataStore,
     types::{Key, Value},
 };
+use crossbeam_skiplist::SkipMap;
 use futures::future::join_all;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
@@ -110,5 +113,18 @@ impl Workload {
             }
         }
         return Ok(());
+    }
+}
+
+pub struct FilterWorkload {
+    pub false_pos: f64,
+    pub entries: Arc<SkipMap<Vec<u8>, SkipMapValue<usize>>>,
+}
+
+impl FilterWorkload {
+    pub fn new(false_pos: f64, entries: Arc<SkipMap<Vec<u8>, SkipMapValue<usize>>>) -> BloomFilter {
+        let mut filter = BloomFilter::new(false_pos, entries.len());
+        filter.build_filter_from_entries(&entries);
+        return filter;
     }
 }

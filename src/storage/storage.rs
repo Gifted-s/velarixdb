@@ -16,14 +16,14 @@ use crate::memtable::{Entry, MemTable, K};
 use crate::meta::Meta;
 use crate::range::RangeIterator;
 use crate::types::{
-    self, BloomFilterHandle, Bool, BucketMapHandle, CreatedAt, FlushSignal, GCUpdatedEntries, ImmutableMemTable, Key,
+    BloomFilterHandle, Bool, BucketMapHandle, CreatedAt, FlushSignal, GCUpdatedEntries, ImmutableMemTable, Key,
     KeyRangeHandle, Value,
 };
 use crate::vlog::ValueLog;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use indexmap::IndexMap;
 use std::path::{Path, PathBuf};
-use std::{hash::Hash, sync::Arc};
+use std::sync::Arc;
 use tokio::fs::{self};
 use tokio::sync::RwLock;
 pub struct DataStore<'a, Key>
@@ -111,7 +111,6 @@ impl DataStore<'static, Key> {
         );
 
         self.gc.start_background_gc_task(
-            Arc::clone(&self.filters),
             Arc::clone(&self.key_range),
             Arc::clone(&self.read_only_memtables),
             Arc::clone(&self.gc_updated_entries),
@@ -141,7 +140,6 @@ impl DataStore<'static, Key> {
             .val_log
             .append(key.as_ref(), val.as_ref(), created_at, is_tombstone)
             .await?;
-
         let entry = Entry::new(key.as_ref().to_vec(), v_offset, created_at, is_tombstone);
         if self.active_memtable.is_full(HEAD_ENTRY_KEY.len()) {
             let capacity = self.active_memtable.capacity();
@@ -232,7 +230,7 @@ impl DataStore<'static, Key> {
                 }
                 return self.get_value_from_vlog(offset, most_recent_insert_time).await;
             } else {
-                // Step 3: Check sstables
+                // // Step 3: Check sstables
                 let key_range = &self.key_range.read().await;
                 let ssts = key_range.filter_sstables_by_biggest_key(key.as_ref()).await?;
                 if ssts.is_empty() {

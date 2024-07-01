@@ -129,11 +129,14 @@ impl ValueLog {
         let file = VLogFileNode::new(file_path.to_owned(), crate::fs::FileType::ValueLog)
             .await
             .unwrap();
+        // Get size from file in case of crash recovery
+        let size = file.node.size().await;
         Ok(Self {
             head_offset: 0,
             tail_offset: 0,
             content: VFile::new(file_path, file),
-            size: 0,
+            // IMPORTANT: cache vlog size in memory
+            size,
         })
     }
 
@@ -152,6 +155,7 @@ impl ValueLog {
             created_at,
             is_tombstone,
         );
+
         let serialized_data = v_log_entry.serialize();
         // Get the current offset before writing(this will be the offset of the value stored in the memtable)
         let last_offset = self.size;
@@ -224,7 +228,6 @@ impl ValueLogEntry {
 
     fn serialize(&self) -> Vec<u8> {
         let entry_len = SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + self.key.len() + self.value.len() + SIZE_OF_U8;
-
         let mut serialized_data = Vec::with_capacity(entry_len);
 
         serialized_data.extend_from_slice(&(self.key.len() as u32).to_le_bytes());

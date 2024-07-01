@@ -28,7 +28,6 @@ pub enum Error {
     #[error("Failed to open file")]
     FileOpenError { path: PathBuf, error: io::Error },
 
-
     #[error("Failed to get file metadata")]
     GetFileMetaDataError(#[source] std::io::Error),
 

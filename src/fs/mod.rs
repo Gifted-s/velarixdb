@@ -115,6 +115,15 @@ pub trait IndexFs: Send + Sync + Debug + Clone {
     async fn get_block_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<RangeOffset, Error>;
 }
 
+
+#[async_trait]
+pub trait SummaryFs: Send + Sync + Debug + Clone {
+    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<Self, Error>;
+
+    async fn recover<P: AsRef<Path> + Send + Sync>(path: P)
+        -> Result<(FalsePositive, NoHashFunc, NoOfElements), Error>;
+}
+
 #[derive(Debug, Clone)]
 pub struct FileNode {
     pub file_path: PathBuf,
@@ -466,7 +475,6 @@ impl VLogFs for VLogFileNode {
         if bytes_read == 0 {
             return Err(FileNode::unexpected_eof());
         }
-
         let mut value = vec![0; val_len as usize];
         bytes_read = load_buffer!(file, &mut value, path.to_owned())?;
         if bytes_read == 0 {
@@ -724,27 +732,36 @@ impl FilterFs for FilterFileNode {
         let mut file = FileNode::open(path.as_ref())
             .await
             .map_err(|_| return FilterFileOpenError(path.as_ref().to_owned()))?;
-
+        //removwe
+        file.seek(std::io::SeekFrom::Start((0) as u64))
+            .await
+            .map_err(|err| FileSeekError(err))?;
         let mut no_hash_func_bytes = [0; SIZE_OF_U32];
         let mut bytes_read = load_buffer!(file, &mut no_hash_func_bytes, path.as_ref().to_path_buf())?;
         if bytes_read == 0 {
             return Err(FileNode::unexpected_eof());
         }
         let no_of_hash_func = u32::from_le_bytes(no_hash_func_bytes);
-
+    //    println!("Size of hash funtion {}", no_of_hash_func);
         let mut no_of_elements_bytes = [0; SIZE_OF_U32];
         bytes_read = load_buffer!(file, &mut no_of_elements_bytes, path.as_ref().to_path_buf())?;
         if bytes_read == 0 {
             return Err(FileNode::unexpected_eof());
         }
         let no_of_elements = u32::from_le_bytes(no_of_elements_bytes);
+      //  println!("No of elements {}", no_of_elements);
 
-        let false_positive_rate_bytes = [0; SIZE_OF_U64];
+
+        let mut false_positive_rate_bytes = [0; SIZE_OF_U64];
+        bytes_read = load_buffer!(file, &mut false_positive_rate_bytes, path.as_ref().to_path_buf())?;
+        if bytes_read == 0 {
+            return Err(FileNode::unexpected_eof());
+        }
         let false_positive_rate = helpers::float_from_le_bytes(&false_positive_rate_bytes);
         if false_positive_rate == None {
             return Err(FileNode::unexpected_eof());
         }
-
+       // println!("False positiive {}", false_positive_rate.unwrap());
         return Ok((false_positive_rate.unwrap(), no_of_hash_func, no_of_elements));
     }
 }

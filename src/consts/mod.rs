@@ -1,4 +1,3 @@
-
 use crate::storage::SizeUnit;
 
 pub const KB: usize = 1024;
@@ -17,7 +16,11 @@ pub const BUCKET_DIRECTORY_PREFIX: &str = "bucket";
 
 pub const VLOG_FILE_NAME: &str = "val_log.bin";
 
-pub const FILTER_FILE_NAME: &str = "filter.db";
+pub const FILTER_FILE_NAME: &str = "filter";
+
+pub const DATA_FILE_NAME: &str = "data";
+
+pub const INDEX_FILE_NAME: &str = "index";
 
 pub const META_DIRECTORY_NAME: &str = "meta";
 
@@ -26,7 +29,7 @@ pub const TOMB_STONE_MARKER: &str = "*";
 /// TODO: Many lightweight computations here, benchmark against Lazy initialization
 
 /// 1KB
-pub static  GC_CHUNK_SIZE: usize =  SizeUnit::Kilobytes.to_bytes(1);
+pub static GC_CHUNK_SIZE: usize = SizeUnit::Kilobytes.to_bytes(1);
 
 /// 50KB
 pub const WRITE_BUFFER_SIZE: usize = SizeUnit::Kilobytes.to_bytes(50);
@@ -41,8 +44,7 @@ pub const DEFAULT_COMPACTION_INTERVAL: std::time::Duration = std::time::Duration
 pub const DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1000 * 60);
 
 /// 10 hours
-pub const DEFAULT_ONLINE_GC_INTERVAL: std::time::Duration =
-    std::time::Duration::from_millis(10 * 1000 * 60 * 60);
+pub const DEFAULT_ONLINE_GC_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10 * 1000 * 60 * 60);
 
 /// If entry TTL enabled, it is automatically deleted after 1 year
 pub const ENTRY_TTL: std::time::Duration = std::time::Duration::from_millis(365 * 86400000);

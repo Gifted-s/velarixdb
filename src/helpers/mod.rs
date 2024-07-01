@@ -33,11 +33,10 @@ pub fn float_from_le_bytes(bytes: &[u8]) -> Option<f64> {
         return None;
     }
 
-    // Convert the byte array to a u32 in little-endian order
+    // Convert the byte array to a u64 in little-endian order
     let bits: u64 = u64::from_le_bytes(bytes.try_into().unwrap());
 
-    // Convert the u32 bit representation back to f32
+    // Convert the u64 bit representation back to f32
     let float: f64 = f64::from_bits(bits);
-
     return Some(float);
 }

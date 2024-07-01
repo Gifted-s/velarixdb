@@ -152,7 +152,6 @@ impl Block {
 
     pub fn get_last_entry(&self) -> BlockEntry {
         return self.entries.last().unwrap().to_owned();
-       
     }
 
     #[cfg(test)]

@@ -4,6 +4,7 @@
 extern crate libc;
 extern crate nix;
 use crate::consts::{TAIL_ENTRY_KEY, TOMB_STONE_MARKER};
+use crate::err::Error;
 use crate::filter::BloomFilter;
 use crate::fs::{FileAsync, FileNode};
 use crate::index::Index;
@@ -11,7 +12,6 @@ use crate::memtable::{Entry, MemTable, SkipMapValue, K};
 use crate::types::{BloomFilterHandle, CreatedAt, ImmutableMemTable, Key, KeyRangeHandle, ValOffset, Value};
 use crate::vlog::{ValueLog, ValueLogEntry};
 use crate::{err, helpers};
-use crate::err::Error;
 use chrono::Utc;
 use crossbeam_skiplist::SkipMap;
 use err::Error::*;
@@ -75,7 +75,6 @@ impl GC {
     }
     pub fn start_background_gc_task(
         &self,
-        filters: BloomFilterHandle,
         key_range: KeyRangeHandle,
         read_only_memtables: ImmutableMemTable<Key>,
         gc_updated_entries: GCUpdatedEntries<Key>,
@@ -85,7 +84,6 @@ impl GC {
         let vlog = self.vlog.clone();
         let table_ref = Arc::clone(&memtable);
         let vlog_ref = Arc::clone(&vlog);
-        let filters_ref = Arc::clone(&filters);
         let key_range_ref = Arc::clone(&key_range);
         let read_only_memtables_ref = Arc::clone(&read_only_memtables);
         let gc_updated_entries_ref = Arc::clone(&gc_updated_entries);
@@ -96,7 +94,6 @@ impl GC {
                     &cfg,
                     Arc::clone(&table_ref),
                     Arc::clone(&vlog_ref),
-                    Arc::clone(&filters_ref),
                     Arc::clone(&key_range_ref),
                     Arc::clone(&read_only_memtables_ref),
                     Arc::clone(&gc_updated_entries_ref),
@@ -118,7 +115,6 @@ impl GC {
         cfg: &Config,
         memtable: GCTable,
         vlog: GCLog,
-        filters: BloomFilterHandle,
         key_range: KeyRangeHandle,
         read_only_memtables: ImmutableMemTable<Key>,
         gc_updated_entries: GCUpdatedEntries<Key>,
@@ -137,7 +133,6 @@ impl GC {
                     let valid_entries_ref = Arc::clone(&valid_entries);
                     let table_ref = Arc::clone(&memtable);
                     let vlog_ref = Arc::clone(&vlog);
-                    let filters_ref = Arc::clone(&filters);
                     let key_range_ref = Arc::clone(&key_range);
                     let read_only_memtables_ref = Arc::clone(&read_only_memtables);
 
@@ -145,7 +140,6 @@ impl GC {
                         let most_recent_value = GC::get(
                             std::str::from_utf8(&entry.key).unwrap(),
                             Arc::clone(&table_ref),
-                            Arc::clone(&filters_ref),
                             Arc::clone(&key_range_ref),
                             Arc::clone(&vlog_ref),
                             Arc::clone(&read_only_memtables_ref),
@@ -353,7 +347,6 @@ impl GC {
     pub async fn get<CustomKey: K>(
         key: CustomKey,
         memtable: GCTable,
-        filters: BloomFilterHandle,
         key_range: KeyRangeHandle,
         vlog: Arc<RwLock<ValueLog>>,
         read_only_memtables: ImmutableMemTable<Key>,

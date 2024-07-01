@@ -7,7 +7,6 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::tempdir;
-    use tokio::fs::{self};
     use tokio::sync::RwLock;
 
     fn setup() {
@@ -28,7 +27,7 @@ mod tests {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("store_test_2"));
         let store = DataStore::new(path.clone()).await.unwrap();
-        let workload_size = 15000;
+        let workload_size = 20000;
         let key_len = 5;
         let val_len = 5;
         let write_read_ratio = 0.5;
@@ -57,9 +56,9 @@ mod tests {
     #[tokio::test]
     async fn datastore_test_put_and_get() {
         setup();
-        let root = PathBuf::new();
-        let path = PathBuf::from(root.join("store_test_3"));
-        let store = DataStore::new(path.clone()).await.unwrap();
+        let root = tempdir().unwrap();
+        let path = PathBuf::from(root.path().join("store_test_3"));
+        let store = DataStore::new(path).await.unwrap();
         let workload_size = 20000;
         let key_len = 5;
         let val_len = 5;
@@ -160,7 +159,7 @@ mod tests {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("store_test_5"));
         let mut store = DataStore::new(path.clone()).await.unwrap();
-        let workload_size = 5000;
+        let workload_size = 10000;
         let key_len = 5;
         let val_len = 5;
         let write_read_ratio = 1.0;
@@ -232,7 +231,7 @@ mod tests {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("store_test_8"));
         let store = DataStore::new(path.clone()).await.unwrap();
-        let workload_size = 15000;
+        let workload_size = 20000;
         let key_len = 5;
         let val_len = 5;
         let write_read_ratio = 1.0;
@@ -292,7 +291,7 @@ mod tests {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("store_test_9"));
         let store = DataStore::new(path.clone()).await.unwrap();
-        let workload_size = 15000;
+        let workload_size = 20000;
         let key_len = 5;
         let val_len = 5;
         let write_read_ratio = 1.0;
@@ -325,7 +324,6 @@ mod tests {
         assert!(res.is_ok());
 
         let res = store_ref.read().await.get(key1).await;
-        println!("RESPONSE {:?}", res);
         assert!(res.is_ok());
         assert_eq!(res.unwrap().0, updated_value);
 
@@ -344,7 +342,7 @@ mod tests {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("store_test_10"));
         let store = DataStore::new(path.clone()).await.unwrap();
-        let workload_size = 15000;
+        let workload_size = 20000;
         let key_len = 5;
         let val_len = 5;
         let write_read_ratio = 1.0;
@@ -379,6 +377,5 @@ mod tests {
         let res = store_ref.read().await.get(key1).await;
         assert!(res.is_err());
         assert_eq!(Error::NotFoundInDB.to_string(), res.err().unwrap().to_string());
-        let _ = fs::remove_dir_all(path.clone()).await;
     }
 }

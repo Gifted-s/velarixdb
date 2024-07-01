@@ -139,7 +139,7 @@ pub async fn generate_ssts(number: u32) -> Vec<Table> {
                 path: sst_contructor[i as usize].index_path.to_owned(),
             },
             entries: Arc::new(SkipMap::default()),
-            filter: None
+            filter: None,
         })
     }
     return ssts;

@@ -43,21 +43,19 @@ impl Flusher {
         let biggest_key = table_lock.find_biggest_key()?;
         let smallest_key = table_lock.find_smallest_key()?;
         let mut bucket_lock = flush_data.bucket_map.write().await;
-        let sst = bucket_lock
+        let mut sst = bucket_lock
             .insert_to_appropriate_bucket(Arc::new(Box::new(table_lock.to_owned())))
             .await?;
         drop(table_lock);
         let data_file_path = sst.get_data_file_path().clone();
+        filter.set_sstable_path(data_file_path.to_owned());
+        flush_data.filters.write().await.push(filter.to_owned());
+        sst.filter = Some(filter.to_owned());
         flush_data
             .key_range
             .write()
             .await
-            .set(data_file_path.to_owned(), smallest_key, biggest_key, sst.clone());
-        filter.set_sstable_path(data_file_path);
-        flush_data.filters.write().await.push(filter.to_owned());
-
-        // TODO: sort bloom filter by hotness
-
+            .set(data_file_path, smallest_key, biggest_key, sst);
         Ok(())
     }
 

@@ -14,6 +14,7 @@ use crate::err::Error;
 use crate::err::Error::*;
 use crate::filter::BloomFilter;
 use crate::flush::Flusher;
+use crate::fs::FileAsync;
 use crate::gc::gc::GC;
 use crate::helpers;
 use crate::key_range::KeyRange;
@@ -41,7 +42,7 @@ impl DataStore<'static, Key> {
         meta: Meta,
     ) -> Result<DataStore<'static, Key>, Error> {
         let mut recovered_buckets: IndexMap<BucketID, Bucket> = IndexMap::new();
-        let mut filters: Vec<BloomFilter> = Vec::new();
+        let filters: Vec<BloomFilter> = Vec::new();
         let mut most_recent_head_timestamp = helpers::default_datetime();
         let mut most_recent_head_offset = 0;
         let mut most_recent_tail_timestamp = helpers::default_datetime();
@@ -264,6 +265,7 @@ impl DataStore<'static, Key> {
                         + e.key.len()           // Key Length
                         + e.value.len(); // Value Length
         }
+
         Ok((active_memtable, read_only_memtables))
     }
 

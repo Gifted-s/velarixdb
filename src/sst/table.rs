@@ -47,7 +47,7 @@ use std::{
 use crate::{
     block::Block,
     bucket::InsertableToBucket,
-    consts::{SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, SIZE_OF_USIZE},
+    consts::{DATA_FILE_NAME, INDEX_FILE_NAME, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, SIZE_OF_USIZE},
     err::Error,
     filter::BloomFilter,
     fs::{DataFileNode, DataFs, FileAsync, FileNode, IndexFileNode, IndexFs},
@@ -60,18 +60,12 @@ use crate::{
 use Error::*;
 
 #[derive(Debug, Clone)]
-pub struct DataFile<F>
-where
-    F: DataFs,
-{
+pub struct DataFile<F: DataFs> {
     pub(crate) file: F,
     pub(crate) path: PathBuf,
 }
 
-impl<F> DataFile<F>
-where
-    F: DataFs,
-{
+impl<F: DataFs> DataFile<F> {
     pub fn new<P: AsRef<Path> + Send + Sync>(path: P, file: F) -> Self {
         Self {
             path: path.as_ref().to_path_buf(),
@@ -159,8 +153,8 @@ impl Table {
     ) -> Result<(PathBuf, PathBuf, CreatedAt), Error> {
         let created_at = Utc::now();
         let _ = FileNode::create_dir_all(dir.as_ref()).await?;
-        let data_file_name = format!("data_{}_.db", created_at.timestamp_millis());
-        let index_file_name = format!("index_{}_.db", created_at.timestamp_millis());
+        let data_file_name = format!("{}.db", DATA_FILE_NAME);
+        let index_file_name = format!("{}.db", INDEX_FILE_NAME);
 
         let data_file_path = dir.as_ref().join(data_file_name);
         let index_file_path = dir.as_ref().join(index_file_name);

@@ -145,7 +145,9 @@ impl BucketMap {
     ) -> Result<Table, Error> {
         for (_, bucket) in self.buckets.iter() {
             if bucket.fits_into_bucket(table.clone()) {
-                return self.insert_to_bucket(bucket.to_owned(), table, InsertionType::Exisiting).await;
+                return self
+                    .insert_to_bucket(bucket.to_owned(), table, InsertionType::Exisiting)
+                    .await;
             }
         }
 
