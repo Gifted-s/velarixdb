@@ -140,6 +140,7 @@ pub async fn generate_ssts(number: u32) -> Vec<Table> {
             },
             entries: Arc::new(SkipMap::default()),
             filter: None,
+            summary: None,
         })
     }
     return ssts;

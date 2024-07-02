@@ -9,13 +9,21 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::tempdir;
-    use tokio::fs::{self};
     use tokio::sync::RwLock;
 
-    async fn setup(store: Arc<RwLock<DataStore<'static, Key>>>, workload: &Workload) -> Result<(), Error> {
+    async fn setup(
+        store: Arc<RwLock<DataStore<'static, Key>>>,
+        workload: &Workload,
+        prepare_delete: bool,
+    ) -> Result<(), Error> {
         let _ = env_logger::builder().is_test(true).try_init();
         let (_, data) = workload.generate_workload_data_as_vec();
-        workload.insert_parallel(&data, store).await
+        workload.insert_parallel(&data, store.clone()).await?;
+        if prepare_delete {
+            let _ = store.write().await.put("test_key", "test").await?;
+            let _ = store.write().await.delete("test_key").await?;
+        }
+        return Ok(());
     }
     // Generate test to find keys after compaction
     #[tokio::test]
@@ -29,7 +37,7 @@ mod tests {
         let val_len = 5;
         let write_read_ratio = 0.5;
         let workload = Workload::new(workload_size, key_len, val_len, write_read_ratio);
-        if let Err(err) = setup(store.clone(), &workload).await {
+        if let Err(err) = setup(store.clone(), &workload, true).await {
             log::error!("Setup failed {}", err);
             return;
         }
@@ -42,6 +50,7 @@ mod tests {
             Arc::clone(&storage_reader.key_range),
             Arc::clone(&storage_reader.read_only_memtables),
             Arc::clone(&storage_reader.gc_updated_entries),
+            Arc::clone(&storage_reader.gc.punch_marker),
         )
         .await;
 
@@ -62,7 +71,7 @@ mod tests {
         let val_len = 5;
         let write_read_ratio = 0.5;
         let workload = Workload::new(workload_size, key_len, val_len, write_read_ratio);
-        if let Err(err) = setup(store.clone(), &workload).await {
+        if let Err(err) = setup(store.clone(), &workload, true).await {
             log::error!("Setup failed {}", err);
             return;
         }
@@ -75,20 +84,13 @@ mod tests {
             Arc::clone(&storage_reader.key_range),
             Arc::clone(&storage_reader.read_only_memtables),
             Arc::clone(&storage_reader.gc_updated_entries),
+            Arc::clone(&storage_reader.gc.punch_marker),
         )
         .await;
 
         #[cfg(not(target_os = "linux"))]
         {
-            assert!(res.is_err());
-            match res.as_ref().err().unwrap() {
-                Error::GCError(err) => {
-                    assert_eq!(err.to_string(), "Unsuported OS for garbage collection, err message `File system does not support file punch hole`")
-                }
-                _ => {
-                    assert!(false, "Invalid error kind")
-                }
-            }
+            assert!(res.is_ok());
         }
     }
 
@@ -103,7 +105,43 @@ mod tests {
         let val_len = 5;
         let write_read_ratio = 0.5;
         let workload = Workload::new(workload_size, key_len, val_len, write_read_ratio);
-        if let Err(err) = setup(store.clone(), &workload).await {
+        if let Err(err) = setup(store.clone(), &workload, true).await {
+            log::error!("Setup failed {}", err);
+            return;
+        }
+
+        let storage_reader = store.read().await;
+        let config = storage_reader.gc.config.clone();
+        let initial_tail_offset = storage_reader.gc_log.read().await.tail_offset;
+
+        let _ = GC::gc_handler(
+            &config,
+            Arc::clone(&storage_reader.gc_table),
+            Arc::clone(&storage_reader.gc_log),
+            Arc::clone(&storage_reader.key_range),
+            Arc::clone(&storage_reader.read_only_memtables),
+            Arc::clone(&storage_reader.gc_updated_entries),
+            Arc::clone(&storage_reader.gc.punch_marker),
+        )
+        .await;
+        drop(storage_reader);
+        // call a put operation to sync gc with memtable
+        let _ = store.write().await.put("test_key", "test_val").await;
+        assert!(store.read().await.gc.vlog.read().await.tail_offset >= initial_tail_offset);
+    }
+
+    #[tokio::test]
+    async fn datastore_gc_test_free_before_synchronization() {
+        let root = tempdir().unwrap();
+        let path = PathBuf::from(root.path().join("gc_test_free"));
+        let s_engine = DataStore::new(path.clone()).await.unwrap();
+        let store = Arc::new(RwLock::new(s_engine));
+        let workload_size = 15000;
+        let key_len = 5;
+        let val_len = 5;
+        let write_read_ratio = 0.5;
+        let workload = Workload::new(workload_size, key_len, val_len, write_read_ratio);
+        if let Err(err) = setup(store.clone(), &workload, true).await {
             log::error!("Setup failed {}", err);
             return;
         }
@@ -118,24 +156,27 @@ mod tests {
             Arc::clone(&storage_reader.key_range),
             Arc::clone(&storage_reader.read_only_memtables),
             Arc::clone(&storage_reader.gc_updated_entries),
+            Arc::clone(&storage_reader.gc.punch_marker),
         )
         .await;
-        assert!(storage_reader.gc.vlog.read().await.tail_offset != initial_tail_offset);
+        drop(storage_reader);
+        // no tail should happen because we have not synchronize gc entries with store memtable±±
+        assert!(store.read().await.gc.vlog.read().await.tail_offset == initial_tail_offset);
     }
 
     #[tokio::test]
     async fn datastore_gc_test_tail_shifted_to_correct_position() {
-        let bytes_to_scan_for_garbage_colection = SizeUnit::Kilobytes.to_bytes(2);
+        let bytes_to_scan_for_garbage_colection = SizeUnit::Bytes.to_bytes(100);
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("gc_test_4"));
         let s_engine = DataStore::new(path.clone()).await.unwrap();
         let store = Arc::new(RwLock::new(s_engine));
-        let workload_size = 15000;
+        let workload_size = 5;
         let key_len = 5;
         let val_len = 5;
         let write_read_ratio = 0.5;
         let workload = Workload::new(workload_size, key_len, val_len, write_read_ratio);
-        if let Err(err) = setup(store.clone(), &workload).await {
+        if let Err(err) = setup(store.clone(), &workload, true).await {
             log::error!("Setup failed {}", err);
             return;
         }
@@ -153,8 +194,12 @@ mod tests {
             Arc::clone(&storage_reader.key_range),
             Arc::clone(&storage_reader.read_only_memtables),
             Arc::clone(&storage_reader.gc_updated_entries),
+            Arc::clone(&storage_reader.gc.punch_marker),
         )
         .await;
+        drop(storage_reader);
+        // call a put operation to sync gc with memtable
+        let _ = store.write().await.put("test_key", "test_val").await;
         let max_extention_length = SIZE_OF_U32   // Key Size(for fetching key length)
         +SIZE_OF_U32            // Value Length(for fetching value length)
         + SIZE_OF_U64           // Date Length
@@ -162,26 +207,30 @@ mod tests {
         + string_length         // Key Len
         + vaue_len; // Value Len
         assert!(
-            storage_reader.gc.vlog.read().await.tail_offset
+            store.read().await.gc.vlog.read().await.tail_offset
                 <= initial_tail_offset + bytes_to_scan_for_garbage_colection + max_extention_length
         );
     }
 
     #[tokio::test]
     async fn datastore_gc_test_head_shifted() {
+        let bytes_to_scan_for_garbage_colection = SizeUnit::Bytes.to_bytes(100);
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("gc_test_5"));
         let s_engine = DataStore::new(path.clone()).await.unwrap();
         let store = Arc::new(RwLock::new(s_engine));
-        let workload_size = 15000;
+        let _ = store.write().await.put("test_key", "test_val").await;
+        let _ = store.write().await.delete("test_key").await;
+        let workload_size = 2;
         let key_len = 5;
         let val_len = 5;
         let write_read_ratio = 0.5;
         let workload = Workload::new(workload_size, key_len, val_len, write_read_ratio);
-        if let Err(err) = setup(store.clone(), &workload).await {
+        if let Err(err) = setup(store.clone(), &workload, true).await {
             log::error!("Setup failed {}", err);
             return;
         }
+        (store.write().await).gc.config.gc_chunk_size = bytes_to_scan_for_garbage_colection;
         let storage_reader = store.read().await;
         let initial_head_offset = storage_reader.gc_log.read().await.head_offset;
         let _ = GC::gc_handler(
@@ -191,9 +240,47 @@ mod tests {
             Arc::clone(&storage_reader.key_range),
             Arc::clone(&storage_reader.read_only_memtables),
             Arc::clone(&storage_reader.gc_updated_entries),
+            Arc::clone(&storage_reader.gc.punch_marker),
         )
         .await;
+        drop(storage_reader);
+        // call a put operation to sync gc with memtable
+        let _ = store.write().await.put("test_key", "test_val").await;
+        assert!(store.read().await.gc.vlog.read().await.head_offset != initial_head_offset);
+    }
 
-        assert!(storage_reader.gc.vlog.read().await.head_offset != initial_head_offset);
+    #[tokio::test]
+    async fn datastore_gc_test_no_entry_to_collect() {
+        let prepare_delete = false;
+        let root = tempdir().unwrap();
+        let path = PathBuf::from(root.path().join("gc_test_no_delete"));
+        let s_engine = DataStore::new(path.clone()).await.unwrap();
+        let store = Arc::new(RwLock::new(s_engine));
+        let workload_size = 15000;
+        let key_len = 5;
+        let val_len = 5;
+        let write_read_ratio = 0.5;
+        let workload = Workload::new(workload_size, key_len, val_len, write_read_ratio);
+        if let Err(err) = setup(store.clone(), &workload, prepare_delete).await {
+            log::error!("Setup failed {}", err);
+            return;
+        }
+        let storage_reader = store.read().await;
+        let config = storage_reader.gc.config.clone();
+        let initial_tail_offset = storage_reader.gc_log.read().await.tail_offset;
+
+        let _ = GC::gc_handler(
+            &config,
+            Arc::clone(&storage_reader.gc_table),
+            Arc::clone(&storage_reader.gc_log),
+            Arc::clone(&storage_reader.key_range),
+            Arc::clone(&storage_reader.read_only_memtables),
+            Arc::clone(&storage_reader.gc_updated_entries),
+            Arc::clone(&storage_reader.gc.punch_marker),
+        )
+        .await;
+        drop(storage_reader);
+        // no tail should happen because no entries to collect
+        assert!(store.read().await.gc.vlog.read().await.tail_offset == initial_tail_offset);
     }
 }

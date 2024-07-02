@@ -84,7 +84,7 @@ use crate::{
     consts::{SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, VLOG_FILE_NAME},
     err::Error,
     fs::{FileAsync, FileNode, VLogFileNode, VLogFs},
-    types::{CreatedAt, IsTombStone, Value},
+    types::{ByteSerializedEntry, CreatedAt, IsTombStone, Value},
 };
 use std::path::{Path, PathBuf};
 type TotalBytesRead = usize;
@@ -124,6 +124,7 @@ pub struct ValueLogEntry {
 
 impl ValueLog {
     pub async fn new<P: AsRef<Path> + Send + Sync>(dir: P) -> Result<Self, Error> {
+        // will only create if directory does not exist
         FileNode::create_dir_all(dir.as_ref()).await?;
         let file_path = dir.as_ref().join(VLOG_FILE_NAME);
         let file = VLogFileNode::new(file_path.to_owned(), crate::fs::FileType::ValueLog)
@@ -226,7 +227,7 @@ impl ValueLogEntry {
         }
     }
 
-    fn serialize(&self) -> Vec<u8> {
+    fn serialize(&self) -> ByteSerializedEntry {
         let entry_len = SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + self.key.len() + self.value.len() + SIZE_OF_U8;
         let mut serialized_data = Vec::with_capacity(entry_len);
 

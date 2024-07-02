@@ -68,7 +68,7 @@ use crate::{
     consts::{SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8},
     err::{self, Error},
     fs::{FileAsync, FileNode},
-    types::Key,
+    types::{ByteSerializedEntry, Key},
 };
 type BytesWritten = usize;
 const BLOCK_SIZE: usize = 4 * 1024; // 4KB
@@ -163,13 +163,17 @@ impl Block {
     /// Serializes the entries in the block as a byte vector
     ///
     /// Returns `Ok(entry_vec)`or Error if not
-    pub(crate) fn serialize(&self, entry: &BlockEntry) -> Result<Key, Error> {
+    pub(crate) fn serialize(&self, entry: &BlockEntry) -> Result<ByteSerializedEntry, Error> {
         let entry_len = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
         let mut entry_vec = Vec::with_capacity(entry_len);
         entry_vec.extend_from_slice(&(entry.key_prefix).to_le_bytes());
+
         entry_vec.extend_from_slice(&entry.key);
+
         entry_vec.extend_from_slice(&(entry.value_offset as u32).to_le_bytes());
+
         entry_vec.extend_from_slice(&entry.creation_date.timestamp_millis().to_le_bytes());
+
         entry_vec.push(entry.is_tombstone as u8);
         if entry_len != entry_vec.len() {
             return Err(SerializationError("Invalid input"));

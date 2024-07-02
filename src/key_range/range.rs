@@ -13,8 +13,8 @@ use std::{
     sync::Arc,
 };
 
-type LargestKey = types::Key;
-type SmallestKey = types::Key;
+pub type BiggestKey = types::Key;
+pub type SmallestKey = types::Key;
 #[derive(Clone, Debug)]
 pub struct KeyRange {
     pub key_ranges: HashMap<PathBuf, Range>,
@@ -24,7 +24,7 @@ pub struct KeyRange {
 #[derive(Clone, Debug)]
 pub struct Range {
     pub smallest_key: SmallestKey,
-    pub biggest_key: LargestKey,
+    pub biggest_key: BiggestKey,
     pub sst: Table,
 }
 impl Range {
@@ -87,7 +87,6 @@ impl KeyRange {
                 if let None = range.sst.filter.as_ref().unwrap().sst_dir {
                     let mut mut_range = range.to_owned();
                     let mut filter = mut_range.sst.filter.as_ref().unwrap().to_owned();
-
                     filter.recover_meta().await?;
                     filter.sst_dir = Some(mut_range.sst.dir.to_owned());
 

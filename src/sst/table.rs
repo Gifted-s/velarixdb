@@ -47,14 +47,15 @@ use std::{
 use crate::{
     block::Block,
     bucket::InsertableToBucket,
-    consts::{DATA_FILE_NAME, INDEX_FILE_NAME, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, SIZE_OF_USIZE},
+    consts::{DATA_FILE_NAME, INDEX_FILE_NAME, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, SIZE_OF_USIZE, SUMMARY_FILE_NAME},
     err::Error,
     filter::BloomFilter,
-    fs::{DataFileNode, DataFs, FileAsync, FileNode, IndexFileNode, IndexFs},
+    fs::{DataFileNode, DataFs, FileAsync, FileNode, IndexFileNode, IndexFs, SummaryFileNode, SummaryFs},
     helpers,
     index::{Index, IndexFile, RangeOffset},
+    key_range::{BiggestKey, SmallestKey},
     memtable::{Entry, SkipMapValue},
-    types::{CreatedAt, IsTombStone, Key, SkipMapEntries, ValOffset},
+    types::{ByteSerializedEntry, CreatedAt, IsTombStone, Key, SkipMapEntries, ValOffset},
 };
 
 use Error::*;
@@ -84,6 +85,7 @@ pub struct Table {
     pub(crate) index_file: IndexFile<IndexFileNode>,
     pub(crate) entries: SkipMapEntries<Key>,
     pub(crate) filter: Option<BloomFilter>,
+    pub(crate) summary: Option<Summary>,
 }
 
 impl InsertableToBucket for Table {
@@ -100,7 +102,7 @@ impl InsertableToBucket for Table {
     }
 
     fn find_biggest_key(&self) -> Result<Key, Error> {
-        let largest_entry = self.entries.iter().next_back();
+        let largest_entry = self.entries.back();
         match largest_entry {
             Some(e) => Ok(e.key().to_vec()),
             None => Err(BiggestKeyIndexError),
@@ -108,7 +110,7 @@ impl InsertableToBucket for Table {
     }
 
     fn find_smallest_key(&self) -> Result<Key, Error> {
-        let largest_entry = self.entries.iter().next();
+        let largest_entry = self.entries.front();
         match largest_entry {
             Some(e) => Ok(e.key().to_vec()),
             None => Err(LowestKeyIndexError),
@@ -135,6 +137,7 @@ impl Table {
             entries: Arc::new(SkipMap::new()),
             size: 0,
             filter: None,
+            summary: None,
         })
     }
     pub fn increase_hotness(&mut self) {
@@ -184,6 +187,7 @@ impl Table {
             data_file: self.data_file.to_owned(),
             index_file: self.index_file.to_owned(),
             filter: self.filter.to_owned(),
+            summary: self.summary.to_owned(),
         })
     }
 
@@ -211,6 +215,7 @@ impl Table {
             size: 0,
             entries: Arc::new(SkipMap::new()),
             filter: None,
+            summary: None,
         };
         table.size = table.data_file.file.node.size().await;
         let modified_time = table.data_file.file.node.metadata().await.unwrap().modified().unwrap();
@@ -224,13 +229,33 @@ impl Table {
         if self.filter.is_none() {
             return Err(FilterNotProvidedForFlush);
         }
+        if self.entries.is_empty() {
+            return Err(EntriesCannotBeEmptyDuringFlush);
+        }
         let index_file = &self.index_file;
         let mut blocks: Vec<Block> = Vec::new();
         let mut table_index = Index::new(self.index_file.path.clone(), index_file.file.clone());
+        let mut summary = Summary::new(self.dir.to_owned());
+
+        let biggest_key = self.entries.back();
+        let smallest_key = self.entries.front();
+
+        summary.smallest_key = smallest_key.unwrap().key().to_vec();
+        summary.biggest_key = biggest_key.unwrap().key().to_vec();
+
+        // write summary to disk
+        summary.write_to_file().await?;
+        self.summary = Some(summary);
+
+        // write filter to disk
+        self.filter.as_mut().unwrap().write(self.dir.to_owned()).await?;
+
+        // write data blocks
         let mut current_block = Block::new();
         if self.size > 0 {
             self.reset_size();
         }
+
         for e in self.entries.iter() {
             let entry = Entry::new(
                 e.key(),
@@ -262,7 +287,7 @@ impl Table {
         if current_block.entries.len() > 0 {
             self.write_block(&current_block, &mut table_index).await?;
         }
-        self.filter.as_mut().unwrap().write(self.dir.to_owned()).await?;
+
         table_index.write_to_file().await?;
         Ok(())
     }
@@ -314,5 +339,54 @@ impl Table {
             .iter()
             .map(|e| e.key().len() + SIZE_OF_USIZE + SIZE_OF_U64 + SIZE_OF_U8)
             .sum::<usize>();
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Summary {
+    pub path: PathBuf,
+    pub smallest_key: SmallestKey,
+    pub biggest_key: BiggestKey,
+}
+
+impl Summary {
+    pub fn new<P: AsRef<Path> + Send + Sync>(path: P) -> Self {
+        let file_path = path.as_ref().join(format!("{}.db", SUMMARY_FILE_NAME));
+        Self {
+            path: file_path,
+            biggest_key: vec![],
+            smallest_key: vec![],
+        }
+    }
+
+    pub async fn write_to_file(&mut self) -> Result<(), Error> {
+        let file = SummaryFileNode::new(self.path.to_owned(), crate::fs::FileType::Summary)
+            .await
+            .unwrap();
+        let serialized_data = self.serialize();
+        file.node.write_all(&serialized_data).await?;
+        return Ok(());
+    }
+
+    pub async fn recover(&mut self) -> Result<(), Error> {
+        let (smallest_key, biggest_key) = SummaryFileNode::recover(self.path.to_owned()).await?;
+        self.smallest_key = smallest_key;
+        self.biggest_key = biggest_key;
+        return Ok(());
+    }
+
+    fn serialize(&self) -> ByteSerializedEntry {
+        let entry_len = SIZE_OF_U32 + SIZE_OF_U32 + self.biggest_key.len() + self.smallest_key.len();
+        let mut serialized_data = Vec::with_capacity(entry_len);
+
+        serialized_data.extend_from_slice(&(self.smallest_key.len() as u32).to_le_bytes());
+
+        serialized_data.extend_from_slice(&(self.biggest_key.len() as u32).to_le_bytes());
+
+        serialized_data.extend_from_slice(&self.smallest_key);
+
+        serialized_data.extend_from_slice(&self.biggest_key);
+
+        serialized_data
     }
 }

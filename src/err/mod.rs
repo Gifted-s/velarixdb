@@ -34,6 +34,9 @@ pub enum Error {
     #[error("Failed to create directory")]
     DirCreationError { path: PathBuf, error: io::Error },
 
+    #[error("Failed to clear file: `{path}`: {error}")]
+    FileClearError { path: PathBuf, error: io::Error },
+
     #[error("Failed to read file `{path}`: {error}")]
     FileReadError { path: PathBuf, error: io::Error },
 
@@ -45,6 +48,9 @@ pub enum Error {
 
     #[error("File read ended unexpectedly")]
     UnexpectedEOF(#[source] io::Error),
+
+    #[error("GC error attempting to remove unsynced entries from disk")]
+    GCErrorAttemptToRemoveUnsyncedEntries,
 
     #[error("Failed to insert sstable to bucket because no insertion condition was met")]
     ConditionsToInsertToBucketNotMetError,
@@ -115,6 +121,9 @@ pub enum Error {
     #[error("Error finding lowest key in memtable (None was returned)")]
     LowestKeyIndexError,
 
+    #[error("SSTable summary field is None")]
+    TableSummaryIsNoneError,
+
     #[error("All bloom filters return false for all sstables")]
     KeyNotFoundByAnyBloomFilterError,
 
@@ -162,4 +171,7 @@ pub enum Error {
 
     #[error("Tokio join tasks error")]
     TokioJoinError,
+
+    #[error("Entries cannot be empty during flush")]
+    EntriesCannotBeEmptyDuringFlush,
 }

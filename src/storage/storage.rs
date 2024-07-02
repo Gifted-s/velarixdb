@@ -21,6 +21,7 @@ use crate::types::{
 };
 use crate::vlog::ValueLog;
 use chrono::Utc;
+use futures::lock::Mutex;
 use indexmap::IndexMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -110,28 +111,16 @@ impl DataStore<'static, Key> {
             Arc::clone(&self.key_range),
         );
 
-        self.gc.start_background_gc_task(
-            Arc::clone(&self.key_range),
-            Arc::clone(&self.read_only_memtables),
-            Arc::clone(&self.gc_updated_entries),
-        );
+        self.gc
+            .start_background_gc_task(Arc::clone(&self.key_range), Arc::clone(&self.read_only_memtables));
     }
 
     pub async fn put<K: AsRef<[u8]>, V: AsRef<[u8]>>(&mut self, key: K, val: V) -> Result<Bool, Error> {
-        let gc_entries_reader = self.gc_updated_entries.read().await;
-        if !gc_entries_reader.is_empty() {
-            for e in gc_entries_reader.iter() {
-                self.active_memtable.insert(&Entry::new(
-                    e.key().to_vec(),
-                    e.value().val_offset,
-                    e.value().created_at,
-                    e.value().is_tombstone,
-                ))?;
+        if !self.gc_updated_entries.read().await.is_empty() {
+            if let Err(err) = self.sync_gc_update_with_store().await {
+                log::error!("{}", err)
             }
-            gc_entries_reader.clear();
         }
-
-        drop(gc_entries_reader);
         // This ensures that sstables in key range map whose filter is newly loaded(after crash) are mapped to the sstable
         self.key_range.write().await.update_key_range().await;
         let is_tombstone = std::str::from_utf8(val.as_ref()).unwrap() == TOMB_STONE_MARKER;
@@ -142,13 +131,15 @@ impl DataStore<'static, Key> {
             .await?;
         let entry = Entry::new(key.as_ref().to_vec(), v_offset, created_at, is_tombstone);
         if self.active_memtable.is_full(HEAD_ENTRY_KEY.len()) {
-            let capacity = self.active_memtable.capacity();
-            let size_unit = self.active_memtable.size_unit();
-            let false_pos = self.active_memtable.false_positive_rate();
-            let head_offset = self.active_memtable.most_recent_entry.val_offset;
-
+            let head_offset = self.active_memtable.get_most_recent_offset();
             // reset head in vLog
             self.val_log.set_head(head_offset as usize);
+            self.meta.v_log_head = head_offset;
+            let gc_log = Arc::clone(&self.gc_log);
+            tokio::spawn(async move {
+                (gc_log.write().await).head_offset = head_offset;
+            });
+
             let head_entry = Entry::new(HEAD_ENTRY_KEY.to_vec(), head_offset, Utc::now(), false);
             self.active_memtable.insert(&head_entry)?;
             self.active_memtable.read_only = true;
@@ -172,16 +163,51 @@ impl DataStore<'static, Key> {
                         flusher.flush_handler(id, table_inner, tx);
                     });
                 }
+                self.update_meta_background();
             }
-            self.active_memtable = MemTable::with_specified_capacity_and_rate(size_unit, capacity, false_pos);
+            let capacity = self.active_memtable.capacity();
+            let size_unit = self.active_memtable.size_unit();
+            let false_positive_rate = self.active_memtable.false_positive_rate();
+            self.active_memtable = MemTable::with_specified_capacity_and_rate(size_unit, capacity, false_positive_rate);
             self.gc_table = Arc::new(RwLock::new(MemTable::with_specified_capacity_and_rate(
-                size_unit, capacity, false_pos,
+                size_unit,
+                capacity,
+                false_positive_rate,
             )));
         }
         self.active_memtable.insert(&entry)?;
         let gc_table = Arc::clone(&self.gc_table);
         tokio::spawn(async move { gc_table.write().await.insert(&entry) });
         Ok(true)
+    }
+
+    pub async fn sync_gc_update_with_store(&mut self) -> Result<(), Error> {
+        let gc_entries_reader = self.gc_updated_entries.read().await;
+        for e in gc_entries_reader.iter() {
+            self.active_memtable.insert(&Entry::new(
+                e.key().to_vec(),
+                e.value().val_offset,
+                e.value().created_at,
+                e.value().is_tombstone,
+            ))?;
+        }
+        gc_entries_reader.clear();
+        let (updated_head, updated_tail) = self.gc.free_unused_space().await?;
+        self.meta.v_log_head = updated_head;
+        self.meta.v_log_tail = updated_tail;
+        self.meta.last_modified = Utc::now();
+        self.val_log.head_offset = updated_head;
+        self.val_log.tail_offset = updated_tail;
+        return Ok(());
+    }
+
+    pub fn update_meta_background(&self) {
+        let meta = Arc::new(Mutex::new(self.meta.to_owned()));
+        tokio::spawn(async move {
+            if let Err(err) = meta.lock().await.write().await {
+                log::error!("{}", err)
+            }
+        });
     }
 
     pub async fn delete<T: AsRef<[u8]>>(&mut self, key: T) -> Result<bool, Error> {
@@ -341,7 +367,7 @@ impl DataStore<'static, Key> {
         let vlog_empty = !vlog_exit || fs::metadata(vlog_path).await.map_err(GetFileMetaDataError)?.len() == 0;
         let key_range = KeyRange::new();
         let vlog = ValueLog::new(vlog_path).await?;
-        let meta = Meta::new(&dir.meta);
+        let meta = Meta::new(&dir.meta).await?;
         if vlog_empty {
             return DataStore::handle_empty_vlog(dir, buckets_path, vlog, key_range, &config, size_unit, meta).await;
         }

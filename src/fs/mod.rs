@@ -4,9 +4,13 @@ use crate::{
     filter::{BloomFilter, FalsePositive, NoHashFunc, NoOfElements},
     helpers,
     index::RangeOffset,
+    key_range::{BiggestKey, SmallestKey},
     load_buffer,
     memtable::{Entry, SkipMapValue},
-    types::{CreatedAt, IsTombStone, Key, NoBytesRead, SkipMapEntries, ValOffset, Value},
+    meta::{self, Meta},
+    types::{
+        CreatedAt, IsTombStone, Key, LastModified, NoBytesRead, SkipMapEntries, VLogHead, VLogTail, ValOffset, Value,
+    },
     vlog::ValueLogEntry,
 };
 use async_trait::async_trait;
@@ -29,6 +33,8 @@ pub enum FileType {
     Data,
     ValueLog,
     Filter,
+    Meta,
+    Summary,
 }
 pub type Buf = [u8];
 pub type RGuard<'a, T> = RwLockReadGuard<'a, T>;
@@ -53,6 +59,8 @@ pub trait FileAsync: Send + Sync + Debug + Clone {
     async fn flush(&self) -> Result<(), Error>;
 
     async fn seek(&self, start_offset: u64) -> Result<u64, Error>;
+
+    async fn clear(&self) -> Result<(), Error>;
 
     async fn remove_dir_all(&self) -> Result<(), Error>;
 
@@ -115,13 +123,20 @@ pub trait IndexFs: Send + Sync + Debug + Clone {
     async fn get_block_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<RangeOffset, Error>;
 }
 
-
 #[async_trait]
 pub trait SummaryFs: Send + Sync + Debug + Clone {
     async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<Self, Error>;
 
-    async fn recover<P: AsRef<Path> + Send + Sync>(path: P)
-        -> Result<(FalsePositive, NoHashFunc, NoOfElements), Error>;
+    async fn recover<P: AsRef<Path> + Send + Sync>(path: P) -> Result<(SmallestKey, BiggestKey), Error>;
+}
+
+#[async_trait]
+pub trait MetaFs: Send + Sync + Debug + Clone {
+    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<Self, Error>;
+
+    async fn recover<P: AsRef<Path> + Send + Sync>(
+        path: P,
+    ) -> Result<(VLogHead, VLogTail, CreatedAt, LastModified), Error>;
 }
 
 #[derive(Debug, Clone)]
@@ -191,6 +206,14 @@ impl FileAsync for FileNode {
     async fn write_all(&self, mut buf: &Buf) -> Result<(), Error> {
         let mut file = self.w_lock().await;
         Ok(file.write_all(&mut buf).await.map_err(|err| FileWriteError {
+            path: self.file_path.clone(),
+            error: err,
+        })?)
+    }
+
+    async fn clear(&self) -> Result<(), Error> {
+        let file = self.w_lock().await;
+        Ok(file.set_len(0).await.map_err(|err| FileClearError {
             path: self.file_path.clone(),
             error: err,
         })?)
@@ -577,8 +600,8 @@ impl VLogFs for VLogFileNode {
             if bytes_read == 0 {
                 return Err(FileNode::unexpected_eof());
             }
-
             let created_at = u64::from_le_bytes(creation_date_bytes);
+
             let mut istombstone_bytes = [0; SIZE_OF_U8];
             let mut bytes_read = load_buffer!(file, &mut istombstone_bytes, path.to_owned())?;
             total_bytes_read += bytes_read;
@@ -732,25 +755,19 @@ impl FilterFs for FilterFileNode {
         let mut file = FileNode::open(path.as_ref())
             .await
             .map_err(|_| return FilterFileOpenError(path.as_ref().to_owned()))?;
-        //removwe
-        file.seek(std::io::SeekFrom::Start((0) as u64))
-            .await
-            .map_err(|err| FileSeekError(err))?;
         let mut no_hash_func_bytes = [0; SIZE_OF_U32];
         let mut bytes_read = load_buffer!(file, &mut no_hash_func_bytes, path.as_ref().to_path_buf())?;
         if bytes_read == 0 {
             return Err(FileNode::unexpected_eof());
         }
         let no_of_hash_func = u32::from_le_bytes(no_hash_func_bytes);
-    //    println!("Size of hash funtion {}", no_of_hash_func);
+
         let mut no_of_elements_bytes = [0; SIZE_OF_U32];
         bytes_read = load_buffer!(file, &mut no_of_elements_bytes, path.as_ref().to_path_buf())?;
         if bytes_read == 0 {
             return Err(FileNode::unexpected_eof());
         }
         let no_of_elements = u32::from_le_bytes(no_of_elements_bytes);
-      //  println!("No of elements {}", no_of_elements);
-
 
         let mut false_positive_rate_bytes = [0; SIZE_OF_U64];
         bytes_read = load_buffer!(file, &mut false_positive_rate_bytes, path.as_ref().to_path_buf())?;
@@ -761,10 +778,108 @@ impl FilterFs for FilterFileNode {
         if false_positive_rate == None {
             return Err(FileNode::unexpected_eof());
         }
-       // println!("False positiive {}", false_positive_rate.unwrap());
         return Ok((false_positive_rate.unwrap(), no_of_hash_func, no_of_elements));
     }
 }
+
+#[derive(Debug, Clone)]
+pub struct MetaFileNode {
+    pub node: FileNode,
+}
+
+#[async_trait]
+impl MetaFs for MetaFileNode {
+    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<MetaFileNode, Error> {
+        let node = FileNode::new(path, file_type).await?;
+        Ok(MetaFileNode { node })
+    }
+    async fn recover<P: AsRef<Path> + Send + Sync>(
+        path: P,
+    ) -> Result<(VLogHead, VLogTail, CreatedAt, LastModified), Error> {
+        let mut file = FileNode::open(path.as_ref())
+            .await
+            .map_err(|_| return FilterFileOpenError(path.as_ref().to_owned()))?;
+        let mut head_offset_bytes = [0; SIZE_OF_U32];
+        let mut bytes_read = load_buffer!(file, &mut head_offset_bytes, path.as_ref().to_path_buf())?;
+        if bytes_read == 0 {
+            return Err(FileNode::unexpected_eof());
+        }
+        let head_offset = u32::from_le_bytes(head_offset_bytes);
+
+        let mut tail_offset_bytes = [0; SIZE_OF_U32];
+        bytes_read = load_buffer!(file, &mut tail_offset_bytes, path.as_ref().to_path_buf())?;
+        if bytes_read == 0 {
+            return Err(FileNode::unexpected_eof());
+        }
+        let tail_offset = u32::from_le_bytes(tail_offset_bytes);
+
+        let mut creation_date_bytes = [0; SIZE_OF_U64];
+        bytes_read = load_buffer!(file, &mut creation_date_bytes, path.as_ref().to_owned())?;
+        if bytes_read == 0 {
+            return Err(FileNode::unexpected_eof());
+        }
+        let created_at = u64::from_le_bytes(creation_date_bytes);
+
+        let mut last_modified_date_bytes = [0; SIZE_OF_U64];
+        bytes_read = load_buffer!(file, &mut last_modified_date_bytes, path.as_ref().to_owned())?;
+        if bytes_read == 0 {
+            return Err(FileNode::unexpected_eof());
+        }
+        let last_modified = u64::from_le_bytes(last_modified_date_bytes);
+
+        return Ok((
+            head_offset as usize,
+            tail_offset as usize,
+            helpers::milliseconds_to_datetime(created_at),
+            helpers::milliseconds_to_datetime(last_modified),
+        ));
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SummaryFileNode {
+    pub node: FileNode,
+}
+
+#[async_trait]
+impl SummaryFs for SummaryFileNode {
+    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<SummaryFileNode, Error> {
+        let node = FileNode::new(path, file_type).await?;
+        Ok(SummaryFileNode { node })
+    }
+    async fn recover<P: AsRef<Path> + Send + Sync>(path: P) -> Result<(SmallestKey, BiggestKey), Error> {
+        let mut file = FileNode::open(path.as_ref())
+            .await
+            .map_err(|_| return FilterFileOpenError(path.as_ref().to_owned()))?;
+        let mut smallest_key_len_bytes = [0; SIZE_OF_U32];
+        let mut bytes_read = load_buffer!(file, &mut smallest_key_len_bytes, path.as_ref().to_owned())?;
+        if bytes_read == 0 {
+            return Err(FileNode::unexpected_eof());
+        }
+        let smallest_key_len = u32::from_le_bytes(smallest_key_len_bytes);
+
+        let mut biggest_key_len_bytes = [0; SIZE_OF_U32];
+        bytes_read = load_buffer!(file, &mut biggest_key_len_bytes, path.as_ref().to_owned())?;
+        if bytes_read == 0 {
+            return Err(FileNode::unexpected_eof());
+        }
+        let biggest_key_len = u32::from_le_bytes(biggest_key_len_bytes);
+
+        let mut smallest_key = vec![0; smallest_key_len as usize];
+        bytes_read = load_buffer!(file, &mut smallest_key, path.as_ref().to_owned())?;
+        if bytes_read == 0 {
+            return Err(FileNode::unexpected_eof());
+        }
+        let mut biggest_key = vec![0; biggest_key_len as usize];
+        bytes_read = load_buffer!(file, &mut biggest_key, path.as_ref().to_owned())?;
+        if bytes_read == 0 {
+            return Err(FileNode::unexpected_eof());
+        }
+
+        return Ok((smallest_key, biggest_key));
+    }
+}
+
 impl FileNode {
     fn unexpected_eof() -> Error {
         return UnexpectedEOF(io::Error::new(io::ErrorKind::UnexpectedEof, EOF));

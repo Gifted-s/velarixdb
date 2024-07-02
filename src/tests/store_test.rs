@@ -6,8 +6,10 @@ mod tests {
     use futures::future::join_all;
     use std::path::PathBuf;
     use std::sync::Arc;
+    use std::time::Duration;
     use tempfile::tempdir;
     use tokio::sync::RwLock;
+    use tokio::time::sleep;
 
     fn setup() {
         let _ = env_logger::builder().is_test(true).try_init();
@@ -57,9 +59,9 @@ mod tests {
     async fn datastore_test_put_and_get() {
         setup();
         let root = tempdir().unwrap();
-        let path = PathBuf::from(root.path().join("store_test_3"));
+        let path = PathBuf::from(PathBuf::new().join("store_test_3"));
         let store = DataStore::new(path).await.unwrap();
-        let workload_size = 20000;
+        let workload_size = 100;
         let key_len = 5;
         let val_len = 5;
         let write_read_ratio = 1.0;

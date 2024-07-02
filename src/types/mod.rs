@@ -20,8 +20,11 @@ pub type Value = Vec<u8>;
 /// Represents the offset of a value
 pub type ValOffset = usize;
 
-/// Represents the creation time of an entry
+/// Represents the creation time of an entity
 pub type CreatedAt = DateTime<Utc>;
+
+// Represents when an entity was last modified
+pub type LastModified = DateTime<Utc>;
 
 /// Represents a tombstone marker (true if entry is deleted)
 pub type IsTombStone = bool;
@@ -61,3 +64,12 @@ pub type DBName<'a> = &'a str;
 
 /// Represents updated entries in a SkipMap after garbage collection, with a generic key type
 pub type GCUpdatedEntries<K> = Arc<RwLock<SkipMap<K, SkipMapValue<ValOffset>>>>;
+
+/// Represents value log head offset
+pub type VLogHead = usize;
+
+/// Represents value log tail offset
+pub type VLogTail = usize;
+
+/// Represents entry encoded as bytes
+pub type ByteSerializedEntry = Vec<u8>;

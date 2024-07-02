@@ -86,21 +86,19 @@ impl<'a> SizedTierRunner<'a> {
                                 merged_sst.filter.set_sstable_path(data_file_path.to_owned());
                                 // Step 5: Store Filter in Filters Vec
                                 filters.write().await.push(merged_sst.filter.to_owned());
-                                let biggest_key = merged_sst.sstable.find_biggest_key()?;
-                                let smallest_key = merged_sst.sstable.find_smallest_key()?;
-                                if biggest_key.is_empty() {
-                                    return Err(BiggestKeyIndexError);
+                                if sst.summary.is_none() {
+                                    return Err(TableSummaryIsNoneError);
                                 }
-                                if smallest_key.is_empty() {
-                                    return Err(LowestKeyIndexError);
-                                }
+                                let summary = sst.summary.clone().unwrap();
                                 // merged filter is now mapped to  new sst path therefore update sst filter
                                 // TODO: updazte should happen in write method
-                                sst.filter= Some(merged_sst.filter);
-                                key_range
-                                    .write()
-                                    .await
-                                    .set(data_file_path, smallest_key, biggest_key, sst);
+                                sst.filter = Some(merged_sst.filter);
+                                key_range.write().await.set(
+                                    data_file_path,
+                                    summary.smallest_key,
+                                    summary.biggest_key,
+                                    sst,
+                                );
                                 tracker.actual += 1;
                             }
                             Err(err) => {

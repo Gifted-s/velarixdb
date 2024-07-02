@@ -1,6 +1,7 @@
 use crate::bucket::bucket::InsertableToBucket;
 use crate::consts::FLUSH_SIGNAL;
 use crate::flush::flusher::Error::FlushError;
+use crate::flush::flusher::Error::TableSummaryIsNoneError;
 use crate::types::{self, BloomFilterHandle, BucketMapHandle, FlushSignal, ImmutableMemTable, KeyRangeHandle};
 use crate::{err::Error, memtable::MemTable};
 use std::sync::Arc;
@@ -40,8 +41,6 @@ impl Flusher {
         }
 
         let filter = &mut table_lock.bloom_filter.to_owned();
-        let biggest_key = table_lock.find_biggest_key()?;
-        let smallest_key = table_lock.find_smallest_key()?;
         let mut bucket_lock = flush_data.bucket_map.write().await;
         let mut sst = bucket_lock
             .insert_to_appropriate_bucket(Arc::new(Box::new(table_lock.to_owned())))
@@ -51,11 +50,16 @@ impl Flusher {
         filter.set_sstable_path(data_file_path.to_owned());
         flush_data.filters.write().await.push(filter.to_owned());
         sst.filter = Some(filter.to_owned());
+        // TODO: drop entries
+        if sst.summary.is_none() {
+            return Err(TableSummaryIsNoneError);
+        }
+        let summary = sst.summary.clone().unwrap();
         flush_data
             .key_range
             .write()
             .await
-            .set(data_file_path, smallest_key, biggest_key, sst);
+            .set(data_file_path, summary.smallest_key, summary.biggest_key, sst);
         Ok(())
     }
 

@@ -20,6 +20,10 @@ pub const FILTER_FILE_NAME: &str = "filter";
 
 pub const DATA_FILE_NAME: &str = "data";
 
+pub const META_FILE_NAME: &str = "meta";
+
+pub const SUMMARY_FILE_NAME: &str = "summary";
+
 pub const INDEX_FILE_NAME: &str = "index";
 
 pub const META_DIRECTORY_NAME: &str = "meta";

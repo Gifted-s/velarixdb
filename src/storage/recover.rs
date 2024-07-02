@@ -14,7 +14,6 @@ use crate::err::Error;
 use crate::err::Error::*;
 use crate::filter::BloomFilter;
 use crate::flush::Flusher;
-use crate::fs::FileAsync;
 use crate::gc::gc::GC;
 use crate::helpers;
 use crate::key_range::KeyRange;
@@ -187,6 +186,7 @@ impl DataStore<'static, Key> {
                     filters.clone(),
                     key_range.clone(),
                 );
+                let gc_updated_entries = Arc::new(RwLock::new(SkipMap::new()));
                 Ok(DataStore {
                     active_memtable: active_memtable.to_owned(),
                     val_log: vlog,
@@ -213,6 +213,7 @@ impl DataStore<'static, Key> {
                         config.gc_chunk_size,
                         gc_table.clone(),
                         gc_log.clone(),
+                        gc_updated_entries.clone(),
                     ),
                     read_only_memtables,
                     range_iterator: None,
@@ -220,7 +221,7 @@ impl DataStore<'static, Key> {
                     flush_signal_rx,
                     gc_log,
                     gc_table,
-                    gc_updated_entries: Arc::new(RwLock::new(SkipMap::new())),
+                    gc_updated_entries,
                 })
             }
             Err(err) => Err(MemTableRecoveryError(Box::new(err))),
@@ -311,7 +312,7 @@ impl DataStore<'static, Key> {
             filters.clone(),
             key_range.clone(),
         );
-
+        let gc_updated_entries = Arc::new(RwLock::new(SkipMap::new()));
         return Ok(DataStore {
             active_memtable,
             val_log: vlog,
@@ -342,10 +343,11 @@ impl DataStore<'static, Key> {
                 config.gc_chunk_size,
                 gc_table.clone(),
                 gc_log.clone(),
+                gc_updated_entries.clone(),
             ),
             gc_log,
             gc_table,
-            gc_updated_entries: Arc::new(RwLock::new(SkipMap::new())),
+            gc_updated_entries,
         });
     }
 

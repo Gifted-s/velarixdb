@@ -91,7 +91,7 @@ impl InsertableToBucket for MemTable<Key> {
     }
 
     fn find_biggest_key(&self) -> Result<Key, Error> {
-        let largest_entry = self.entries.iter().next_back();
+        let largest_entry = self.entries.back();
         match largest_entry {
             Some(e) => Ok(e.key().to_vec()),
             None => Err(BiggestKeyIndexError),
@@ -99,7 +99,7 @@ impl InsertableToBucket for MemTable<Key> {
     }
 
     fn find_smallest_key(&self) -> Result<Key, Error> {
-        let smallest_entry = self.entries.iter().next();
+        let smallest_entry = self.entries.front();
         match smallest_entry {
             Some(e) => Ok(e.key().to_vec()),
             None => Err(LowestKeyIndexError),
@@ -210,6 +210,9 @@ impl MemTable<Key> {
         self.insert(&entry)
     }
 
+    pub fn get_most_recent_offset(&self) -> usize {
+        self.most_recent_entry.val_offset
+    }
     pub fn generate_table_id() -> Vec<u8> {
         let rng = rand::thread_rng();
         let id: String = rng.sample_iter(&Alphanumeric).take(10).map(char::from).collect();
@@ -243,7 +246,7 @@ impl MemTable<Key> {
             || e.key().cmp(&end.as_ref().to_vec()) == Ordering::Equal
     }
 
-    pub fn false_positive_rate(&mut self) -> f64 {
+    pub fn false_positive_rate(&self) -> f64 {
         self.false_positive_rate
     }
     pub fn size(&mut self) -> usize {
@@ -254,11 +257,11 @@ impl MemTable<Key> {
         self.bloom_filter.clone()
     }
 
-    pub fn capacity(&mut self) -> usize {
+    pub fn capacity(&self) -> usize {
         self.capacity
     }
 
-    pub fn size_unit(&mut self) -> SizeUnit {
+    pub fn size_unit(&self) -> SizeUnit {
         self.size_unit
     }
 
