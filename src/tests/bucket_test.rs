@@ -304,24 +304,24 @@ mod tests {
         let path = PathBuf::from(root.path().join("."));
         let mut bucket_map = BucketMap::new(path.to_owned()).await.unwrap();
         let false_pos = 0.1;
-        let sst_within_size_range = generate_ssts(1).await[0].to_owned();
-        let mut sst_with_entries = sst_within_size_range.load_entries_from_file().await.unwrap();
-        sst_with_entries.filter = Some(FilterWorkload::new(false_pos, sst_with_entries.entries.to_owned()));
+        let mut sst_within_size_range = generate_ssts(1).await[0].to_owned();
+        sst_within_size_range.load_entries_from_file().await.unwrap();
+        sst_within_size_range.filter = Some(FilterWorkload::new(false_pos, sst_within_size_range.entries.to_owned()));
         // bucket insertion is succeeds
         let insert_res = bucket_map
-            .insert_to_appropriate_bucket(Arc::new(Box::new(sst_with_entries.to_owned())))
+            .insert_to_appropriate_bucket(Arc::new(Box::new(sst_within_size_range.to_owned())))
             .await;
         assert!(insert_res.is_ok());
         assert_eq!(bucket_map.buckets.len(), 1);
         let insert_res = bucket_map
-            .insert_to_appropriate_bucket(Arc::new(Box::new(sst_with_entries.to_owned())))
+            .insert_to_appropriate_bucket(Arc::new(Box::new(sst_within_size_range.to_owned())))
             .await;
         assert!(insert_res.is_ok());
         // SST size is within first bucket size range so buckets should still be 1
         assert_eq!(bucket_map.buckets.len(), 1);
-        sst_with_entries.size = ((sst_with_entries.size as f64 * BUCKET_HIGH) * 2.0) as usize;
+        sst_within_size_range.size = ((sst_within_size_range.size as f64 * BUCKET_HIGH) * 2.0) as usize;
         let insert_res = bucket_map
-            .insert_to_appropriate_bucket(Arc::new(Box::new(sst_with_entries.to_owned())))
+            .insert_to_appropriate_bucket(Arc::new(Box::new(sst_within_size_range.to_owned())))
             .await;
         assert!(insert_res.is_ok());
         // SST size is not within first bucket size range so a new bucket should have be created

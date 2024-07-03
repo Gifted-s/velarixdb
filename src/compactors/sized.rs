@@ -69,32 +69,27 @@ impl<'a> SizedTierRunner<'a> {
                 Ok(merged_sstables) => {
                     let mut tracker = WriteTracker::new(merged_sstables.len());
                     // Step 3: Insert Merged SSTs to appropriate buckets
-                    for mut merged_sst in merged_sstables.into_iter() {
+                    for merged_sst in merged_sstables.into_iter() {
                         let mut bucket = buckets.write().await;
                         let table = merged_sst.clone().sstable;
                         let insert_res = bucket.insert_to_appropriate_bucket(Arc::new(table)).await;
                         drop(bucket);
                         match insert_res {
-                            Ok(mut sst) => {
-                                log::info!(
-                                    "SST written, data: {:?}, index {:?}",
-                                    sst.data_file.path,
-                                    sst.index_file.path
-                                );
-                                // Step 4: Store SST Path in Filter
-                                let data_file_path = sst.get_data_file_path();
-                                merged_sst.filter.set_sstable_path(data_file_path.to_owned());
-                                // Step 5: Store Filter in Filters Vec
-                                filters.write().await.push(merged_sst.filter.to_owned());
+                            Ok(sst) => {
                                 if sst.summary.is_none() {
                                     return Err(TableSummaryIsNoneError);
                                 }
+                                if sst.filter.is_none() {
+                                    return Err(FilterNotProvidedForFlush);
+                                }
+                                // IMPORTANT: Don't keep sst entries in memory
+                                sst.entries.clear();
+                                // Step 4 Store Filter in Filters Vec
+                                filters.write().await.push(sst.filter.to_owned().unwrap());
                                 let summary = sst.summary.clone().unwrap();
-                                // merged filter is now mapped to  new sst path therefore update sst filter
-                                // TODO: updazte should happen in write method
-                                sst.filter = Some(merged_sst.filter);
+                                // Step 5 Store sst key range
                                 key_range.write().await.set(
-                                    data_file_path,
+                                    sst.dir.to_owned(),
                                     summary.smallest_key,
                                     summary.biggest_key,
                                     sst,
@@ -199,13 +194,14 @@ impl<'a> SizedTierRunner<'a> {
             let tables = &bucket.sstables.read().await;
             let mut merged_sst: Box<dyn InsertableToBucket> = Box::new(tables.get(0).unwrap().to_owned());
             for sst in tables[1..].iter() {
-                hotness += sst.hotness;
-                let table = sst
+                let mut insertable_sst = sst.to_owned();
+                hotness += insertable_sst.hotness;
+                insertable_sst
                     .load_entries_from_file()
                     .await
                     .map_err(|err| CompactionFailed(Box::new(err)))?;
                 merged_sst = self
-                    .merge_sstables(merged_sst, Box::new(table))
+                    .merge_sstables(merged_sst, Box::new(insertable_sst))
                     .await
                     .map_err(|err| CompactionFailed(Box::new(err)))?;
             }

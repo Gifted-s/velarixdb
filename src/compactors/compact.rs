@@ -73,7 +73,7 @@ impl Config {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Strategy {
     STCS,
     LCS, // TODO

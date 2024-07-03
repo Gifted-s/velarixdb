@@ -59,6 +59,9 @@ pub type Bool = bool;
 /// Represents an ID for a MemTable
 pub type MemtableId = Vec<u8>;
 
+/// Represents a HashSet that contains unique identifier of memtables currently being flushed
+pub type MemtableFlushStream = std::collections::HashSet<MemtableId>;
+
 /// Represents a database name as a string slice
 pub type DBName<'a> = &'a str;
 

@@ -90,8 +90,8 @@ impl KeyRange {
                     filter.recover_meta().await?;
                     filter.sst_dir = Some(mut_range.sst.dir.to_owned());
 
-                    let t = mut_range.sst.load_entries_from_file().await?;
-                    filter.build_filter_from_entries(&t.entries);
+                    mut_range.sst.load_entries_from_file().await?;
+                    filter.build_filter_from_entries(&mut_range.sst.entries);
                     // Don't keep sst entries in memory
                     mut_range.sst.entries.clear();
                     mut_range.sst.filter = Some(filter.to_owned());

@@ -1,9 +1,12 @@
 use crate::bucket::bucket::InsertableToBucket;
 use crate::consts::FLUSH_SIGNAL;
+use crate::flush::flusher::Error::FilterNotProvidedForFlush;
 use crate::flush::flusher::Error::FlushError;
 use crate::flush::flusher::Error::TableSummaryIsNoneError;
+use crate::types::MemtableFlushStream;
 use crate::types::{self, BloomFilterHandle, BucketMapHandle, FlushSignal, ImmutableMemTable, KeyRangeHandle};
 use crate::{err::Error, memtable::MemTable};
+use std::fmt::Debug;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -35,35 +38,34 @@ impl Flusher {
 
     pub async fn flush(&mut self, table: InActiveMemtable) -> Result<(), Error> {
         let flush_data = self;
-        let table_lock = table.read().await;
-        if table_lock.entries.is_empty() {
+        let table_reader = table.read().await;
+        if table_reader.entries.is_empty() {
             return Err(Error::FailedToInsertToBucket("Cannot flush an empty table".to_string()));
         }
-
-        let filter = &mut table_lock.bloom_filter.to_owned();
         let mut bucket_lock = flush_data.bucket_map.write().await;
-        let mut sst = bucket_lock
-            .insert_to_appropriate_bucket(Arc::new(Box::new(table_lock.to_owned())))
+        let sst = bucket_lock
+            .insert_to_appropriate_bucket(Arc::new(Box::new(table_reader.to_owned())))
             .await?;
-        drop(table_lock);
-        let data_file_path = sst.get_data_file_path().clone();
-        filter.set_sstable_path(data_file_path.to_owned());
-        flush_data.filters.write().await.push(filter.to_owned());
-        sst.filter = Some(filter.to_owned());
-        // TODO: drop entries
+        drop(table_reader);
         if sst.summary.is_none() {
             return Err(TableSummaryIsNoneError);
         }
+        if sst.filter.is_none() {
+            return Err(FilterNotProvidedForFlush);
+        }
+        //IMPORTANT: Don't keep sst entries in memory
+        sst.entries.clear();
+        flush_data.filters.write().await.push(sst.filter.to_owned().unwrap());
         let summary = sst.summary.clone().unwrap();
         flush_data
             .key_range
             .write()
             .await
-            .set(data_file_path, summary.smallest_key, summary.biggest_key, sst);
+            .set(sst.dir.to_owned(), summary.smallest_key, summary.biggest_key, sst);
         Ok(())
     }
 
-    pub fn flush_handler<Id: 'static + AsRef<[u8]> + Send + Sync>(
+    pub fn flush_handler<Id: 'static + AsRef<[u8]> + Send + Sync + Debug>(
         &mut self,
         table_id: Id,
         table_to_flush: InActiveMemtable,
@@ -78,8 +80,10 @@ impl Flusher {
             let mut flusher = Flusher::new(read_only_memtable.clone(), buckets, filters, key_range);
             match flusher.flush(table_to_flush).await {
                 Ok(_) => {
-                    let mut tables = read_only_memtable.write().await;
-                    tables.shift_remove(&table_id.as_ref().to_vec());
+                    read_only_memtable
+                        .write()
+                        .await
+                        .shift_remove(&table_id.as_ref().to_vec());
                     if let Err(err) = tx.try_broadcast(FLUSH_SIGNAL) {
                         match err {
                             async_broadcast::TrySendError::Full(_) => {

@@ -1,4 +1,4 @@
-use crate::storage::SizeUnit;
+use crate::db::SizeUnit;
 
 pub const KB: usize = 1024;
 
@@ -25,6 +25,8 @@ pub const META_FILE_NAME: &str = "meta";
 pub const SUMMARY_FILE_NAME: &str = "summary";
 
 pub const INDEX_FILE_NAME: &str = "index";
+
+pub const DEFAULT_DB_NAME: &str = "vikings";
 
 pub const META_DIRECTORY_NAME: &str = "meta";
 
@@ -92,3 +94,7 @@ pub const SIZE_OF_U64: usize = std::mem::size_of::<u64>();
 pub const SIZE_OF_U8: usize = std::mem::size_of::<u8>();
 
 pub const FLUSH_SIGNAL: u8 = 1;
+
+pub const BLOCK_SIZE: usize = 4 * 1024; // 4KB
+
+pub const VLOG_START_OFFSET: usize = 0;

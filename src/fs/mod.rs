@@ -2,7 +2,7 @@ use crate::{
     consts::{EOF, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8},
     err::Error::{self, *},
     filter::{BloomFilter, FalsePositive, NoHashFunc, NoOfElements},
-    helpers,
+    util,
     index::RangeOffset,
     key_range::{BiggestKey, SmallestKey},
     load_buffer,
@@ -319,7 +319,7 @@ impl DataFs for DataFileNode {
                 key,
                 SkipMapValue::new(
                     value_offset as usize,
-                    helpers::milliseconds_to_datetime(created_at),
+                    util::milliseconds_to_datetime(created_at),
                     is_tombstone,
                 ),
             );
@@ -377,7 +377,7 @@ impl DataFs for DataFileNode {
             if key == searched_key {
                 return Ok(Some((
                     value_offset as usize,
-                    helpers::milliseconds_to_datetime(created_at),
+                    util::milliseconds_to_datetime(created_at),
                     is_tombstone,
                 )));
             }
@@ -436,7 +436,7 @@ impl DataFs for DataFileNode {
             entries.push(Entry::new(
                 key,
                 value_offset,
-                helpers::milliseconds_to_datetime(created_at),
+                util::milliseconds_to_datetime(created_at),
                 is_tombstone,
             ));
 
@@ -559,7 +559,7 @@ impl VLogFs for VLogFileNode {
                 vsize: val_len as usize,
                 key,
                 value,
-                created_at: helpers::milliseconds_to_datetime(created_at),
+                created_at: util::milliseconds_to_datetime(created_at),
                 is_tombstone,
             })
         }
@@ -628,7 +628,7 @@ impl VLogFs for VLogFileNode {
                 vsize: val_len as usize,
                 key,
                 value,
-                created_at: helpers::milliseconds_to_datetime(created_at),
+                created_at: util::milliseconds_to_datetime(created_at),
                 is_tombstone,
             });
 
@@ -774,7 +774,7 @@ impl FilterFs for FilterFileNode {
         if bytes_read == 0 {
             return Err(FileNode::unexpected_eof());
         }
-        let false_positive_rate = helpers::float_from_le_bytes(&false_positive_rate_bytes);
+        let false_positive_rate = util::float_from_le_bytes(&false_positive_rate_bytes);
         if false_positive_rate == None {
             return Err(FileNode::unexpected_eof());
         }
@@ -826,12 +826,11 @@ impl MetaFs for MetaFileNode {
             return Err(FileNode::unexpected_eof());
         }
         let last_modified = u64::from_le_bytes(last_modified_date_bytes);
-
         return Ok((
             head_offset as usize,
             tail_offset as usize,
-            helpers::milliseconds_to_datetime(created_at),
-            helpers::milliseconds_to_datetime(last_modified),
+            util::milliseconds_to_datetime(created_at),
+            util::milliseconds_to_datetime(last_modified),
         ));
     }
 }
@@ -875,7 +874,6 @@ impl SummaryFs for SummaryFileNode {
         if bytes_read == 0 {
             return Err(FileNode::unexpected_eof());
         }
-
         return Ok((smallest_key, biggest_key));
     }
 }

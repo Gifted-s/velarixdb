@@ -1,12 +1,13 @@
 use crate::filter::bf::Error::FilterFileOpenError;
 use crate::filter::bf::Error::FilterFilePathNotProvided;
+use crate::types::ByteSerializedEntry;
 use crate::types::Key;
 use crate::types::SkipMapEntries;
 use crate::{
     consts::{FILTER_FILE_NAME, SIZE_OF_U32, SIZE_OF_U64},
     err::Error,
     fs::{FileAsync, FileNode, FilterFileNode, FilterFs},
-    helpers,
+    util,
     sst::Table,
 };
 use bit_vec::BitVec;
@@ -75,8 +76,6 @@ impl BloomFilter {
         }
         true
     }
-
-    // TODO: return alias
     pub async fn write<P: AsRef<Path> + Send + Sync>(&mut self, dir: P) -> Result<(), Error> {
         let file_path = dir.as_ref().join(format!("{}.db", FILTER_FILE_NAME));
         let file = FilterFileNode::new(file_path.to_owned(), crate::fs::FileType::Filter)
@@ -108,8 +107,7 @@ impl BloomFilter {
         return Ok(());
     }
 
-    // TODO: return alias
-    fn serialize(&self) -> Vec<u8> {
+    fn serialize(&self) -> ByteSerializedEntry {
         // No of Hash Function + No of Elements  + False Positive
         let entry_len = SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64;
 
@@ -120,7 +118,7 @@ impl BloomFilter {
         serialized_data
             .extend_from_slice(&(AtomicU32::load(&self.no_of_elements, Ordering::Relaxed) as u32).to_le_bytes());
 
-        serialized_data.extend_from_slice(&helpers::float_to_le_bytes(self.false_positive_rate));
+        serialized_data.extend_from_slice(&util::float_to_le_bytes(self.false_positive_rate));
 
         serialized_data
     }

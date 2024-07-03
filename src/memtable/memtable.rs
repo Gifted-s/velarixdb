@@ -9,7 +9,7 @@ use crate::bucket::InsertableToBucket;
 use crate::consts::{DEFAULT_FALSE_POSITIVE_RATE, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, WRITE_BUFFER_SIZE};
 use crate::err::Error;
 use crate::filter::BloomFilter;
-use crate::storage::SizeUnit;
+use crate::db::SizeUnit;
 use crate::types::{CreatedAt, IsTombStone, Key, SkipMapEntries, ValOffset, Value};
 use chrono::{DateTime, Utc};
 use crossbeam_skiplist::SkipMap;
@@ -88,22 +88,6 @@ impl InsertableToBucket for MemTable<Key> {
 
     fn get_filter(&self) -> BloomFilter {
         return self.bloom_filter.to_owned();
-    }
-
-    fn find_biggest_key(&self) -> Result<Key, Error> {
-        let largest_entry = self.entries.back();
-        match largest_entry {
-            Some(e) => Ok(e.key().to_vec()),
-            None => Err(BiggestKeyIndexError),
-        }
-    }
-
-    fn find_smallest_key(&self) -> Result<Key, Error> {
-        let smallest_entry = self.entries.front();
-        match smallest_entry {
-            Some(e) => Ok(e.key().to_vec()),
-            None => Err(LowestKeyIndexError),
-        }
     }
 }
 
@@ -215,7 +199,7 @@ impl MemTable<Key> {
     }
     pub fn generate_table_id() -> Vec<u8> {
         let rng = rand::thread_rng();
-        let id: String = rng.sample_iter(&Alphanumeric).take(10).map(char::from).collect();
+        let id: String = rng.sample_iter(&Alphanumeric).take(5).map(char::from).collect();
         id.as_bytes().to_vec()
     }
 
@@ -552,58 +536,10 @@ mod tests {
     }
 
     #[test]
-    fn test_find_smallest_key() {
-        let keys = vec![
-            vec![1, 2, 3, 4],
-            vec![2, 2, 3, 4],
-            vec![3, 2, 3, 4],
-            vec![4, 2, 3, 4],
-            vec![5, 2, 3, 4],
-        ];
-        let buffer_size = 51200;
-        let false_pos_rate = 1e-300;
-        let is_tombstone = false;
-        let created_at = Utc::now();
-        let mut mem_table = MemTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
-        for i in 0..5 {
-            let entry = Entry::new(keys[i].to_owned(), i, created_at, is_tombstone);
-            let _ = mem_table.insert(&entry);
-        }
-
-        let smallest = mem_table.find_smallest_key();
-        assert!(smallest.is_ok());
-        assert_eq!(smallest.unwrap(), keys[0]);
-    }
-
-    #[test]
-    fn test_find_biggest_key() {
-        let keys = vec![
-            vec![1, 2, 3, 4],
-            vec![2, 2, 3, 4],
-            vec![3, 2, 3, 4],
-            vec![4, 2, 3, 4],
-            vec![5, 2, 3, 4],
-        ];
-        let buffer_size = 51200;
-        let false_pos_rate = 1e-300;
-        let is_tombstone = false;
-        let created_at = Utc::now();
-        let mut mem_table = MemTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
-        for i in 0..5 {
-            let entry = Entry::new(keys[i].to_owned(), i, created_at, is_tombstone);
-            let _ = mem_table.insert(&entry);
-        }
-
-        let biggest = mem_table.find_biggest_key();
-        assert!(biggest.is_ok());
-        assert_eq!(biggest.unwrap(), keys[4]);
-    }
-
-    #[test]
     fn test_is_full() {
         let buffer_size = 51200;
         let false_pos_rate = 1e-300;
-        let mut mem_table = MemTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
+        let mem_table = MemTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
         let key = vec![1, 2, 3, 4];
         let is_full = mem_table
             .to_owned()

@@ -3,8 +3,8 @@ use crate::memtable::SkipMapValue;
 use crate::tests::workload::Error::TokioJoinError;
 use crate::{
     err::Error,
-    helpers,
-    storage::DataStore,
+    util,
+    db::DataStore,
     types::{Key, Value},
 };
 use crossbeam_skiplist::SkipMap;
@@ -48,8 +48,8 @@ impl Workload {
         let mut write_workload = HashMap::with_capacity(self.size);
         let mut read_workload = HashMap::with_capacity((self.size as f64 * self.write_read_ratio) as usize);
         for _ in 0..self.size {
-            let key = helpers::generate_random_id(self.key_len);
-            let val = helpers::generate_random_id(self.val_len);
+            let key = util::generate_random_id(self.key_len);
+            let val = util::generate_random_id(self.val_len);
             write_workload.insert(key.as_bytes().to_vec(), val.as_bytes().to_vec());
         }
 
@@ -67,8 +67,8 @@ impl Workload {
         let mut write_workload = Vec::with_capacity(self.size);
         let mut read_workload = Vec::with_capacity((self.size as f64 * self.write_read_ratio) as usize);
         for _ in 0..self.size {
-            let key = helpers::generate_random_id(self.key_len);
-            let val = helpers::generate_random_id(self.val_len);
+            let key = util::generate_random_id(self.key_len);
+            let val = util::generate_random_id(self.val_len);
             let entry = Entry {
                 key: key.as_bytes().to_vec(),
                 val: val.as_bytes().to_vec(),

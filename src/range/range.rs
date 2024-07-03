@@ -7,7 +7,7 @@ use crate::consts::HEAD_ENTRY_KEY;
 use crate::err::Error;
 // use crate::index::Index;
 use crate::memtable::Entry;
-use crate::storage::DataStore;
+use crate::db::DataStore;
 use crate::types::{Key, ValOffset, Value};
 use crate::vlog::ValueLog;
 // use async_trait::async_trait;

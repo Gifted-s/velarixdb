@@ -46,8 +46,6 @@ pub struct Bucket {
 pub trait InsertableToBucket: Debug + Send + Sync {
     fn get_entries(&self) -> SkipMapEntries<Key>;
     fn size(&self) -> usize;
-    fn find_biggest_key(&self) -> Result<Key, Error>;
-    fn find_smallest_key(&self) -> Result<Key, Error>;
     fn get_filter(&self) -> BloomFilter;
 }
 
@@ -60,8 +58,8 @@ impl Bucket {
         Ok(Self {
             id,
             dir,
-            size: 0,
-            avarage_size: 0,
+            size: Default::default(),
+            avarage_size: Default::default(),
             sstables: Arc::new(RwLock::new(Vec::new())),
         })
     }
@@ -134,9 +132,6 @@ impl BucketMap {
             dir: dir.to_path_buf(),
             buckets: IndexMap::new(),
         })
-    }
-    pub fn set_buckets(&mut self, buckets: IndexMap<BucketID, Bucket>) {
-        self.buckets = buckets
     }
 
     pub async fn insert_to_appropriate_bucket<T: InsertableToBucket + ?Sized>(
@@ -267,6 +262,7 @@ impl BucketMap {
     }
 
     // CAUTION: This removes all sstables and buckets and should only be used for total cleanup
+    #[allow(dead_code)]
     pub async fn clear_all(&mut self) {
         for (_, bucket) in &self.buckets {
             if fs::metadata(&bucket.dir).await.is_ok() {

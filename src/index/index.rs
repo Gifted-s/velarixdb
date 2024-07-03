@@ -53,25 +53,20 @@
 use crate::consts::SIZE_OF_U32;
 use crate::err::Error;
 use crate::fs::{FileAsync, IndexFileNode, IndexFs};
-use crate::types::Key;
+use crate::types::{ByteSerializedEntry, Key};
 use std::path::{Path, PathBuf};
 
 use Error::*;
 type Offset = u32;
+type KeyLength = u32;
 
 #[derive(Debug, Clone)]
-pub struct IndexFile<F>
-where
-    F: IndexFs,
-{
+pub struct IndexFile<F: IndexFs> {
     pub(crate) file: F,
     pub(crate) path: PathBuf,
 }
 
-impl<F> IndexFile<F>
-where
-    F: IndexFs,
-{
+impl<F: IndexFs> IndexFile<F> {
     pub fn new<P: AsRef<Path> + Send + Sync>(path: P, file: F) -> Self {
         Self {
             path: path.as_ref().to_path_buf(),
@@ -81,9 +76,9 @@ where
 }
 #[derive(Debug, Clone)]
 pub struct IndexEntry {
-    pub key_prefix: u32,
+    pub key_len: KeyLength,
     pub key: Key,
-    pub block_handle: u32,
+    pub block_handle: Offset,
     // TODO: pub: compressed_size
 }
 #[derive(Debug, Clone)]
@@ -113,9 +108,9 @@ impl Index {
             file: IndexFile::new(path, file),
         }
     }
-    pub fn insert(&mut self, key_prefix: u32, key: Key, offset: Offset) {
+    pub fn insert(&mut self, key_len: u32, key: Key, offset: Offset) {
         self.entries.push(IndexEntry {
-            key_prefix,
+            key_len,
             key,
             block_handle: offset,
         })
@@ -129,18 +124,18 @@ impl Index {
         Ok(())
     }
 
-    fn serialize_entry(&self, e: &IndexEntry) -> Result<Vec<u8>, Error> {
+    fn serialize_entry(&self, e: &IndexEntry) -> Result<ByteSerializedEntry, Error> {
         let entry_len = e.key.len() + SIZE_OF_U32 + SIZE_OF_U32;
 
         let mut entry_vec = Vec::with_capacity(entry_len);
 
-        //add key len
-        entry_vec.extend_from_slice(&(e.key_prefix).to_le_bytes());
+        // key len
+        entry_vec.extend_from_slice(&(e.key_len).to_le_bytes());
 
-        //add key
+        // key
         entry_vec.extend_from_slice(&e.key);
 
-        //add value offset
+        // block offset
         entry_vec.extend_from_slice(&(e.block_handle as u32).to_le_bytes());
         if entry_len != entry_vec.len() {
             return Err(SerializationError("Invalid entry size"));

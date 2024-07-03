@@ -25,22 +25,6 @@ impl InsertableToBucket for TableInsertor {
     fn size(&self) -> usize {
         self.size
     }
-    // TODO: remove
-    fn find_biggest_key(&self) -> Result<Key, Error> {
-        let largest_entry = self.entries.back();
-        match largest_entry {
-            Some(e) => Ok(e.key().to_vec()),
-            None => Err(BiggestKeyIndexError),
-        }
-    }
-
-    fn find_smallest_key(&self) -> Result<Key, Error> {
-        let largest_entry = self.entries.front();
-        match largest_entry {
-            Some(e) => Ok(e.key().to_vec()),
-            None => Err(LowestKeyIndexError),
-        }
-    }
 }
 
 impl TableInsertor {

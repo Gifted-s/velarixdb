@@ -51,7 +51,7 @@ use crate::{
     err::Error,
     filter::BloomFilter,
     fs::{DataFileNode, DataFs, FileAsync, FileNode, IndexFileNode, IndexFs, SummaryFileNode, SummaryFs},
-    helpers,
+    util,
     index::{Index, IndexFile, RangeOffset},
     key_range::{BiggestKey, SmallestKey},
     memtable::{Entry, SkipMapValue},
@@ -99,22 +99,6 @@ impl InsertableToBucket for Table {
 
     fn get_filter(&self) -> BloomFilter {
         return self.filter.as_ref().unwrap().to_owned();
-    }
-
-    fn find_biggest_key(&self) -> Result<Key, Error> {
-        let largest_entry = self.entries.back();
-        match largest_entry {
-            Some(e) => Ok(e.key().to_vec()),
-            None => Err(BiggestKeyIndexError),
-        }
-    }
-
-    fn find_smallest_key(&self) -> Result<Key, Error> {
-        let largest_entry = self.entries.front();
-        match largest_entry {
-            Some(e) => Ok(e.key().to_vec()),
-            None => Err(LowestKeyIndexError),
-        }
     }
 }
 
@@ -175,20 +159,12 @@ impl Table {
             .await
     }
 
-    pub(crate) async fn load_entries_from_file(&self) -> Result<Table, Error> {
+    pub(crate) async fn load_entries_from_file(&mut self) -> Result<(), Error> {
         let (entries, bytes_read) = self.data_file.file.load_entries().await?;
         //TODO: review should only return entries not an entire table
-        Ok(Table {
-            entries,
-            size: bytes_read,
-            dir: self.dir.clone(),
-            hotness: self.hotness,
-            created_at: self.created_at,
-            data_file: self.data_file.to_owned(),
-            index_file: self.index_file.to_owned(),
-            filter: self.filter.to_owned(),
-            summary: self.summary.to_owned(),
-        })
+        self.entries = entries;
+        self.size = bytes_read;
+        Ok(())
     }
 
     pub(crate) async fn build_from<P: AsRef<Path> + Send + Sync + Clone>(
@@ -221,7 +197,7 @@ impl Table {
         let modified_time = table.data_file.file.node.metadata().await.unwrap().modified().unwrap();
         let epoch = SystemTime::UNIX_EPOCH;
         let elapsed_nanos = modified_time.duration_since(epoch).unwrap().as_nanos() as u64;
-        table.created_at = helpers::milliseconds_to_datetime(elapsed_nanos / 1_000_000);
+        table.created_at = util::milliseconds_to_datetime(elapsed_nanos / 1_000_000);
         return table;
     }
 
@@ -249,7 +225,10 @@ impl Table {
 
         // write filter to disk
         self.filter.as_mut().unwrap().write(self.dir.to_owned()).await?;
-
+        self.filter
+            .as_mut()
+            .unwrap()
+            .set_sstable_path(self.data_file.path.to_owned());
         // write data blocks
         let mut current_block = Block::new();
         if self.size > 0 {
@@ -269,7 +248,6 @@ impl Table {
                 blocks.push(current_block);
                 current_block = Block::new();
             }
-
             current_block.set_entry(
                 entry.key.len() as u32,
                 entry.key,
@@ -287,7 +265,6 @@ impl Table {
         if current_block.entries.len() > 0 {
             self.write_block(&current_block, &mut table_index).await?;
         }
-
         table_index.write_to_file().await?;
         Ok(())
     }

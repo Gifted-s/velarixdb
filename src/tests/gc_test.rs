@@ -3,7 +3,7 @@ mod tests {
     use crate::consts::{SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8};
     use crate::err::Error;
     use crate::gc::gc::GC;
-    use crate::storage::{DataStore, SizeUnit};
+    use crate::db::{DataStore, SizeUnit};
     use crate::tests::workload::Workload;
     use crate::types::Key;
     use std::path::PathBuf;
@@ -30,7 +30,7 @@ mod tests {
     async fn datastore_gc_test_success() {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("gc_test_1"));
-        let s_engine = DataStore::new(path.clone()).await.unwrap();
+        let s_engine = DataStore::new("test", path.clone()).await.unwrap();
         let store = Arc::new(RwLock::new(s_engine));
         let workload_size = 15000;
         let key_len = 5;
@@ -64,7 +64,7 @@ mod tests {
     async fn datastore_gc_test_unsupported_platform() {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("gc_test_2"));
-        let s_engine = DataStore::new(path.clone()).await.unwrap();
+        let s_engine = DataStore::new("test", path.clone()).await.unwrap();
         let store = Arc::new(RwLock::new(s_engine));
         let workload_size = 15000;
         let key_len = 5;
@@ -98,7 +98,7 @@ mod tests {
     async fn datastore_gc_test_tail_shifted() {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("gc_test_3"));
-        let s_engine = DataStore::new(path.clone()).await.unwrap();
+        let s_engine = DataStore::new("test", path.clone()).await.unwrap();
         let store = Arc::new(RwLock::new(s_engine));
         let workload_size = 15000;
         let key_len = 5;
@@ -134,7 +134,7 @@ mod tests {
     async fn datastore_gc_test_free_before_synchronization() {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("gc_test_free"));
-        let s_engine = DataStore::new(path.clone()).await.unwrap();
+        let s_engine = DataStore::new("test", path.clone()).await.unwrap();
         let store = Arc::new(RwLock::new(s_engine));
         let workload_size = 15000;
         let key_len = 5;
@@ -169,7 +169,7 @@ mod tests {
         let bytes_to_scan_for_garbage_colection = SizeUnit::Bytes.to_bytes(100);
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("gc_test_4"));
-        let s_engine = DataStore::new(path.clone()).await.unwrap();
+        let s_engine = DataStore::new("test", path.clone()).await.unwrap();
         let store = Arc::new(RwLock::new(s_engine));
         let workload_size = 5;
         let key_len = 5;
@@ -217,7 +217,7 @@ mod tests {
         let bytes_to_scan_for_garbage_colection = SizeUnit::Bytes.to_bytes(100);
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("gc_test_5"));
-        let s_engine = DataStore::new(path.clone()).await.unwrap();
+        let s_engine = DataStore::new("test", path.clone()).await.unwrap();
         let store = Arc::new(RwLock::new(s_engine));
         let _ = store.write().await.put("test_key", "test_val").await;
         let _ = store.write().await.delete("test_key").await;
@@ -254,7 +254,7 @@ mod tests {
         let prepare_delete = false;
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("gc_test_no_delete"));
-        let s_engine = DataStore::new(path.clone()).await.unwrap();
+        let s_engine = DataStore::new("test", path.clone()).await.unwrap();
         let store = Arc::new(RwLock::new(s_engine));
         let workload_size = 15000;
         let key_len = 5;

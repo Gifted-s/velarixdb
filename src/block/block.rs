@@ -65,13 +65,12 @@ use chrono::{DateTime, Utc};
 use err::Error::*;
 
 use crate::{
-    consts::{SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8},
+    consts::{BLOCK_SIZE, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8},
     err::{self, Error},
     fs::{FileAsync, FileNode},
-    types::{ByteSerializedEntry, Key},
+    types::ByteSerializedEntry,
 };
 type BytesWritten = usize;
-const BLOCK_SIZE: usize = 4 * 1024; // 4KB
 
 #[derive(Debug, Clone)]
 pub struct Block {
@@ -194,6 +193,8 @@ impl Block {
 
 #[cfg(test)]
 mod tests {
+
+    use crate::types::Key;
 
     use super::*;
     use std::sync::Arc;

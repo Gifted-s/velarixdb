@@ -10,7 +10,7 @@ use crate::index::Index;
 use crate::memtable::{Entry, MemTable, SkipMapValue, K};
 use crate::types::{CreatedAt, ImmutableMemTable, Key, KeyRangeHandle, ValOffset, Value};
 use crate::vlog::{ValueLog, ValueLogEntry};
-use crate::{err, helpers};
+use crate::{err, util};
 use chrono::Utc;
 use crossbeam_skiplist::SkipMap;
 use err::Error::*;
@@ -318,6 +318,7 @@ impl GC {
         }
     }
 
+    #[allow(dead_code)] // will show unused on non-linux environment
     pub async fn punch_holes<P: AsRef<Path>>(
         file_path: P,
         offset: off_t,
@@ -366,8 +367,8 @@ impl GC {
     ) -> Result<(Value, CreatedAt), Error> {
         let key = key.as_ref().to_vec();
         let mut offset = 0;
-        let lowest_insertion_date = helpers::default_datetime();
-        let mut most_recent_insert_time = helpers::default_datetime();
+        let lowest_insertion_date = util::default_datetime();
+        let mut most_recent_insert_time = util::default_datetime();
         // Step 1: Check the active memtable
         if let Some(value) = memtable.read().await.get(&key) {
             if value.is_tombstone {
