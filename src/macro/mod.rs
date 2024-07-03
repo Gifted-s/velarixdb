@@ -14,7 +14,7 @@ pub mod fs_macros {
     #[macro_export]
     macro_rules! open_dir_stream {
         ($path:expr) => {{
-            let stream = read_dir($path.to_owned()).await.map_err(|err| DirectoryOpenError {
+            let stream = read_dir($path.to_owned()).await.map_err(|err| DirOpenError {
                 path: $path,
                 error: err,
             })?;

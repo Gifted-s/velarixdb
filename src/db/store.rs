@@ -1,5 +1,5 @@
 use crate::cfg::Config;
-use crate::compactors::Compactor;
+use crate::compactors::{CompactionReason, Compactor};
 use crate::consts::{
     BUCKETS_DIRECTORY_NAME, HEAD_ENTRY_KEY, KB, META_DIRECTORY_NAME, TOMB_STONE_MARKER, VALUE_LOG_DIRECTORY_NAME,
     VLOG_START_OFFSET,
@@ -21,14 +21,11 @@ use crate::types::{
 };
 use crate::util;
 use crate::vlog::ValueLog;
-use async_trait::async_trait;
 use chrono::Utc;
-use futures::lock::Mutex;
-use indexmap::IndexMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs::{self};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 pub struct DataStore<'a, Key>
 where
@@ -403,6 +400,8 @@ impl DataStore<'static, Key> {
 
     #[cfg(test)]
     pub async fn flush_all_memtables(&mut self) -> Result<(), Error> {
+        use indexmap::IndexMap;
+
         self.active_memtable.read_only = true;
 
         self.read_only_memtables.write().await.insert(
@@ -455,6 +454,9 @@ impl DataStore<'static, Key> {
     }
 
     pub async fn run_compaction(&mut self) -> Result<(), Error> {
+        // This can only be called mannualy because
+        // normal compaction happens in the background
+        self.compactor.reason = CompactionReason::Manual;
         Compactor::handle_compaction(
             Arc::clone(&self.buckets),
             Arc::clone(&self.filters.clone()),

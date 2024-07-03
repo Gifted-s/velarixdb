@@ -327,7 +327,7 @@ mod tests {
         assert!(res.is_ok());
         assert_eq!(res.unwrap().0, updated_value);
 
-        // // Run compaction
+        // Run compaction
         let comp_res = store_ref.write().await.run_compaction().await;
         assert!(comp_res.is_ok());
 

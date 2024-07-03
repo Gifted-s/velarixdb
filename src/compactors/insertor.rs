@@ -1,10 +1,8 @@
-use crate::err::Error::FilterNotFoundError;
 use crate::filter::BloomFilter;
-use crate::{bucket::InsertableToBucket, err::Error, types::*};
-use crate::{
-    consts::{SIZE_OF_U64, SIZE_OF_U8, SIZE_OF_USIZE},
-    err::Error::{BiggestKeyIndexError, LowestKeyIndexError},
-};
+use crate::{bucket::InsertableToBucket, types::*};
+use crate::
+    consts::{SIZE_OF_U64, SIZE_OF_U8, SIZE_OF_USIZE}
+;
 use crossbeam_skiplist::SkipMap;
 use std::sync::Arc;
 

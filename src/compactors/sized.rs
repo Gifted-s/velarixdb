@@ -1,6 +1,5 @@
-use std::{cmp, collections::HashMap, hash::Hash, ops::Deref, path::PathBuf, sync::Arc};
+use std::{cmp, collections::HashMap, path::PathBuf, sync::Arc};
 
-use chrono::{DateTime, Utc};
 use crossbeam_skiplist::SkipMap;
 use uuid::Uuid;
 
@@ -192,6 +191,7 @@ impl<'a> SizedTierRunner<'a> {
         for bucket in buckets.iter() {
             let mut hotness = 0;
             let tables = &bucket.sstables.read().await;
+            
             let mut merged_sst: Box<dyn InsertableToBucket> = Box::new(tables.get(0).unwrap().to_owned());
             for sst in tables[1..].iter() {
                 let mut insertable_sst = sst.to_owned();
@@ -205,6 +205,7 @@ impl<'a> SizedTierRunner<'a> {
                     .await
                     .map_err(|err| CompactionFailed(Box::new(err)))?;
             }
+
             let entries = &merged_sst.get_entries();
             let mut filter = BloomFilter::new(self.config.filter_false_positive, entries.len());
             filter.build_filter_from_entries(entries);

@@ -62,9 +62,6 @@ pub type MemtableId = Vec<u8>;
 /// Represents a HashSet that contains unique identifier of memtables currently being flushed
 pub type MemtableFlushStream = std::collections::HashSet<MemtableId>;
 
-/// Represents a database name as a string slice
-pub type DBName<'a> = &'a str;
-
 /// Represents updated entries in a SkipMap after garbage collection, with a generic key type
 pub type GCUpdatedEntries<K> = Arc<RwLock<SkipMap<K, SkipMapValue<ValOffset>>>>;
 

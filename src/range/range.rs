@@ -16,7 +16,7 @@ use log::error;
 use std::collections::BTreeMap;
 // use std::path::PathBuf;
 use std::sync::Arc;
-use std::{cmp::Ordering, collections::HashMap};
+use std::cmp::Ordering;
 // use tokio::fs::{File, OpenOptions};
 // use tokio::sync::RwLock;
 #[derive(Debug, Clone)]
@@ -171,7 +171,7 @@ impl<'a> RangeIterator<'a> {
 impl<'a> DataStore<'a, Key> {
     // Start if the range query
     pub async fn seek(&self, start: &'a [u8], end: &'a [u8]) -> Result<RangeIterator, Error> {
-        let mut merger = Merger::new();
+        let merger = Merger::new();
         // check entries within active memtable
         // if !self.active_memtable.index.is_empty() {
         //     if self
@@ -295,6 +295,7 @@ impl Merger {
         Self { entries: Vec::new() }
     }
     // merge entries in sorted order
+    #[allow(dead_code)]
     fn merge_entries(&mut self, entries_to_merge: Vec<Entry<Key, ValOffset>>) {
         let mut merged_indexes = Vec::new();
         let e1 = &self.entries;

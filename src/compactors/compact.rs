@@ -176,7 +176,7 @@ impl Compactor {
         }
     }
     /// FUTURE: Maybe trigger tombstone compaction on interval in addtion to normal periodic sstable compaction
-    #[allow(unused_variables)]
+    #[allow(unused_variables, dead_code)]
     pub fn tombstone_compaction_condition_background_checker(
         &self,
         bucket_map: BucketMapHandle,

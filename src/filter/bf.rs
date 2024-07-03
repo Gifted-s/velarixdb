@@ -1,4 +1,3 @@
-use crate::filter::bf::Error::FilterFileOpenError;
 use crate::filter::bf::Error::FilterFilePathNotProvided;
 use crate::types::ByteSerializedEntry;
 use crate::types::Key;
@@ -6,9 +5,8 @@ use crate::types::SkipMapEntries;
 use crate::{
     consts::{FILTER_FILE_NAME, SIZE_OF_U32, SIZE_OF_U64},
     err::Error,
-    fs::{FileAsync, FileNode, FilterFileNode, FilterFs},
+    fs::{FileAsync, FilterFileNode, FilterFs},
     util,
-    sst::Table,
 };
 use bit_vec::BitVec;
 use std::{

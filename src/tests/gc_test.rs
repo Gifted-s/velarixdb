@@ -43,6 +43,7 @@ mod tests {
         }
         let storage_reader = store.read().await;
         let config = storage_reader.gc.config.clone();
+        #[allow(unused_variables)]// for non linux based envinronment
         let res = GC::gc_handler(
             &config,
             Arc::clone(&storage_reader.gc_table),

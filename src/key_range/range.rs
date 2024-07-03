@@ -2,9 +2,8 @@ use tokio::sync::RwLock;
 
 use crate::{
     err::Error,
-    filter::BloomFilter,
     sst::Table,
-    types::{self, Key},
+    types::{self},
 };
 use std::{
     cmp::Ordering,

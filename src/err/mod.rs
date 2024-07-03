@@ -43,8 +43,8 @@ pub enum Error {
     #[error("Failed to write to file `{path}`: {error}")]
     FileWriteError { path: PathBuf, error: io::Error },
 
-    #[error("Failed to open bucket directory `{path}`: {error}")]
-    DirectoryOpenError { path: PathBuf, error: io::Error },
+    #[error("Failed to open directory `{path}`: {error}")]
+    DirOpenError { path: PathBuf, error: io::Error },
 
     #[error("File read ended unexpectedly")]
     UnexpectedEOF(#[source] io::Error),

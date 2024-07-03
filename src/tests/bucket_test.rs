@@ -4,7 +4,6 @@ mod tests {
         bucket::{Bucket, BucketMap, InsertableToBucket},
         consts::{BUCKET_HIGH, MIN_TRESHOLD},
         err::Error,
-        filter::BloomFilter,
         tests::{
             fixtures::{self, sst::generate_ssts},
             workload::FilterWorkload,

@@ -7,7 +7,8 @@ use crate::bucket::{Bucket, BucketID, BucketMap};
 use crate::cfg::Config;
 use crate::compactors::{self, Compactor};
 use crate::consts::{
-    DEFAULT_DB_NAME, DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE, HEAD_ENTRY_KEY, HEAD_ENTRY_VALUE, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, TAIL_ENTRY_KEY, TAIL_ENTRY_VALUE
+    DEFAULT_DB_NAME, DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE, HEAD_ENTRY_KEY, HEAD_ENTRY_VALUE, SIZE_OF_U32, SIZE_OF_U64,
+    SIZE_OF_U8, TAIL_ENTRY_KEY, TAIL_ENTRY_VALUE,
 };
 use crate::err::Error;
 use crate::err::Error::*;
@@ -16,7 +17,6 @@ use crate::flush::Flusher;
 use crate::fs::FileAsync;
 use crate::gc::gc::GC;
 use crate::key_range::KeyRange;
-use crate::r#macro::fs_macros;
 use crate::memtable::{Entry, MemTable};
 use crate::meta::Meta;
 use crate::open_dir_stream;
@@ -30,7 +30,6 @@ use indexmap::IndexMap;
 use std::sync::Arc;
 use tokio::fs::read_dir;
 use tokio::sync::RwLock;
-
 
 impl DataStore<'static, Key> {
     pub async fn recover<P: AsRef<Path> + Send + Sync + Clone>(
@@ -48,26 +47,24 @@ impl DataStore<'static, Key> {
         // Get bucket diretories streams
         let mut buckets_stream = open_dir_stream!(buckets_path.as_ref().to_path_buf());
         // for each bucket directory
-        while let Some(bucket_dir) = buckets_stream.next_entry().await.map_err(|err| DirectoryOpenError {
+        while let Some(bucket_dir) = buckets_stream.next_entry().await.map_err(|err| DirOpenError {
             path: buckets_path.as_ref().to_path_buf(),
             error: err,
         })? {
             // get read stream for sstable directories stream in the bucket
             let mut sst_dir_stream = open_dir_stream!(bucket_dir.path());
+
             // iterate over each sstable directory
-            while let Some(sst_dir) = sst_dir_stream
-                .next_entry()
-                .await
-                .map_err(|err| DirectoryOpenError {
-                    path: buckets_path.as_ref().to_path_buf(),
-                    error: err,
-                })?
-            {
+            while let Some(sst_dir) = sst_dir_stream.next_entry().await.map_err(|err| DirOpenError {
+                path: buckets_path.as_ref().to_path_buf(),
+                error: err,
+            })? {
                 // get read stream for files in the sstable directory
                 let mut files_stream = open_dir_stream!(sst_dir.path());
                 let mut files = Vec::new();
+                
                 // iterate over each file
-                while let Some(file) = files_stream.next_entry().await.map_err(|err| DirectoryOpenError {
+                while let Some(file) = files_stream.next_entry().await.map_err(|err| DirOpenError {
                     path: buckets_path.as_ref().to_path_buf(),
                     error: err,
                 })? {
@@ -123,7 +120,7 @@ impl DataStore<'static, Key> {
                 let mut new_filter = BloomFilter::default();
                 new_filter.file_path = Some(filter_file_path);
                 table.filter = Some(new_filter);
-                
+
                 key_range.set(sst_dir.path(), summary.smallest_key, summary.biggest_key, table);
             }
         }
@@ -174,7 +171,7 @@ impl DataStore<'static, Key> {
                 );
                 let gc_updated_entries = Arc::new(RwLock::new(SkipMap::new()));
                 Ok(DataStore {
-                    keyspace:DEFAULT_DB_NAME,
+                    keyspace: DEFAULT_DB_NAME,
                     active_memtable: active_memtable.to_owned(),
                     val_log: vlog,
                     dir,

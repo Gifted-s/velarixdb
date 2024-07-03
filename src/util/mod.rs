@@ -1,5 +1,4 @@
 use rand::{distributions::Alphanumeric, Rng};
-
 use chrono::{DateTime, TimeZone, Utc};
 
 pub fn generate_random_id(length: usize) -> String {

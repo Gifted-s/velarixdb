@@ -1,7 +1,5 @@
 use std::path::{Path, PathBuf};
-
-use chrono::{DateTime, Utc};
-
+use chrono::Utc;
 use crate::{
     consts::{META_FILE_NAME, SIZE_OF_U32, SIZE_OF_U64},
     err::Error,

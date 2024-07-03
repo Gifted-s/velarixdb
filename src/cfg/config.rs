@@ -58,7 +58,11 @@ pub struct Config {
 
     /// How many bytes should be checked in value log for garbage collection in kilobytes
     pub gc_chunk_size: usize,
+
+    /// Maximum number of files that can be opened at once
+    pub open_files_limit: usize,
 }
+
 
 fn get_open_file_limit() -> usize {
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
@@ -103,6 +107,7 @@ impl Config {
             compaction_strategy,
             online_gc_interval,
             gc_chunk_size,
+            open_files_limit: get_open_file_limit(),
         }
     }
 }
@@ -124,6 +129,7 @@ impl Default for Config {
             compaction_strategy: compactors::Strategy::STCS,
             online_gc_interval: DEFAULT_ONLINE_GC_INTERVAL,
             gc_chunk_size: GC_CHUNK_SIZE,
+            open_files_limit: get_open_file_limit(),
         }
     }
 }
@@ -288,6 +294,7 @@ mod tests {
             compaction_strategy: compactors::Strategy::STCS,
             online_gc_interval: Duration::from_secs(0),
             gc_chunk_size: 51200,
+            open_files_limit: 150
         };
         store.config = config;
         return store;
