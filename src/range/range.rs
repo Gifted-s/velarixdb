@@ -6,8 +6,8 @@
 use crate::consts::HEAD_ENTRY_KEY;
 use crate::err::Error;
 // use crate::index::Index;
-use crate::memtable::Entry;
 use crate::db::DataStore;
+use crate::memtable::Entry;
 use crate::types::{Key, ValOffset, Value};
 use crate::vlog::ValueLog;
 // use async_trait::async_trait;
@@ -15,8 +15,8 @@ use futures::future::join_all;
 use log::error;
 use std::collections::BTreeMap;
 // use std::path::PathBuf;
-use std::sync::Arc;
 use std::cmp::Ordering;
+use std::sync::Arc;
 // use tokio::fs::{File, OpenOptions};
 // use tokio::sync::RwLock;
 #[derive(Debug, Clone)]

@@ -14,12 +14,19 @@ use std::{
 
 pub type BiggestKey = types::Key;
 pub type SmallestKey = types::Key;
+
 #[derive(Clone, Debug)]
 pub struct KeyRange {
+    /// HashMap to map SSTable directory path to its key range
     pub key_ranges: HashMap<PathBuf, Range>,
+
+    /// Maps SSTable path to its key range (for sstables
+    /// whose filters are just restored yet to be move to
+    /// `key_ranges`)
     pub restored_ranges: Arc<RwLock<HashMap<PathBuf, Range>>>,
 }
 
+/// Represents smallest and largest key in an sstable
 #[derive(Clone, Debug)]
 pub struct Range {
     pub smallest_key: SmallestKey,
@@ -27,6 +34,7 @@ pub struct Range {
     pub sst: Table,
 }
 impl Range {
+    // Creates new `Range`
     pub fn new<T: AsRef<[u8]>>(smallest_key: T, biggest_key: T, sst: Table) -> Self {
         Self {
             smallest_key: smallest_key.as_ref().to_vec(),
@@ -36,13 +44,14 @@ impl Range {
     }
 }
 impl KeyRange {
+    // Creates new `KeyRange``
     pub fn new() -> Self {
         Self {
             key_ranges: HashMap::new(),
             restored_ranges: Arc::new(RwLock::new(HashMap::new())),
         }
     }
-
+    /// Maps SSTable path to its key range
     pub fn set<P: AsRef<Path> + Send + Sync, T: AsRef<[u8]>>(
         &mut self,
         sst_dir: P,
@@ -58,11 +67,17 @@ impl KeyRange {
             .is_some()
     }
 
+    /// Removes an entry from the `key_ranges` hash map
     pub fn remove<P: AsRef<Path> + Send + Sync>(&mut self, sst_path: P) -> bool {
         self.key_ranges.remove(sst_path.as_ref()).is_some()
     }
 
-    // Returns SSTables whose last key is greater than the supplied key parameter
+    /// Returns `Table`  vector whose last key is greater than the
+    /// supplied key parameter
+    ///
+    /// # Errors
+    ///
+    /// Returns error in case failure occured
     pub async fn filter_sstables_by_biggest_key<K: AsRef<[u8]>>(&self, key: K) -> Result<Vec<Table>, Error> {
         let mut filtered_ssts: Vec<Table> = Vec::new();
         let has_restored_ranges = !self.restored_ranges.read().await.is_empty();
@@ -117,7 +132,14 @@ impl KeyRange {
         return Ok(filtered_ssts);
     }
 
-    // Returns SSTables whose last key is greater than the supplied key parameter
+    /// Returns `Table` vector whose last key is greater than or equal to
+    /// the supplied key parameter
+    ///
+    /// NOTE: The search is carried out on sstables whose filters are just recoverd
+    ///
+    /// # Errors
+    ///
+    /// Returns error in case failure occured
     pub async fn check_restored_key_ranges<K: AsRef<[u8]>>(&self, key: K) -> Result<Vec<Table>, Error> {
         let mut filtered_ssts: Vec<Table> = Vec::new();
         let key_ranges = self.restored_ranges.read().await;
@@ -133,6 +155,8 @@ impl KeyRange {
         return Ok(filtered_ssts);
     }
 
+    /// Moves entries in `restored_ranges` with sstables whose filters are just restored
+    /// to `key_ranges`
     pub async fn update_key_range(&mut self) {
         let restored_ranges = self.restored_ranges.read().await;
         if !restored_ranges.is_empty() {
@@ -144,7 +168,7 @@ impl KeyRange {
         }
     }
 
-    // Returns SSTables whose keys overlap with the key range supplied
+    /// Returns SSTables whose keys overlap with the key range supplied
     pub fn range_scan<T: AsRef<[u8]>>(&self, start_key: T, end_key: T) -> Vec<&Range> {
         self.key_ranges
             .iter()

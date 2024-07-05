@@ -42,8 +42,7 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
     time::SystemTime,
-};
-
+}; 
 use crate::{
     block::Block,
     bucket::InsertableToBucket,
@@ -51,15 +50,15 @@ use crate::{
     err::Error,
     filter::BloomFilter,
     fs::{DataFileNode, DataFs, FileAsync, FileNode, IndexFileNode, IndexFs, SummaryFileNode, SummaryFs},
-    util,
     index::{Index, IndexFile, RangeOffset},
     key_range::{BiggestKey, SmallestKey},
     memtable::{Entry, SkipMapValue},
     types::{ByteSerializedEntry, CreatedAt, IsTombStone, Key, SkipMapEntries, ValOffset},
+    util,
 };
-
 use Error::*;
 
+/// DataFile
 #[derive(Debug, Clone)]
 pub struct DataFile<F: DataFs> {
     pub(crate) file: F,
@@ -67,6 +66,7 @@ pub struct DataFile<F: DataFs> {
 }
 
 impl<F: DataFs> DataFile<F> {
+    /// Creates new `DataFile`
     pub fn new<P: AsRef<Path> + Send + Sync>(path: P, file: F) -> Self {
         Self {
             path: path.as_ref().to_path_buf(),
@@ -75,19 +75,40 @@ impl<F: DataFs> DataFile<F> {
     }
 }
 
+/// An SSTable
 #[derive(Debug, Clone)]
 pub struct Table {
+    /// Directory sstable files are stored at
     pub(crate) dir: PathBuf,
+
+    /// How often is this sstable used?
     pub(crate) hotness: u64,
+
+    /// Size of the sstable
     pub(crate) size: usize,
+
+    /// Date created
     pub(crate) created_at: CreatedAt,
+
+    /// SSTable data file
     pub(crate) data_file: DataFile<DataFileNode>,
+
+    /// SSTable index data file
     pub(crate) index_file: IndexFile<IndexFileNode>,
+
+    /// Lock-Free skipmap to store sstable entries
+    /// used during retrieval or before flush
     pub(crate) entries: SkipMapEntries<Key>,
+
+    /// Bloom filter for sstable in case of crash recovery. This is not
+    /// set until flush
     pub(crate) filter: Option<BloomFilter>,
+
+    /// Stores the summary including biggest and smallest key
     pub(crate) summary: Option<Summary>,
 }
 
+/// Defines trait to make `Table` insertable to bucket
 impl InsertableToBucket for Table {
     fn get_entries(&self) -> SkipMapEntries<Key> {
         self.entries.clone()
@@ -103,6 +124,7 @@ impl InsertableToBucket for Table {
 }
 
 impl Table {
+    /// Creates a new `Table`
     pub async fn new<P: AsRef<Path> + Send + Sync>(dir: P) -> Result<Table, Error> {
         let (data_file_path, index_file_path, created_at) = Table::generate_file_path(dir.as_ref()).await?;
         let data_file = DataFileNode::new(data_file_path.to_owned(), crate::fs::FileType::Data)
@@ -127,14 +149,19 @@ impl Table {
     pub fn increase_hotness(&mut self) {
         self.hotness += 1;
     }
+    /// Returns `Table` `data_file` path
     pub fn get_data_file_path(&self) -> PathBuf {
         self.data_file.path.clone()
     }
 
+    /// Returns `Table` `hotness`
     pub fn get_hotness(&self) -> u64 {
         self.hotness
     }
 
+    /// Creates table directory
+    ///
+    /// Returns data and index file name
     pub async fn generate_file_path<P: AsRef<Path> + Send + Sync>(
         dir: P,
     ) -> Result<(PathBuf, PathBuf, CreatedAt), Error> {
@@ -148,6 +175,11 @@ impl Table {
         Ok((data_file_path, index_file_path, created_at))
     }
 
+    /// Returns a key from a block in sstable data file
+    ///
+    /// # Errors
+    ///
+    /// Returns IO error in case it occurs
     pub(crate) async fn get<K: AsRef<[u8]>>(
         &self,
         start_offset: u32,
@@ -159,6 +191,11 @@ impl Table {
             .await
     }
 
+    /// Build  `entries` from sstable data file
+    ///
+    /// # Errors
+    ///
+    /// Returns IO error incase it occurs
     pub(crate) async fn load_entries_from_file(&mut self) -> Result<(), Error> {
         let (entries, bytes_read) = self.data_file.file.load_entries().await?;
         //TODO: review should only return entries not an entire table
@@ -167,6 +204,7 @@ impl Table {
         Ok(())
     }
 
+    /// Returns new `Table` using the supplied parameters
     pub(crate) async fn build_from<P: AsRef<Path> + Send + Sync + Clone>(
         dir: P,
         data_file_path: P,
@@ -201,6 +239,14 @@ impl Table {
         return table;
     }
 
+    /// Writes SSTable files to disk
+    ///
+    /// After successful write, the summary and bloom filter
+    /// for the table is set
+    ///
+    /// Errors
+    ///
+    /// Returns error in case of IO error
     pub(crate) async fn write_to_file(&mut self) -> Result<(), Error> {
         if self.filter.is_none() {
             return Err(FilterNotProvidedForFlush);
@@ -210,7 +256,7 @@ impl Table {
         }
         let index_file = &self.index_file;
         let mut blocks: Vec<Block> = Vec::new();
-        let mut table_index = Index::new(self.index_file.path.clone(), index_file.file.clone());
+        let mut index = Index::new(self.index_file.path.clone(), index_file.file.clone());
         let mut summary = Summary::new(self.dir.to_owned());
 
         let biggest_key = self.entries.back();
@@ -242,6 +288,7 @@ impl Table {
                 e.value().created_at,
                 e.value().is_tombstone,
             );
+
             // key len(variable) +  key length(used during fetch) + value length(4 bytes) + date in milliseconds(8 bytes)
             let entry_size = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
             if current_block.is_full(entry_size) {
@@ -258,17 +305,22 @@ impl Table {
         }
 
         for block in blocks.iter() {
-            self.write_block(block, &mut table_index).await?;
+            self.write_block(block, &mut index).await?;
         }
 
         // Incase we have some entries left in current block, write them to disk
         if current_block.entries.len() > 0 {
-            self.write_block(&current_block, &mut table_index).await?;
+            self.write_block(&current_block, &mut index).await?;
         }
-        table_index.write_to_file().await?;
+        index.write_to_file().await?;
         Ok(())
     }
 
+    /// Write block to disk
+    ///
+    /// Errors
+    ///
+    /// Returns error in case of IO error
     async fn write_block(&mut self, block: &Block, table_index: &mut Index) -> Result<(), Error> {
         let offset = self.size;
         let last_entry = block.get_last_entry();
@@ -278,6 +330,11 @@ impl Table {
         Ok(())
     }
 
+    /// Retreives entries within a specific block range
+    ///
+    /// Errors
+    ///
+    /// Returns error in case of IO error
     #[allow(dead_code)]
     pub(crate) async fn range(&self, range_offset: RangeOffset) -> Result<Vec<Entry<Key, usize>>, Error> {
         self.data_file.file.load_entries_within_range(range_offset).await
@@ -287,10 +344,12 @@ impl Table {
         self.size = 0;
     }
 
+    /// Retrieves an entry from `entries` map
     pub(crate) fn get_value_from_entries<K: AsRef<[u8]>>(&self, key: K) -> Option<SkipMapValue<ValOffset>> {
         self.entries.get(key.as_ref()).map(|entry| entry.value().to_owned())
     }
 
+    /// Compares two offsets
     fn compare_offsets(offset_a: usize, offset_b: usize) -> Ordering {
         if offset_a < offset_b {
             Ordering::Less
@@ -301,15 +360,18 @@ impl Table {
         }
     }
 
-    fn size(&self) -> usize {
+    /// Returns `size` of `Table`
+    pub fn size(&self) -> usize {
         self.size
     }
 
+    /// Set `entries` field in `Table`
     pub(crate) fn set_entries(&mut self, entries: Arc<SkipMap<Key, SkipMapValue<ValOffset>>>) {
         self.entries = entries;
         self.set_sst_size_from_entries();
     }
 
+    /// Set byte `size` from entries size
     pub(crate) fn set_sst_size_from_entries(&mut self) {
         self.size = self
             .entries
@@ -319,14 +381,21 @@ impl Table {
     }
 }
 
+/// Summary of SSTable
 #[derive(Debug, Clone)]
 pub struct Summary {
+    /// File path for summary file
     pub path: PathBuf,
+
+    /// Smallest key in `Table`
     pub smallest_key: SmallestKey,
+
+    /// Biggest key in `Table`
     pub biggest_key: BiggestKey,
 }
 
 impl Summary {
+    /// Create new `Summary`
     pub fn new<P: AsRef<Path> + Send + Sync>(path: P) -> Self {
         let file_path = path.as_ref().join(format!("{}.db", SUMMARY_FILE_NAME));
         Self {
@@ -336,6 +405,11 @@ impl Summary {
         }
     }
 
+    /// Writes `Summary` to file
+    ///
+    /// # Errors
+    ///
+    /// Returns IO error in case it occurs
     pub async fn write_to_file(&mut self) -> Result<(), Error> {
         let file = SummaryFileNode::new(self.path.to_owned(), crate::fs::FileType::Summary)
             .await
@@ -345,6 +419,11 @@ impl Summary {
         return Ok(());
     }
 
+    /// Recovers `Summary` fields from summary file
+    ///
+    /// # Errors
+    ///
+    /// Returns IO error in case it occurs
     pub async fn recover(&mut self) -> Result<(), Error> {
         let (smallest_key, biggest_key) = SummaryFileNode::recover(self.path.to_owned()).await?;
         self.smallest_key = smallest_key;
@@ -352,6 +431,7 @@ impl Summary {
         return Ok(());
     }
 
+    /// Serializes `Summary` to byte vector
     fn serialize(&self) -> ByteSerializedEntry {
         let entry_len = SIZE_OF_U32 + SIZE_OF_U32 + self.biggest_key.len() + self.smallest_key.len();
         let mut serialized_data = Vec::with_capacity(entry_len);

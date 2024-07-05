@@ -2,7 +2,6 @@ use crate::{
     consts::{EOF, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8},
     err::Error::{self, *},
     filter::{FalsePositive, NoHashFunc, NoOfElements},
-    util,
     index::RangeOffset,
     key_range::{BiggestKey, SmallestKey},
     load_buffer,
@@ -10,6 +9,7 @@ use crate::{
     types::{
         CreatedAt, IsTombStone, Key, LastModified, NoBytesRead, SkipMapEntries, VLogHead, VLogTail, ValOffset, Value,
     },
+    util,
     vlog::ValueLogEntry,
 };
 use async_trait::async_trait;

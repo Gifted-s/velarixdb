@@ -11,13 +11,13 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// Contains type aliases to help with readability
-/// Represents a key in the database
+/// Represents a key 
 pub type Key = Vec<u8>;
 
-/// Represents a value in the database
+/// Represents a value
 pub type Value = Vec<u8>;
 
-/// Represents the offset of a value
+/// Alias for value offset in vlog file
 pub type ValOffset = usize;
 
 /// Represents the creation time of an entity
@@ -29,7 +29,7 @@ pub type LastModified = DateTime<Utc>;
 /// Represents a tombstone marker (true if entry is deleted)
 pub type IsTombStone = bool;
 
-/// Represents a signal for flushing data
+/// Represents singal sent after flush
 pub type FlushSignal = u8;
 
 /// Represents the number of bytes read
@@ -38,7 +38,7 @@ pub type NoBytesRead = usize;
 /// Represents entries in a SkipMap with generic key type
 pub type SkipMapEntries<K> = Arc<SkipMap<K, SkipMapValue<ValOffset>>>;
 
-/// Represents a receiver for flush signals
+/// Represents a receiver for flush signal
 pub type FlushReceiver = async_broadcast::Receiver<FlushSignal>;
 
 /// Thread-safe BucketMap
@@ -50,8 +50,11 @@ pub type BloomFilterHandle = Arc<RwLock<Vec<BloomFilter>>>;
 /// Thread-safe KeyRange type
 pub type KeyRangeHandle = Arc<RwLock<KeyRange>>;
 
-/// Represents an immutable MemTable
-pub type ImmutableMemTable<K> = Arc<RwLock<IndexMap<K, Arc<RwLock<MemTable<K>>>>>>;
+/// Represents read-only MemTables
+pub type ImmutableMemTables<K> = Arc<RwLock<IndexMap<K, Arc<RwLock<MemTable<K>>>>>>;
+
+/// Represents read-only memtables without locking
+pub type ImmutableMemTablesLockFree<K> = IndexMap<MemtableId, Arc<RwLock<MemTable<K>>>>;
 
 /// Alias for a boolean value
 pub type Bool = bool;

@@ -1,12 +1,13 @@
-use std::path::{Path, PathBuf};
-use chrono::Utc;
 use crate::{
     consts::{META_FILE_NAME, SIZE_OF_U32, SIZE_OF_U64},
     err::Error,
     fs::{FileAsync, FileNode, MetaFileNode, MetaFs},
     types::{ByteSerializedEntry, CreatedAt, LastModified, VLogHead, VLogTail},
 };
+use chrono::Utc;
+use std::path::{Path, PathBuf};
 
+/// Meta file
 #[derive(Debug, Clone)]
 pub struct MetaFile<F: MetaFs> {
     pub file: F,
@@ -14,6 +15,7 @@ pub struct MetaFile<F: MetaFs> {
 }
 
 impl<F: MetaFs> MetaFile<F> {
+    /// Creates a new `MetaFile`
     pub fn new<P: AsRef<Path> + Send + Sync>(path: P, file: F) -> Self {
         Self {
             path: path.as_ref().to_path_buf(),
@@ -22,8 +24,10 @@ impl<F: MetaFs> MetaFile<F> {
     }
 }
 
+/// metadata for `DataStore`
 #[derive(Debug, Clone)]
 pub struct Meta {
+    /// Handles file operations
     pub file_handle: MetaFile<MetaFileNode>,
     pub v_log_tail: VLogHead,
     pub v_log_head: VLogTail,
@@ -32,6 +36,7 @@ pub struct Meta {
 }
 
 impl Meta {
+    /// Creates new `Meta`
     pub async fn new<P: AsRef<Path> + Send + Sync>(dir: P) -> Result<Self, Error> {
         let created_at = Utc::now();
         let last_modified = Utc::now();
@@ -49,14 +54,27 @@ impl Meta {
             last_modified,
         })
     }
-
+    /// Writes `Meta` to disk
     pub async fn write(&mut self) -> Result<(), Error> {
         let serialized_data = self.serialize();
         self.file_handle.file.node.clear().await?;
         self.file_handle.file.node.write_all(&serialized_data).await?;
         return Ok(());
     }
+    /// Sets `Meta` `v_log_head` field
+    pub fn set_head(&mut self, head: usize) {
+        self.v_log_head = head;
+    }
+    /// Updates `last_modified` field
+    pub fn update_last_modified(&mut self) {
+        self.last_modified = Utc::now();
+    }
 
+    /// Recovers `Meta` from disk
+    /// 
+    /// # Errors
+    ///
+    /// Returns IO error in case it occurs
     pub async fn recover(&mut self) -> Result<(), Error> {
         let (head, tail, created_at, last_modified) = MetaFileNode::recover(self.file_handle.path.to_owned()).await?;
         self.v_log_head = head;
@@ -66,6 +84,7 @@ impl Meta {
         return Ok(());
     }
 
+    /// Serializes `Meta` into byte vector
     fn serialize(&self) -> ByteSerializedEntry {
         // head offset + tail offset + created_at + last_modified
         let entry_len = SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U64;

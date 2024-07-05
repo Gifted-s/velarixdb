@@ -18,21 +18,46 @@ use std::{
         Arc, Mutex,
     },
 };
+/// Alias for false positive rate
 pub type FalsePositive = f64;
+
+/// Alias for hash functions used by filter
 pub type NoHashFunc = u32;
+
+/// Alias for number of elements inserted to filter
 pub type NoOfElements = u32;
 
+/// Bloom filter struct responsile for all operation
+/// specific to bloom filters
+///
+/// A Bloom filter is a space-efficient probabilistic data structure that is used to test
+/// whether an element is a member of a set in this case if a key exists in sstable
+/// For more understanding <https://brilliant.org/wiki/bloom-filter/>
 #[derive(Debug)]
 pub struct BloomFilter {
+    /// SSTable directory for bloom filter. Not set until a flush happens
     pub sst_dir: Option<PathBuf>,
+
+    /// Number of hash function used by filter
     pub no_of_hash_func: usize,
+
+    /// Number of elements inserted to filter
     pub no_of_elements: AtomicU32,
+
+    /// Thread-safe bit vector which is used to predict if a key
+    /// exists in the filter or not
     pub bit_vec: Arc<Mutex<BitVec>>,
+
+    /// To what extent should we permit false positives the lower
+    /// the more acurate but more costly in terms of computation
     pub false_positive_rate: f64,
+
+    /// File path for file that stores filter metadata
     pub file_path: Option<PathBuf>,
 }
 
 impl BloomFilter {
+    /// creates new [`BloomFilter`] instance
     pub fn new(false_positive_rate: f64, no_of_elements: usize) -> Self {
         assert!(
             false_positive_rate >= 0.0,
@@ -53,6 +78,8 @@ impl BloomFilter {
             file_path: None,
         }
     }
+
+    /// Adds key to filter
     pub(crate) fn set<K: Hash + Copy>(&mut self, key: K) {
         let mut bits = self.bit_vec.lock().expect("Failed to lock file");
         for i in 0..self.no_of_hash_func {
@@ -63,6 +90,7 @@ impl BloomFilter {
         self.no_of_elements.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Checks if a key exists or not
     pub(crate) fn contains<K: Hash + Copy>(&self, key: K) -> bool {
         let bits = self.bit_vec.lock().expect("Failed to lock file");
         for i in 0..self.no_of_hash_func {
@@ -74,6 +102,14 @@ impl BloomFilter {
         }
         true
     }
+    /// Writes filter metadata to disk
+    ///
+    /// Writes filter to disk, note, this does not include the
+    /// `bit_vec``, bit vec re-computed during crash recovery
+    ///
+    /// # Errors
+    ///
+    /// Returns IO error in case write fails
     pub async fn write<P: AsRef<Path> + Send + Sync>(&mut self, dir: P) -> Result<(), Error> {
         let file_path = dir.as_ref().join(format!("{}.db", FILTER_FILE_NAME));
         let file = FilterFileNode::new(file_path.to_owned(), crate::fs::FileType::Filter)
@@ -85,10 +121,16 @@ impl BloomFilter {
         return Ok(());
     }
 
+    /// Reconstructs `bit_vec`` from entries
     pub(crate) fn build_filter_from_entries(&mut self, entries: &SkipMapEntries<Key>) {
         entries.iter().for_each(|e| self.set(e.key()));
     }
 
+    /// Retrieves filter meta data from disk
+    ///
+    /// # Errors
+    ///
+    /// Returns IO error in case recovery fails
     pub async fn recover_meta(&mut self) -> Result<(), Error> {
         if self.file_path == None {
             return Err(FilterFilePathNotProvided);
@@ -105,6 +147,12 @@ impl BloomFilter {
         return Ok(());
     }
 
+    /// Serializes `BloomFilter` attributes
+    ///
+    /// Converts `BloomFilter` atttributes such as no_of_hash_func, no_of_elements and
+    /// false positive floating point into byte vector
+    ///
+    /// Returns the byte vector
     fn serialize(&self) -> ByteSerializedEntry {
         // No of Hash Function + No of Elements  + False Positive
         let entry_len = SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64;
@@ -121,10 +169,12 @@ impl BloomFilter {
         serialized_data
     }
 
+    /// Sets the sst_dir field for [`BloomFilter`]
     pub fn set_sstable_path<P: AsRef<Path>>(&mut self, path: P) {
         self.sst_dir = Some(path.as_ref().to_path_buf());
     }
 
+    /// Resets the [`BloomFilter`] instance
     pub fn clear(&mut self) -> Self {
         let mut bits = self.bit_vec.lock().expect("Failed to lock file");
         for i in 0..bits.len() {
@@ -166,6 +216,7 @@ impl BloomFilter {
         self.sst_dir.as_ref().unwrap()
     }
 
+    /// Generates the hashed version of a provided key
     fn calculate_hash<K: Hash>(&self, key: K, seed: usize) -> u64 {
         let mut hasher = DefaultHasher::new();
         key.hash(&mut hasher);
@@ -173,11 +224,13 @@ impl BloomFilter {
         hasher.finish()
     }
 
+    /// Calculates number of bits to be inserted to `bit_vec`
     fn calculate_no_of_bits(no_of_elements: usize, false_positive_rate: f64) -> u32 {
         let no_bits = -((no_of_elements as f64 * false_positive_rate.ln()) / ((2_f64.ln()).powi(2))).ceil();
         no_bits as u32
     }
 
+    /// Calculates number of hash fuctions to be used by [`BloomFilter`]
     fn calculate_no_of_hash_function(no_of_bits: u32, no_of_elements: u32) -> u32 {
         let no_hash_func = (no_of_bits as f64 / no_of_elements as f64) * (2_f64.ln()).ceil();
         no_hash_func as u32

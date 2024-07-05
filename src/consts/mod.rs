@@ -2,11 +2,17 @@ use crate::db::SizeUnit;
 
 pub const KB: usize = 1024;
 
+pub const MAX_KEY_SIZE: usize = 65536;
+
+pub const MAX_KEY_SPACE_SIZE: usize = 255;
+
+pub const MAX_VALUE_SIZE: usize = (1u64 << 32) as usize; // 2^32
+
 pub const DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE: usize = 1;
 
 pub const DEFAULT_MAX_WRITE_BUFFER_NUMBER: usize = 2;
 
-pub const DEFAULT_FALSE_POSITIVE_RATE: f64 = 1e-300;
+pub const DEFAULT_FALSE_POSITIVE_RATE: f64 = 1e-10;
 
 pub const VALUE_LOG_DIRECTORY_NAME: &str = "v_log";
 

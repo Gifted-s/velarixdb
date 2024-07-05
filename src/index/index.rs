@@ -48,8 +48,6 @@
 //! 2. Key: Variable-length key bytes, representing the last key in the block.
 //! 3. Block Handle: A 4-byte length prefix in little-endian format, indicating the start of the block in the data file
 //! TODO: Block compresion size:  A 4-byte length prefix in little-endian format, indicating the compressed size of the block
-//!
-//!
 use crate::consts::SIZE_OF_U32;
 use crate::err::Error;
 use crate::fs::{FileAsync, IndexFileNode, IndexFs};
@@ -59,7 +57,9 @@ use std::path::{Path, PathBuf};
 use Error::*;
 type Offset = u32;
 type KeyLength = u32;
+type BlockOffset = u32;
 
+/// Represents index file  
 #[derive(Debug, Clone)]
 pub struct IndexFile<F: IndexFs> {
     pub(crate) file: F,
@@ -74,21 +74,36 @@ impl<F: IndexFs> IndexFile<F> {
         }
     }
 }
+
+/// Represents each entry in the index
 #[derive(Debug, Clone)]
 pub struct IndexEntry {
+    /// Key length used to determine the length of key during
+    /// retrieval from file
     pub key_len: KeyLength,
+
+    /// Key
     pub key: Key,
+
+    /// Start offset of the [`Block`] key is located at
     pub block_handle: Offset,
     // TODO: pub: compressed_size
 }
+
+/// Represents index
 #[derive(Debug, Clone)]
 pub struct Index {
     entries: Vec<IndexEntry>,
     file: IndexFile<IndexFileNode>,
 }
+
+/// Represents range offset (used for range queries)
 #[derive(Debug, Clone)]
 pub struct RangeOffset {
+    /// Block to start reading from in case of range queries
     pub start_offset: Offset,
+
+    /// Block to stop reading from in case of range queries
     pub end_offset: Offset,
 }
 
@@ -102,12 +117,15 @@ impl RangeOffset {
 }
 
 impl Index {
+    // Creates new `Index`
     pub fn new<P: AsRef<Path> + Send + Sync>(path: P, file: IndexFileNode) -> Self {
         Self {
             entries: Vec::new(),
             file: IndexFile::new(path, file),
         }
     }
+
+    /// Inserts new entry
     pub fn insert(&mut self, key_len: u32, key: Key, offset: Offset) {
         self.entries.push(IndexEntry {
             key_len,
@@ -116,6 +134,8 @@ impl Index {
         })
     }
 
+    /// Writes index to file,
+    /// Return IO error in case it happens
     pub async fn write_to_file(&self) -> Result<(), Error> {
         for e in &self.entries {
             let serialized_input = self.serialize_entry(e)?;
@@ -124,6 +144,9 @@ impl Index {
         Ok(())
     }
 
+    /// Serializes the entry in the index as a byte vector
+    ///
+    /// Returns `ByteSerializedEntry`or Error if not
     fn serialize_entry(&self, e: &IndexEntry) -> Result<ByteSerializedEntry, Error> {
         let entry_len = e.key.len() + SIZE_OF_U32 + SIZE_OF_U32;
 
@@ -142,8 +165,8 @@ impl Index {
         }
         Ok(entry_vec)
     }
-
-    pub(crate) async fn get<K: AsRef<[u8]>>(&self, searched_key: K) -> Result<Option<u32>, Error> {
+    /// Retrieves a Block Offset from index file
+    pub(crate) async fn get<K: AsRef<[u8]>>(&self, searched_key: K) -> Result<Option<BlockOffset>, Error> {
         self.file.file.get_from_index(searched_key.as_ref()).await
     }
 

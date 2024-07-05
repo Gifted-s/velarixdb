@@ -14,7 +14,7 @@ use crate::{
 use std::time::Duration;
 
 #[derive(Clone, Debug)]
-/// Configuration options for the storage engine.
+/// Configuration for  data store.
 pub struct Config {
     /// False positive rate for the Bloom filter. The lower the value, the more accurate,
     /// but it incurs extra cost on the CPU for more accuracy.
@@ -62,7 +62,6 @@ pub struct Config {
     /// Maximum number of files that can be opened at once
     pub open_files_limit: usize,
 }
-
 
 fn get_open_file_limit() -> usize {
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
@@ -276,9 +275,8 @@ mod tests {
     async fn create_datastore() -> DataStore<'static, Key> {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("store_test_3"));
-        let mut store = DataStore::new("test", path).await.unwrap();
+        let mut store = DataStore::open("test", path).await.unwrap();
         // Initialize with default or dummy values
-
         let config = Config {
             false_positive_rate: 0.01,
             allow_prefetch: false,
@@ -294,7 +292,7 @@ mod tests {
             compaction_strategy: compactors::Strategy::STCS,
             online_gc_interval: Duration::from_secs(0),
             gc_chunk_size: 51200,
-            open_files_limit: 150
+            open_files_limit: 150,
         };
         store.config = config;
         return store;

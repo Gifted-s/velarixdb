@@ -2,7 +2,7 @@ use crate::consts::FLUSH_SIGNAL;
 use crate::flush::flusher::Error::FilterNotProvidedForFlush;
 use crate::flush::flusher::Error::FlushError;
 use crate::flush::flusher::Error::TableSummaryIsNoneError;
-use crate::types::{self, BloomFilterHandle, BucketMapHandle, FlushSignal, ImmutableMemTable, KeyRangeHandle};
+use crate::types::{self, BloomFilterHandle, BucketMapHandle, FlushSignal, ImmutableMemTables, KeyRangeHandle};
 use crate::{err::Error, memtable::MemTable};
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -11,9 +11,10 @@ use tokio::sync::RwLock;
 type K = types::Key;
 pub type InActiveMemtable = Arc<RwLock<MemTable<K>>>;
 
+/// Responsible for flushing memtables to disk
 #[derive(Debug, Clone)]
 pub struct Flusher {
-    pub(crate) read_only_memtable: ImmutableMemTable<K>,
+    pub(crate) read_only_memtable: ImmutableMemTables<K>,
     pub(crate) bucket_map: BucketMapHandle,
     pub(crate) filters: BloomFilterHandle,
     pub(crate) key_range: KeyRangeHandle,
@@ -21,7 +22,7 @@ pub struct Flusher {
 
 impl Flusher {
     pub fn new(
-        read_only_memtable: ImmutableMemTable<K>,
+        read_only_memtable: ImmutableMemTables<K>,
         bucket_map: BucketMapHandle,
         filters: BloomFilterHandle,
         key_range: KeyRangeHandle,
@@ -34,6 +35,10 @@ impl Flusher {
         }
     }
 
+    /// Handles a single flush operation
+    ///
+    /// This method writes memtable to the right bucket and update the
+    /// `KeyRange` with the new sstable
     pub async fn flush(&mut self, table: InActiveMemtable) -> Result<(), Error> {
         let flush_data = self;
         let table_reader = table.read().await;
@@ -63,6 +68,12 @@ impl Flusher {
         Ok(())
     }
 
+    /// Flushes memtable to disk in background
+    ///
+    /// Handles flushing memtable to disk in background and
+    /// removes it from the read only memtables
+    ///
+    /// It also notifies flush listener
     pub fn flush_handler<Id: 'static + AsRef<[u8]> + Send + Sync + Debug>(
         &mut self,
         table_id: Id,

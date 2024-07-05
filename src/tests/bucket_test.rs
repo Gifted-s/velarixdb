@@ -1,18 +1,161 @@
 #[cfg(test)]
 mod tests {
+    use crate::sst::DataFile;
+    use crate::tests::workload::FilterWorkload;
     use crate::{
-        bucket::{Bucket, BucketMap, InsertableToBucket},
+        bucket::{Bucket, BucketMap},
         consts::{BUCKET_HIGH, MIN_TRESHOLD},
         err::Error,
-        tests::{
-            fixtures::{self, sst::generate_ssts},
-            workload::FilterWorkload,
-        },
     };
+    use std::path::Path;
     use std::{path::PathBuf, sync::Arc};
     use tempfile::tempdir;
     use tokio::fs;
     use uuid::Uuid;
+
+    use chrono::Utc;
+    use crossbeam_skiplist::SkipMap;
+    use tokio::{fs::File, sync::RwLock};
+
+    use crate::{
+        fs::{DataFileNode, FileNode, FileType, IndexFileNode},
+        index::IndexFile,
+        sst::Table,
+    };
+
+    pub struct SSTContructor {
+        pub dir: PathBuf,
+        pub data_path: PathBuf,
+        pub index_path: PathBuf,
+    }
+
+    impl SSTContructor {
+        fn new<P: AsRef<Path> + Send + Sync>(dir: P, data_path: P, index_path: P) -> Self {
+            return Self {
+                dir: dir.as_ref().to_path_buf(),
+                data_path: data_path.as_ref().to_path_buf(),
+                index_path: index_path.as_ref().to_path_buf(),
+            };
+        }
+
+        pub async fn generate_ssts(number: u32) -> Vec<Table> {
+            let sst_contructor: Vec<SSTContructor> = vec![
+        SSTContructor::new(
+        PathBuf::from("src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830953696"),
+        PathBuf::from(
+            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830958016/data_1718830958016_.db",
+        ),
+        PathBuf::from(
+            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830958016/index_1718830958016_.db",
+        ),
+    ),
+    SSTContructor::new(
+        PathBuf::from("src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830954572"),
+        PathBuf::from(
+            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830958858/data_1718830958858_.db",
+        ),
+        PathBuf::from(
+            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830958858/index_1718830958858_.db",
+        ),
+    ),
+    SSTContructor::new(
+        PathBuf::from("src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830955463"),
+        PathBuf::from(
+            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830958906/data_1718830958906_.db",
+        ),
+        PathBuf::from(
+            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830958906/index_1718830958906_.db",
+        ),
+    ),
+    SSTContructor::new(
+        PathBuf::from("src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830956313"),
+        PathBuf::from(
+            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830958953/data_1718830958953_.db",
+        ),
+        PathBuf::from(
+            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830958953/index_1718830958953_.db",
+        ),
+    ),
+    SSTContructor::new(
+        PathBuf::from("src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830957169"),
+        PathBuf::from(
+            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830959000/data_1718830959000_.db",
+        ),
+        PathBuf::from(
+            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830959000/index_1718830959000_.db",
+        ),
+    ),
+    SSTContructor::new(
+        PathBuf::from("src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830958810"),
+        PathBuf::from(
+            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830959049/data_1718830959049_.db",
+        ),
+        PathBuf::from(
+            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830959049/index_1718830959049_.db",
+        ),
+    ),
+    SSTContructor::new(
+        PathBuf::from("src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830958858"),
+        PathBuf::from(
+            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830959097/data_1718830959097_.db",
+        ),
+        PathBuf::from(
+            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830959097/index_1718830959097_.db",
+        ),
+    ),
+    SSTContructor::new(
+        PathBuf::from("src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830958906"),
+        PathBuf::from(
+            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830959145/data_1718830959145_.db",
+        ),
+        PathBuf::from(
+            "src/tests/fixtures/data/buckets/bucket5af1d6ce-fca8-4b31-8380-c9b1612a9879/sstable_1718830959145/index_1718830959145_.db",
+        ),
+    ),
+    ];
+            let mut ssts = Vec::new();
+            for i in 0..number {
+                ssts.push(Table {
+                    dir: sst_contructor[i as usize].dir.to_owned(),
+                    hotness: 100,
+                    size: 4096,
+                    created_at: Utc::now(),
+                    data_file: DataFile {
+                        file: DataFileNode {
+                            node: FileNode {
+                                file_path: sst_contructor[i as usize].data_path.to_owned(),
+                                file: Arc::new(RwLock::new(
+                                    File::open(sst_contructor[i as usize].data_path.to_owned())
+                                        .await
+                                        .unwrap(),
+                                )),
+                                file_type: FileType::Data,
+                            },
+                        },
+                        path: sst_contructor[i as usize].data_path.to_owned(),
+                    },
+                    index_file: IndexFile {
+                        file: IndexFileNode {
+                            node: FileNode {
+                                file_path: sst_contructor[i as usize].index_path.to_owned(),
+                                file: Arc::new(RwLock::new(
+                                    File::open(sst_contructor[i as usize].index_path.to_owned())
+                                        .await
+                                        .unwrap(),
+                                )),
+                                file_type: FileType::Index,
+                            },
+                        },
+                        path: sst_contructor[i as usize].index_path.to_owned(),
+                    },
+                    entries: Arc::new(SkipMap::default()),
+                    filter: None,
+                    summary: None,
+                })
+            }
+            return ssts;
+        }
+    }
 
     #[tokio::test]
     async fn test_bucket_new() {
@@ -51,7 +194,7 @@ mod tests {
         let path = PathBuf::from(root.path().join("."));
         let id = Uuid::new_v4();
         let sst_count = 3;
-        let sst_samples = fixtures::sst::generate_ssts(sst_count).await;
+        let sst_samples = SSTContructor::generate_ssts(sst_count).await;
         let sst_meta = sst_samples
             .iter()
             .map(|s| tokio::spawn(fs::metadata(s.data_file.path.clone())));
@@ -76,7 +219,7 @@ mod tests {
     #[tokio::test]
     async fn test_cal_average_size() {
         let sst_count = 3;
-        let sst_samples = fixtures::sst::generate_ssts(sst_count).await;
+        let sst_samples = SSTContructor::generate_ssts(sst_count).await;
         let sst_meta = sst_samples
             .iter()
             .map(|s| tokio::spawn(fs::metadata(s.data_file.path.clone())));
@@ -100,7 +243,7 @@ mod tests {
         let path = PathBuf::from(root.path().join("."));
         let new_bucket = Bucket::new(path.to_owned()).await.unwrap();
         let sst_count = 5;
-        let sst_samples = fixtures::sst::generate_ssts(sst_count).await;
+        let sst_samples = SSTContructor::generate_ssts(sst_count).await;
         for s in sst_samples {
             new_bucket.sstables.write().await.push(s)
         }
@@ -117,7 +260,7 @@ mod tests {
         let path = PathBuf::from(root.path().join("."));
         let new_bucket = Bucket::new(path.to_owned()).await.unwrap();
         let sst_count = 5;
-        let sst_samples = fixtures::sst::generate_ssts(sst_count).await;
+        let sst_samples = SSTContructor::generate_ssts(sst_count).await;
         let sst_meta = sst_samples
             .iter()
             .map(|s| tokio::spawn(fs::metadata(s.data_file.path.clone())));
@@ -145,11 +288,11 @@ mod tests {
         let root = tempdir().unwrap();
         let path = PathBuf::from(root.path().join("."));
         let mut new_bucket = Bucket::new(path.to_owned()).await.unwrap();
-        let sst_sample = fixtures::sst::generate_ssts(2).await;
+        let sst_sample = SSTContructor::generate_ssts(2).await;
         for s in sst_sample {
             new_bucket.sstables.write().await.push(s)
         }
-        let mut sst_within_size_range = generate_ssts(1).await[0].to_owned();
+        let mut sst_within_size_range = SSTContructor::generate_ssts(1).await[0].to_owned();
         new_bucket.avarage_size = sst_within_size_range.size();
         let fits_into_bucket = new_bucket.fits_into_bucket(Arc::new(Box::new(sst_within_size_range.to_owned())));
         // size of sstable is not less than bucket low
@@ -183,7 +326,7 @@ mod tests {
         let path = PathBuf::from(root.path().join("."));
         let new_bucket1 = Bucket::new(path.to_owned()).await.unwrap();
         let sst_count = 6;
-        let sst_samples = fixtures::sst::generate_ssts(sst_count).await;
+        let sst_samples = SSTContructor::generate_ssts(sst_count).await;
         for s in sst_samples.to_owned() {
             new_bucket1.sstables.write().await.push(s)
         }
@@ -253,7 +396,7 @@ mod tests {
         let path = PathBuf::from(root.path().join("."));
         let new_bucket1 = Bucket::new(path.to_owned()).await.unwrap();
         let sst_count = 6;
-        let sst_samples = fixtures::sst::generate_ssts(sst_count).await;
+        let sst_samples = SSTContructor::generate_ssts(sst_count).await;
         for s in sst_samples.to_owned() {
             new_bucket1.sstables.write().await.push(s)
         }
@@ -303,7 +446,7 @@ mod tests {
         let path = PathBuf::from(root.path().join("."));
         let mut bucket_map = BucketMap::new(path.to_owned()).await.unwrap();
         let false_pos = 0.1;
-        let mut sst_within_size_range = generate_ssts(1).await[0].to_owned();
+        let mut sst_within_size_range = SSTContructor::generate_ssts(1).await[0].to_owned();
         sst_within_size_range.load_entries_from_file().await.unwrap();
         sst_within_size_range.filter = Some(FilterWorkload::new(false_pos, sst_within_size_range.entries.to_owned()));
         // bucket insertion is succeeds
@@ -333,7 +476,7 @@ mod tests {
         let path = PathBuf::from(root.path().join("."));
         let new_bucket1 = Bucket::new(path.to_owned()).await.unwrap();
         let sst_count = 6;
-        let sst_samples = fixtures::sst::generate_ssts(sst_count).await;
+        let sst_samples = SSTContructor::generate_ssts(sst_count).await;
         for s in sst_samples.to_owned() {
             new_bucket1.sstables.write().await.push(s)
         }

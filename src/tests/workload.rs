@@ -1,11 +1,10 @@
-use crate::filter::BloomFilter;
 use crate::memtable::SkipMapValue;
 use crate::tests::workload::Error::TokioJoinError;
 use crate::{
-    err::Error,
-    util,
     db::DataStore,
+    err::Error,
     types::{Key, Value},
+    util,
 };
 use crossbeam_skiplist::SkipMap;
 use futures::future::join_all;
@@ -21,17 +20,17 @@ type ReadWorkloadVec = Vec<Entry>;
 type WriteWorkloadVec = Vec<Entry>;
 
 #[derive(Clone, Debug)]
+pub struct Entry {
+    pub key: Key,
+    pub val: Value,
+}
+
+#[derive(Clone, Debug)]
 pub struct Workload {
     pub size: usize,
     pub key_len: usize,
     pub val_len: usize,
     pub write_read_ratio: f64,
-}
-
-#[derive(Clone, Debug)]
-pub struct Entry {
-    pub key: Key,
-    pub val: Value,
 }
 
 impl Workload {
@@ -122,8 +121,8 @@ pub struct FilterWorkload {
 }
 
 impl FilterWorkload {
-    pub fn new(false_pos: f64, entries: Arc<SkipMap<Vec<u8>, SkipMapValue<usize>>>) -> BloomFilter {
-        let mut filter = BloomFilter::new(false_pos, entries.len());
+    pub fn new(false_pos: f64, entries: Arc<SkipMap<Vec<u8>, SkipMapValue<usize>>>) -> crate::filter::BloomFilter {
+        let mut filter = crate::filter::BloomFilter::new(false_pos, entries.len());
         filter.build_filter_from_entries(&entries);
         return filter;
     }

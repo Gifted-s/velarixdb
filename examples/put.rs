@@ -3,9 +3,7 @@
 // use tempfile::tempdir;
 // use vikingsdb::db::DataStore;
 
-fn main() {
-  
-}
+fn main() {}
 
 // async fn put() {
 //     let root = tempdir().unwrap();

@@ -16,24 +16,33 @@ use Error::*;
 
 static SST_PREFIX: &str = "sstable";
 
-/// sstables to remove from each bucket
+/// Alias for SSTables to remove from each bucket
 pub type SSTablesToRemove = Vec<(BucketID, Vec<Table>)>;
 
-/// imbalanced buckets
+/// Alias for imbalanced buckets
 pub type ImbalancedBuckets = Result<(Vec<Bucket>, SSTablesToRemove), Error>;
 
+/// Alias for bucket id used in BucketMap
 pub type BucketID = Uuid;
 
+/// Alias for bucket average size
+pub type AvgSize = usize;
+
+/// Handle Buckets 
 #[derive(Debug, Clone)]
 pub struct BucketMap {
     pub dir: PathBuf,
     pub buckets: IndexMap<BucketID, Bucket>,
 }
 
+/// Enum to signify to create new bucket or use exisiting one
+/// during table insertion
 pub(crate) enum InsertionType {
     New,
     Exisiting,
 }
+
+/// Groups SSTables of approximately equal sizes together
 #[derive(Debug, Clone)]
 pub struct Bucket {
     pub(crate) id: BucketID,
@@ -43,6 +52,7 @@ pub struct Bucket {
     pub(crate) sstables: Arc<RwLock<Vec<Table>>>,
 }
 
+/// Defines trait an entity must have to be insertable to `Bucket`
 pub trait InsertableToBucket: Debug + Send + Sync {
     fn get_entries(&self) -> SkipMapEntries<Key>;
     fn size(&self) -> usize;
@@ -63,11 +73,19 @@ impl Bucket {
             sstables: Arc::new(RwLock::new(Vec::new())),
         })
     }
+
+    /// Creates `Bucket` from the passed in variables
+    ///
+    /// Returns Ok(Bucket) 
+    /// 
+    /// # Errors
+    ///
+    /// Returns error, if an IO error occured.
     pub async fn from(
         dir: PathBuf,
         id: BucketID,
         sstables: Vec<Table>,
-        mut avarage_size: usize,
+        mut avarage_size: AvgSize,
     ) -> Result<Bucket, Error> {
         if avarage_size == 0 {
             avarage_size = Bucket::cal_average_size(sstables.clone()).await?;
@@ -81,7 +99,14 @@ impl Bucket {
         })
     }
 
-    pub async fn cal_average_size(sstables: Vec<Table>) -> Result<usize, Error> {
+    /// Calculate `Bucket` average size
+    ///
+    /// Returns a `Result` that can be the average size
+    /// or error
+    /// # Errors
+    ///
+    /// Returns error, if an IO error occured.
+    pub(crate) async fn cal_average_size(sstables: Vec<Table>) -> Result<AvgSize, Error> {
         if sstables.is_empty() {
             return Ok(0);
         }
@@ -98,13 +123,34 @@ impl Bucket {
         Ok(all_sstable_size / sst.len() as u64 as usize)
     }
 
-    pub fn fits_into_bucket<T: InsertableToBucket + ?Sized>(&self, table: Arc<Box<T>>) -> Bool {
+    /// Checks if a table will fit into a `Bucket`
+    ///
+    /// To understand how we arrived at these conditions you can read about Sized Tier Compaction (STCS) from:
+    /// - Official Cassandra <https://cassandra.apache.org/doc/stable/cassandra/operating/compaction/stcs.html>
+    /// - This also <https://shrikantbang.wordpress.com/2014/04/22/size-tiered-compaction-strategy-in-apache-cassandra/>
+    ///
+    /// Returns `true` if table fits or `false` if it doesn't
+    ///
+    pub(crate) fn fits_into_bucket<T: InsertableToBucket + ?Sized>(&self, table: Arc<Box<T>>) -> Bool {
         (self.avarage_size as f64 * BUCKET_LOW < table.size() as f64)
             && (table.size() < (self.avarage_size as f64 * BUCKET_HIGH) as usize)
             || (table.size() < MIN_SSTABLE_SIZE && self.avarage_size < MIN_SSTABLE_SIZE)
     }
 
-    pub(crate) async fn extract_sstables(&self) -> Result<(Vec<Table>, usize), Error> {
+    /// Returns SSTables that needs to be compacted in a [`Bucket`]
+    ///
+    /// If sstables in bucket exceeds `MAX_TRESHOLD` then only returns the
+    /// MAX_TRESHOLD otherwise return all the sstables in the bucket,
+    /// if sstables in bucket is less than `MIN_TRESHOLD`, then we ignore
+    /// that bucket
+    ///
+    /// Returns `Result` of a tuple of sstables to merge and their average size
+    /// or error
+    ///
+    /// # Error
+    ///
+    /// Returns error in case an error occurs while calculating average
+    pub(crate) async fn extract_sstables(&self) -> Result<(Vec<Table>, AvgSize), Error> {
         if self.sstables.read().await.len() < MIN_TRESHOLD {
             return Ok((vec![], 0));
         }
@@ -119,12 +165,17 @@ impl Bucket {
         Ok((extracted_sstables, average))
     }
 
-    pub async fn sstable_count_exceeds_threshhold(&self) -> bool {
+    pub(crate) async fn sstable_count_exceeds_threshhold(&self) -> bool {
         self.sstables.read().await.len() >= MIN_TRESHOLD
     }
 }
 
 impl BucketMap {
+    /// Creates a `BucketMap` instance
+    ///
+    /// # Errors
+    ///
+    /// Returns error if an IO error occured
     pub async fn new<P: AsRef<Path>>(dir: P) -> Result<BucketMap, Error> {
         let dir = dir.as_ref();
         FileNode::create_dir_all(dir.to_path_buf()).await?;
@@ -134,6 +185,15 @@ impl BucketMap {
         })
     }
 
+    /// Inserts merged sstable or memtable to a bucket
+    ///
+    /// Tables to be inserted to bucket must have the `InsertableToBucket` trait
+    ///
+    /// Returns Result `Table` or `Err`
+    ///
+    /// # Errors
+    ///
+    /// Returns error in case there in IO error or any kind of Error
     pub async fn insert_to_appropriate_bucket<T: InsertableToBucket + ?Sized>(
         &mut self,
         table: Arc<Box<T>>,
@@ -150,6 +210,13 @@ impl BucketMap {
         return self.insert_to_bucket(bucket, table, InsertionType::New).await;
     }
 
+    /// Determines which bucket to insert merged sstable or memtable based on `InsertionType`
+    ///
+    /// Returns Result `Table` or `Err`
+    ///
+    /// # Errors
+    ///
+    /// Returns error in case there in IO error or any kind of Error
     async fn insert_to_bucket<T: InsertableToBucket + ?Sized>(
         &mut self,
         mut bucket: Bucket,
@@ -189,7 +256,13 @@ impl BucketMap {
         return Ok(sst);
     }
 
-    pub async fn extract_imbalanced_buckets(&self) -> ImbalancedBuckets {
+    /// Returns imbalanced [`Bucket`] and sstables to remove from that
+    /// bucket for compaction
+    ///
+    /// # Errors
+    ///
+    /// Returns error in case there in IO error or any kind of Error
+    pub(crate) async fn extract_imbalanced_buckets(&self) -> ImbalancedBuckets {
         let mut ssts_to_delete: SSTablesToRemove = Vec::new();
         let mut imbalanced_buckets: Vec<Bucket> = Vec::new();
         for (_, (bucket_id, bucket)) in self.buckets.iter().enumerate() {
@@ -208,7 +281,8 @@ impl BucketMap {
         Ok((imbalanced_buckets, ssts_to_delete))
     }
 
-    pub async fn is_balanced(&self) -> bool {
+    /// Checks if a [`Bucket`] is balanced
+    pub(crate) async fn is_balanced(&self) -> bool {
         for (_, bucket) in self.buckets.iter() {
             if bucket.sstable_count_exceeds_threshhold().await {
                 return false;
@@ -216,7 +290,14 @@ impl BucketMap {
         }
         return true;
     }
-    // NOTE: This should be called only after compaction is complete
+    /// Deletes SSTables files
+    ///
+    /// Returns true or false based on deletion success or failure
+    /// NOTE: This should be called only after compaction is complete
+    ///
+    /// Errors
+    ///
+    /// Returns error if deletion fails
     pub async fn delete_ssts(&mut self, ssts_to_delete: &SSTablesToRemove) -> Result<bool, Error> {
         let mut all_ssts_deleted = true;
         let mut buckets_to_delete: Vec<&BucketID> = Vec::new();
@@ -261,7 +342,7 @@ impl BucketMap {
         Ok(all_ssts_deleted)
     }
 
-    // CAUTION: This removes all sstables and buckets and should only be used for total cleanup
+    /// CAUTION: This removes all sstables and buckets and should only be used for total cleanup
     #[allow(dead_code)]
     pub async fn clear_all(&mut self) {
         for (_, bucket) in &self.buckets {

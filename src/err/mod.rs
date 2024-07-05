@@ -112,6 +112,18 @@ pub enum Error {
     #[error("Filter not provided, needed to flush table to disk")]
     FilterNotProvidedForFlush,
 
+    #[error("Key size too large, key must not exceed 65536 bytes")]
+    KeyMaxSizeExceeded,
+
+    #[error("Key cannot be empty")]
+    KeySizeNone,
+
+    #[error("Value cannot be empty")]
+    ValueSizeNone,
+
+    #[error("Value too large, value must not exceed 2^32 bytes")]
+    ValMaxSizeExceeded,
+
     #[error("Filter not found")]
     FilterNotFoundError,
 

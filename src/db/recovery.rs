@@ -21,7 +21,7 @@ use crate::memtable::{Entry, MemTable};
 use crate::meta::Meta;
 use crate::open_dir_stream;
 use crate::sst::{Summary, Table};
-use crate::types::{Key, MemtableId};
+use crate::types::{ImmutableMemTablesLockFree, Key};
 use crate::vlog::ValueLog;
 use async_broadcast::broadcast;
 use chrono::Utc;
@@ -32,6 +32,11 @@ use tokio::fs::read_dir;
 use tokio::sync::RwLock;
 
 impl DataStore<'static, Key> {
+    /// Recovers [`DataStore`] state after crash
+    ///
+    /// Errors
+    ///
+    /// Returns error incase there is an IO error
     pub async fn recover<P: AsRef<Path> + Send + Sync + Clone>(
         dir: DirPath,
         buckets_path: P,
@@ -62,7 +67,7 @@ impl DataStore<'static, Key> {
                 // get read stream for files in the sstable directory
                 let mut files_stream = open_dir_stream!(sst_dir.path());
                 let mut files = Vec::new();
-                
+
                 // iterate over each file
                 while let Some(file) = files_stream.next_entry().await.map_err(|err| DirOpenError {
                     path: buckets_path.as_ref().to_path_buf(),
@@ -213,14 +218,19 @@ impl DataStore<'static, Key> {
         }
     }
 
+    /// Recovers memtable state
+    ///
+    /// Recovers both active and readonly memtable states using value log
+    ///
+    /// Returns a tuple of active memtable and read only memtables
     pub async fn recover_memtable<P: AsRef<Path> + Send + Sync>(
         size_unit: SizeUnit,
         capacity: usize,
         false_positive_rate: f64,
         vlog_path: P,
         head_offset: usize,
-    ) -> Result<(MemTable<Key>, IndexMap<MemtableId, Arc<RwLock<MemTable<Key>>>>), Error> {
-        let mut read_only_memtables: IndexMap<MemtableId, Arc<RwLock<MemTable<Key>>>> = IndexMap::new();
+    ) -> Result<(MemTable<Key>, ImmutableMemTablesLockFree<Key>), Error> {
+        let mut read_only_memtables: ImmutableMemTablesLockFree<Key> = IndexMap::new();
         let mut active_memtable = MemTable::with_specified_capacity_and_rate(size_unit, capacity, false_positive_rate);
         let mut vlog = ValueLog::new(vlog_path.as_ref()).await?;
         let mut most_recent_offset = head_offset;
@@ -242,7 +252,7 @@ impl DataStore<'static, Key> {
                     active_memtable =
                         MemTable::with_specified_capacity_and_rate(size_unit, capacity, false_positive_rate);
                 }
-                active_memtable.insert(&entry)?;
+                active_memtable.insert(&entry);
             }
             most_recent_offset += SIZE_OF_U32   // Key Size(for fetching key length)
                         +SIZE_OF_U32            // Value Length(for fetching value length)
@@ -255,6 +265,8 @@ impl DataStore<'static, Key> {
         Ok((active_memtable, read_only_memtables))
     }
 
+    /// Creates new [`DataStore`]
+    /// Used in case there is no recovery needed
     pub async fn handle_empty_vlog<P: AsRef<Path> + Send + Sync>(
         dir: DirPath,
         buckets_path: P,
@@ -270,18 +282,18 @@ impl DataStore<'static, Key> {
         let created_at = Utc::now();
         let tail_offset = vlog
             .append(&TAIL_ENTRY_KEY.to_vec(), &TAIL_ENTRY_VALUE.to_vec(), created_at, false)
-            .await?;
+            .await;
         let tail_entry = Entry::new(TAIL_ENTRY_KEY.to_vec(), tail_offset, created_at, false);
         let head_offset = vlog
             .append(&HEAD_ENTRY_KEY.to_vec(), &HEAD_ENTRY_VALUE.to_vec(), created_at, false)
-            .await?;
+            .await;
         let head_entry = Entry::new(HEAD_ENTRY_KEY.to_vec(), head_offset, created_at, false);
         vlog.set_head(head_offset);
         vlog.set_tail(tail_offset);
 
         // insert tail and head to memtable
-        active_memtable.insert(&tail_entry.to_owned())?;
-        active_memtable.insert(&head_entry.to_owned())?;
+        active_memtable.insert(&tail_entry.to_owned());
+        active_memtable.insert(&head_entry.to_owned());
         let buckets = BucketMap::new(buckets_path).await?;
         let (flush_signal_tx, flush_signal_rx) = broadcast(DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE);
         let read_only_memtables = IndexMap::new();

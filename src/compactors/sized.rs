@@ -17,16 +17,32 @@ use crate::{
 };
 use crate::{err::Error::*, memtable::SkipMapValue};
 
+/// Sized Tier Compaction Runner (STCS)
+///
+/// Responsible for merging sstables of almost similar sizes to form a bigger one,
+/// obsolete entries are removed from the sstables and expired tombstones are removed
+///
 #[derive(Debug, Clone)]
 pub struct SizedTierRunner<'a> {
+    /// A thread-safe BucketMap with each bucket mapped to its id
     bucket_map: BucketMapHandle,
+
+    /// A thread-safe vector of sstable bloom filters
     filters: BloomFilterHandle,
+
+    /// A thread-safe hashmap of sstables each mapped to its key range
     key_range: KeyRangeHandle,
+
+    /// Compaction configuration
     config: &'a Config,
+
+    /// Keeps track of tombstones encountered during compaction
+    /// to predict validity of subseqeunt entries
     tombstones: HashMap<Key, CreatedAt>,
 }
 
 impl<'a> SizedTierRunner<'a> {
+    /// creates new instance of `SizedTierRunner`
     pub fn new(
         bucket_map: BucketMapHandle,
         filters: BloomFilterHandle,
@@ -41,9 +57,13 @@ impl<'a> SizedTierRunner<'a> {
             config,
         }
     }
+
+    /// Returns buckets whose size exceeds max threshold
     pub async fn fetch_imbalanced_buckets(bucket_map: BucketMapHandle) -> ImbalancedBuckets {
         bucket_map.read().await.extract_imbalanced_buckets().await
     }
+
+    /// Main compaction runner
     pub async fn run_compaction(&mut self) -> Result<(), Error> {
         if self.bucket_map.read().await.is_balanced().await {
             return Ok(());
@@ -141,6 +161,14 @@ impl<'a> SizedTierRunner<'a> {
         }
     }
 
+    /// Removes sstables that are already merged to form larger table(s)
+    ///
+    /// NOTE: This should only be called if merged sstables have been written to disk
+    /// otherwise data loss can happen
+    ///
+    /// # Errors
+    ///
+    /// Returns error if deletion fails
     pub async fn clean_up_after_compaction(
         &self,
         buckets: BucketMapHandle,
@@ -170,6 +198,7 @@ impl<'a> SizedTierRunner<'a> {
         Ok(None)
     }
 
+    /// Remove filters of obsolete sstables from filters vector
     pub async fn filter_out_old_filter(&self, filters: BloomFilterHandle, ssts_to_delete: &Vec<(Uuid, Vec<Table>)>) {
         let mut filter_map: HashMap<PathBuf, BloomFilter> = filters
             .read()
@@ -186,12 +215,19 @@ impl<'a> SizedTierRunner<'a> {
         filters.write().await.extend(filter_map.into_values());
     }
 
+    /// Merges the sstables in each `Bucket` to form a larger one
+    ///
+    /// Returns `Result` with merged sstable or error
+    ///
+    /// # Errors
+    ///
+    /// Returns error incase an error occured during merge
     async fn merge_ssts_in_buckets(&mut self, buckets: &Vec<Bucket>) -> Result<Vec<MergedSSTable>, Error> {
         let mut merged_ssts = Vec::new();
         for bucket in buckets.iter() {
             let mut hotness = 0;
             let tables = &bucket.sstables.read().await;
-            
+
             let mut merged_sst: Box<dyn InsertableToBucket> = Box::new(tables.get(0).unwrap().to_owned());
             for sst in tables[1..].iter() {
                 let mut insertable_sst = sst.to_owned();
@@ -217,6 +253,11 @@ impl<'a> SizedTierRunner<'a> {
         Ok(merged_ssts)
     }
 
+    /// Merge two `Table` together one returns a larger one
+    ///
+    /// Errors
+    ///
+    /// Returns error if an error occured during merge
     async fn merge_sstables(
         &mut self,
         sst1: Box<dyn InsertableToBucket>,
@@ -254,37 +295,33 @@ impl<'a> SizedTierRunner<'a> {
         while ptr.ptr1 < entries1.len() && ptr.ptr2 < entries2.len() {
             match entries1[ptr.ptr1].key.cmp(&entries2[ptr.ptr2].key) {
                 cmp::Ordering::Less => {
-                    self.tombstone_check(&entries1[ptr.ptr1], &mut merged_entries)
-                        .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
+                    self.tombstone_check(&entries1[ptr.ptr1], &mut merged_entries);
+
                     ptr.increment_ptr1();
                 }
                 cmp::Ordering::Equal => {
                     if entries1[ptr.ptr1].created_at > entries2[ptr.ptr2].created_at {
-                        self.tombstone_check(&entries1[ptr.ptr1], &mut merged_entries)
-                            .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
+                        self.tombstone_check(&entries1[ptr.ptr1], &mut merged_entries);
                     } else {
-                        self.tombstone_check(&entries2[ptr.ptr2], &mut merged_entries)
-                            .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
+                        self.tombstone_check(&entries2[ptr.ptr2], &mut merged_entries);
                     }
                     ptr.increment_ptr1();
                     ptr.increment_ptr2();
                 }
                 cmp::Ordering::Greater => {
-                    self.tombstone_check(&entries2[ptr.ptr2], &mut merged_entries)
-                        .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
+                    self.tombstone_check(&entries2[ptr.ptr2], &mut merged_entries);
                     ptr.increment_ptr2();
                 }
             }
         }
+
         while ptr.ptr1 < entries1.len() {
-            self.tombstone_check(&entries1[ptr.ptr1], &mut merged_entries)
-                .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
+            self.tombstone_check(&entries1[ptr.ptr1], &mut merged_entries);
             ptr.increment_ptr1();
         }
 
         while ptr.ptr2 < entries2.len() {
-            self.tombstone_check(&entries2[ptr.ptr2], &mut merged_entries)
-                .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
+            self.tombstone_check(&entries2[ptr.ptr2], &mut merged_entries);
             ptr.increment_ptr2();
         }
 
@@ -298,11 +335,13 @@ impl<'a> SizedTierRunner<'a> {
         Ok(Box::new(new_sst))
     }
 
-    fn tombstone_check(
-        &mut self,
-        entry: &Entry<Key, usize>,
-        merged_entries: &mut Vec<Entry<Key, usize>>,
-    ) -> Result<Bool, Error> {
+    /// Checks if an entry has been deleted or not
+    /// 
+    /// Deleted entries are discoverd using the tombstones hashmap
+    /// and prevented from being inserted
+    ///
+    /// Returns true if entry should be inserted or false otherwise
+    fn tombstone_check(&mut self, entry: &Entry<Key, usize>, merged_entries: &mut Vec<Entry<Key, usize>>) -> Bool {
         let mut should_insert = false;
         if self.tombstones.contains_key(&entry.key) {
             let tomb_insert_time = *self.tombstones.get(&entry.key).unwrap();
@@ -333,6 +372,6 @@ impl<'a> SizedTierRunner<'a> {
         if should_insert {
             merged_entries.push(entry.clone())
         }
-        Ok(true)
+        true
     }
 }

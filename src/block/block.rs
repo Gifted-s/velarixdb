@@ -73,13 +73,17 @@ use crate::{
 type BytesWritten = usize;
 
 #[derive(Debug, Clone)]
+
+/// Handles every operation related to each data block in an SSTable
+///
 pub struct Block {
-    pub entries: Vec<BlockEntry>,
-    pub size: usize,
-    pub entry_count: usize,
+    pub(crate) entries: Vec<BlockEntry>,
+    pub(crate) size: usize,
+    pub(crate) entry_count: usize,
     // TODO: pub: checksum
 }
 
+/// Each entry in the block
 #[derive(Debug, Clone)]
 pub struct BlockEntry {
     pub key_prefix: u32,
@@ -92,16 +96,19 @@ impl Block {
     /// Creates a new empty Block.
     pub fn new() -> Self {
         Block {
-            size: 0,
+            size: Default::default(),
             entries: Vec::with_capacity(BLOCK_SIZE),
-            entry_count: 0,
+            entry_count: Default::default(),
         }
     }
 
     /// Sets an entry with the provided key and value offset in the Block.
     ///
-    /// Returns an `Result` indicating success or failure. An error is returned if the Block
-    /// is already full and cannot accommodate the new entry.
+    /// Returns an `Result` indicating success or failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the `Block` is already full and cannot accommodate the new entry.
     pub fn set_entry<K: AsRef<[u8]>>(
         &mut self,
         key_prefix: u32,
@@ -133,7 +140,11 @@ impl Block {
 
     /// Writes entries in the block to the sstable file
     ///
-    /// Returns an `Result` indicating success or failure. An error is returned if write fails
+    /// Returns a `Result` indicating success or failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if write fails
     pub async fn write_to_file(&self, file: FileNode) -> Result<BytesWritten, Error> {
         let mut bytes_written = 0;
         for entry in &self.entries {
@@ -144,7 +155,7 @@ impl Block {
         Ok(bytes_written)
     }
 
-    /// Checks if the Block is full given the size of an entry.
+    /// Checks if the Block is full
     pub fn is_full(&self, entry_size: usize) -> bool {
         self.size + entry_size > BLOCK_SIZE
     }
@@ -159,9 +170,9 @@ impl Block {
         self.entry_count
     }
 
-    /// Serializes the entries in the block as a byte vector
+    /// Serializes the entry in the block to a byte vector
     ///
-    /// Returns `Ok(entry_vec)`or Error if not
+    /// Returns `Ok(entry_vec)`or Error if serialization failed
     pub(crate) fn serialize(&self, entry: &BlockEntry) -> Result<ByteSerializedEntry, Error> {
         let entry_len = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
         let mut entry_vec = Vec::with_capacity(entry_len);
@@ -181,9 +192,9 @@ impl Block {
         Ok(entry_vec)
     }
 
-    /// Retrieves the value offset associated with the provided key from the Block.
+    /// Constructs BlockEntry from file
     ///
-    /// Returns `Some(value)` if the key is found in the Block, `None` otherwise.
+    /// Returns `Some(&BlockEntry)` entry was constructed, `None` otherwise.
     /// Method will be used when we implement the block cache
     #[allow(dead_code)]
     pub(crate) fn get_entry<K: AsRef<[u8]>>(&self, key: &K) -> Option<&BlockEntry> {
