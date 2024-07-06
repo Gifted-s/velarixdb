@@ -59,7 +59,7 @@ impl Meta {
         let serialized_data = self.serialize();
         self.file_handle.file.node.clear().await?;
         self.file_handle.file.node.write_all(&serialized_data).await?;
-        return Ok(());
+        Ok(())
     }
     /// Sets `Meta` `v_log_head` field
     pub fn set_head(&mut self, head: usize) {
@@ -81,7 +81,7 @@ impl Meta {
         self.v_log_tail = tail;
         self.created_at = created_at;
         self.last_modified = last_modified;
-        return Ok(());
+        Ok(())
     }
 
     /// Serializes `Meta` into byte vector

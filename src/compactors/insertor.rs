@@ -16,7 +16,7 @@ impl InsertableToBucket for TableInsertor {
         Arc::clone(&self.entries)
     }
     fn get_filter(&self) -> BloomFilter {
-        return self.filter.to_owned();
+        self.filter.to_owned()
     }
     fn size(&self) -> usize {
         self.size

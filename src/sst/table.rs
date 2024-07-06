@@ -166,7 +166,7 @@ impl Table {
         dir: P,
     ) -> Result<(PathBuf, PathBuf, CreatedAt), Error> {
         let created_at = Utc::now();
-        let _ = FileNode::create_dir_all(dir.as_ref()).await?;
+        FileNode::create_dir_all(dir.as_ref()).await?;
         let data_file_name = format!("{}.db", DATA_FILE_NAME);
         let index_file_name = format!("{}.db", INDEX_FILE_NAME);
 
@@ -236,7 +236,7 @@ impl Table {
         let epoch = SystemTime::UNIX_EPOCH;
         let elapsed_nanos = modified_time.duration_since(epoch).unwrap().as_nanos() as u64;
         table.created_at = util::milliseconds_to_datetime(elapsed_nanos / 1_000_000);
-        return table;
+        table
     }
 
     /// Writes SSTable files to disk
@@ -274,7 +274,7 @@ impl Table {
         self.filter
             .as_mut()
             .unwrap()
-            .set_sstable_path(self.data_file.path.to_owned());
+            .set_sstable_path(&self.data_file.path);
         // write data blocks
         let mut current_block = Block::new();
         if self.size > 0 {
@@ -309,7 +309,7 @@ impl Table {
         }
 
         // Incase we have some entries left in current block, write them to disk
-        if current_block.entries.len() > 0 {
+        if !current_block.entries.is_empty() {
             self.write_block(&current_block, &mut index).await?;
         }
         index.write_to_file().await?;
@@ -416,7 +416,7 @@ impl Summary {
             .unwrap();
         let serialized_data = self.serialize();
         file.node.write_all(&serialized_data).await?;
-        return Ok(());
+        Ok(())
     }
 
     /// Recovers `Summary` fields from summary file
@@ -428,7 +428,7 @@ impl Summary {
         let (smallest_key, biggest_key) = SummaryFileNode::recover(self.path.to_owned()).await?;
         self.smallest_key = smallest_key;
         self.biggest_key = biggest_key;
-        return Ok(());
+        Ok(())
     }
 
     /// Serializes `Summary` to byte vector

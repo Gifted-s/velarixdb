@@ -87,10 +87,8 @@ impl KeyRange {
 
         let mut restored_range_map: HashMap<PathBuf, Range> = HashMap::new();
         for (_, range) in self.key_ranges.iter() {
-            if has_restored_ranges {
-                if self.restored_ranges.read().await.contains_key(range.sst.dir.as_path()) {
-                    continue;
-                }
+            if has_restored_ranges && self.restored_ranges.read().await.contains_key(range.sst.dir.as_path()) {
+                continue;
             }
             if range.biggest_key.as_slice().cmp(key.as_ref()) == Ordering::Greater
                 || range.biggest_key.as_slice().cmp(key.as_ref()) == Ordering::Equal
@@ -98,7 +96,7 @@ impl KeyRange {
                 //  If an sstable does not have a bloom filter then
                 //  it means there has been a crash and we need to restore
                 //  filter from disk using filter metadata stored on sstable
-                if let None = range.sst.filter.as_ref().unwrap().sst_dir {
+                if range.sst.filter.as_ref().unwrap().sst_dir.is_none() {
                     let mut mut_range = range.to_owned();
                     let mut filter = mut_range.sst.filter.as_ref().unwrap().to_owned();
                     filter.recover_meta().await?;
@@ -129,7 +127,7 @@ impl KeyRange {
                 *(restored_ranges.write().await) = restored_range_map;
             });
         }
-        return Ok(filtered_ssts);
+        Ok(filtered_ssts)
     }
 
     /// Returns `Table` vector whose last key is greater than or equal to
@@ -144,15 +142,11 @@ impl KeyRange {
         let mut filtered_ssts: Vec<Table> = Vec::new();
         let key_ranges = self.restored_ranges.read().await;
         for (_, range) in key_ranges.iter() {
-            if range.biggest_key.as_slice().cmp(key.as_ref()) == Ordering::Greater
-                || range.biggest_key.as_slice().cmp(key.as_ref()) == Ordering::Equal
-            {
-                if range.sst.filter.as_ref().unwrap().contains(key.as_ref()) {
-                    filtered_ssts.push(range.sst.to_owned())
-                }
+            if (range.biggest_key.as_slice().cmp(key.as_ref()) == Ordering::Greater || range.biggest_key.as_slice().cmp(key.as_ref()) == Ordering::Equal) && range.sst.filter.as_ref().unwrap().contains(key.as_ref()) {
+                filtered_ssts.push(range.sst.to_owned())
             }
         }
-        return Ok(filtered_ssts);
+        Ok(filtered_ssts)
     }
 
     /// Moves entries in `restored_ranges` with sstables whose filters are just restored

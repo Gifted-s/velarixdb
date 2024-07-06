@@ -159,7 +159,7 @@ impl Index {
         entry_vec.extend_from_slice(&e.key);
 
         // block offset
-        entry_vec.extend_from_slice(&(e.block_handle as u32).to_le_bytes());
+        entry_vec.extend_from_slice(&e.block_handle.to_le_bytes());
         if entry_len != entry_vec.len() {
             return Err(SerializationError("Invalid entry size"));
         }

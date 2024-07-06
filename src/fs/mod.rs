@@ -174,17 +174,17 @@ impl FileAsync for FileNode {
     async fn create_dir_all<P: AsRef<Path> + Send + Sync>(dir: P) -> Result<(), Error> {
         let dir = dir.as_ref();
         if !dir.exists() {
-            return Ok(fs::create_dir_all(&dir).await.map_err(|err| DirCreationError {
+            return fs::create_dir_all(&dir).await.map_err(|err| DirCreationError {
                 path: dir.to_path_buf(),
                 error: err,
-            })?);
+            });
         }
         Ok(())
     }
 
     async fn metadata(&self) -> Result<Metadata, Error> {
         let file = self.r_lock().await;
-        Ok(file.metadata().await.map_err(|err| GetFileMetaDataError(err))?)
+        Ok(file.metadata().await.map_err(GetFileMetaDataError)?)
     }
 
     async fn open<P: AsRef<Path> + Send + Sync>(path: P) -> Result<File, Error> {
@@ -194,17 +194,17 @@ impl FileAsync for FileNode {
         })?)
     }
 
-    async fn read_buf(&self, mut buf: &mut Buf) -> Result<usize, Error> {
+    async fn read_buf(&self, buf: &mut Buf) -> Result<usize, Error> {
         let mut file = self.w_lock().await;
-        Ok(file.read(&mut buf).await.map_err(|err| FileReadError {
+        Ok(file.read(buf).await.map_err(|err| FileReadError {
             path: self.file_path.clone(),
             error: err,
         })?)
     }
 
-    async fn write_all(&self, mut buf: &Buf) -> Result<(), Error> {
+    async fn write_all(&self, buf: &Buf) -> Result<(), Error> {
         let mut file = self.w_lock().await;
-        Ok(file.write_all(&mut buf).await.map_err(|err| FileWriteError {
+        Ok(file.write_all(buf).await.map_err(|err| FileWriteError {
             path: self.file_path.clone(),
             error: err,
         })?)
@@ -236,13 +236,13 @@ impl FileAsync for FileNode {
         Ok(file
             .seek(SeekFrom::Start(start_offset))
             .await
-            .map_err(|err| FileSeekError(err))?)
+            .map_err(FileSeekError)?)
     }
 
     async fn remove_dir_all(&self) -> Result<(), Error> {
         Ok(fs::remove_dir_all(&self.file_path)
             .await
-            .map_err(|err| DirDeleteError(err))?)
+            .map_err(DirDeleteError)?)
     }
 
     async fn w_lock(&self) -> WGuard<File> {
@@ -272,7 +272,7 @@ impl DataFs for DataFileNode {
         let mut file = self.node.file.write().await;
         file.seek(std::io::SeekFrom::Start(0))
             .await
-            .map_err(|err| FileSeekError(err))?;
+            .map_err(FileSeekError)?;
 
         loop {
             let mut key_len_bytes = [0; SIZE_OF_U32];
@@ -335,7 +335,7 @@ impl DataFs for DataFileNode {
         let mut file = self.node.file.write().await;
         file.seek(std::io::SeekFrom::Start(offset.into()))
             .await
-            .map_err(|err| FileSeekError(err))?;
+            .map_err(FileSeekError)?;
 
         loop {
             let mut key_len_bytes = [0; SIZE_OF_U32];
@@ -390,7 +390,7 @@ impl DataFs for DataFileNode {
         let mut file = self.node.file.write().await;
         file.seek(std::io::SeekFrom::Start((range_offset.start_offset) as u64))
             .await
-            .map_err(|err| FileSeekError(err))?;
+            .map_err(FileSeekError)?;
 
         loop {
             let mut key_len_bytes = [0; SIZE_OF_U32];
@@ -462,7 +462,7 @@ impl VLogFs for VLogFileNode {
         let mut file = self.node.file.write().await;
         file.seek(std::io::SeekFrom::Start((start_offset) as u64))
             .await
-            .map_err(|err| FileSeekError(err))?;
+            .map_err(FileSeekError)?;
 
         let mut key_len_bytes = [0; SIZE_OF_U32];
         let mut bytes_read = load_buffer!(file, &mut key_len_bytes, path.to_owned())?;
@@ -511,7 +511,7 @@ impl VLogFs for VLogFileNode {
         let mut file = self.node.file.write().await;
         file.seek(std::io::SeekFrom::Start((start_offset) as u64))
             .await
-            .map_err(|err| FileSeekError(err))?;
+            .map_err(FileSeekError)?;
 
         loop {
             let mut key_len_bytes = [0; SIZE_OF_U32];
@@ -572,9 +572,9 @@ impl VLogFs for VLogFileNode {
         let path = &self.node.file_path;
         let mut entries = Vec::new();
         let mut file = self.node.file.write().await;
-        file.seek(std::io::SeekFrom::Start((offset) as u64))
+        file.seek(std::io::SeekFrom::Start(offset))
             .await
-            .map_err(|err| FileSeekError(err))?;
+            .map_err(FileSeekError)?;
         let mut total_bytes_read: usize = 0;
         loop {
             let mut key_len_bytes = [0; SIZE_OF_U32];
@@ -653,9 +653,9 @@ impl IndexFs for IndexFileNode {
         let path = &self.node.file_path;
         let block_offset: i32 = -1;
         let mut file = self.node.file.write().await;
-        file.seek(std::io::SeekFrom::Start((0) as u64))
+        file.seek(std::io::SeekFrom::Start(0_u64))
             .await
-            .map_err(|err| FileSeekError(err))?;
+            .map_err(FileSeekError)?;
 
         loop {
             let mut key_len_bytes = [0; SIZE_OF_U32];
@@ -698,9 +698,9 @@ impl IndexFs for IndexFileNode {
         let path = &self.node.file_path;
         let mut range_offset = RangeOffset::new(0, 0);
         let mut file = self.node.file.write().await;
-        file.seek(std::io::SeekFrom::Start((0) as u64))
+        file.seek(std::io::SeekFrom::Start(0_u64))
             .await
-            .map_err(|err| FileSeekError(err))?;
+            .map_err(FileSeekError)?;
 
         loop {
             let mut key_len_bytes = [0; SIZE_OF_U32];
@@ -774,7 +774,7 @@ impl FilterFs for FilterFileNode {
             return Err(FileNode::unexpected_eof());
         }
         let false_positive_rate = util::float_from_le_bytes(&false_positive_rate_bytes);
-        if false_positive_rate == None {
+        if false_positive_rate.is_none() {
             return Err(FileNode::unexpected_eof());
         }
         return Ok((false_positive_rate.unwrap(), no_of_hash_func, no_of_elements));
@@ -879,6 +879,6 @@ impl SummaryFs for SummaryFileNode {
 
 impl FileNode {
     fn unexpected_eof() -> Error {
-        return UnexpectedEOF(io::Error::new(io::ErrorKind::UnexpectedEof, EOF));
+        UnexpectedEOF(io::Error::new(io::ErrorKind::UnexpectedEof, EOF))
     }
 }

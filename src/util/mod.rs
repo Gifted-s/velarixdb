@@ -32,7 +32,7 @@ pub fn float_to_le_bytes(f: f64) -> [u8; 8] {
     // Convert the u64 to an array of 8 bytes in little-endian order
     let bytes: [u8; 8] = bits.to_le_bytes().try_into().unwrap();
 
-    return bytes;
+    bytes
 }
 /// Converts bytes slice to float
 pub fn float_from_le_bytes(bytes: &[u8]) -> Option<f64> {
@@ -46,5 +46,5 @@ pub fn float_from_le_bytes(bytes: &[u8]) -> Option<f64> {
 
     // Convert the u64 bit representation back to f32
     let float: f64 = f64::from_bits(bits);
-    return Some(float);
+    Some(float)
 }

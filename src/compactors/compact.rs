@@ -303,19 +303,19 @@ impl Compactor {
                     Arc::clone(&key_range),
                     cfg,
                 );
-                return runner.run_compaction().await;
+                runner.run_compaction().await
             }
             Strategy::LCS => {
                 log::info!("LCS not curently supported, try SCS instead");
-                return Ok(());
+                Ok(())
             }
             Strategy::TCS => {
                 log::info!("TCS not curently supported, try SCS instead");
-                return Ok(());
+                Ok(())
             }
             Strategy::UCS => {
                 log::info!("UCS not curently supported, try SCS instead");
-                return Ok(());
+                Ok(())
             }
         }
     }

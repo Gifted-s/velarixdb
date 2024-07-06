@@ -146,7 +146,7 @@ impl DataStore<'static, Key> {
         let mut store = Self::create_or_recover(dir.to_owned(), SizeUnit::Bytes, default_config).await?;
         store.keyspace = keyspace;
         store.start_background_tasks();
-        return Ok(store);
+        Ok(store)
     }
 
     /// Same as [`Datastor::open`], but does not start background tasks.
@@ -166,7 +166,7 @@ impl DataStore<'static, Key> {
         let default_config = Config::default();
         let mut store = Self::create_or_recover(dir.to_owned(), SizeUnit::Bytes, default_config).await?;
         store.keyspace = keyspace;
-        return Ok(store);
+        Ok(store)
     }
 
     /// Starts background tasks that maintain the keyspace.
@@ -276,7 +276,7 @@ impl DataStore<'static, Key> {
         self.meta.last_modified = Utc::now();
         self.val_log.head_offset = updated_head;
         self.val_log.tail_offset = updated_tail;
-        return Ok(());
+        Ok(())
     }
 
     /// Updates metadata in background
@@ -354,7 +354,7 @@ impl DataStore<'static, Key> {
             if value.is_tombstone {
                 return Err(crate::err::Error::NotFoundInDB);
             }
-            return self.get_value_from_vlog(value.val_offset, value.created_at).await;
+            self.get_value_from_vlog(value.val_offset, value.created_at).await
         } else {
             let mut is_deleted = false;
             for (_, table) in self.read_only_memtables.read().await.iter() {
@@ -371,14 +371,14 @@ impl DataStore<'static, Key> {
                 if is_deleted {
                     return Err(crate::err::Error::NotFoundInDB);
                 }
-                return self.get_value_from_vlog(offset, insert_time).await;
+                self.get_value_from_vlog(offset, insert_time).await
             } else {
                 let key_range = &self.key_range.read().await;
                 let ssts = key_range.filter_sstables_by_biggest_key(key.as_ref()).await?;
                 if ssts.is_empty() {
                     return Err(crate::err::Error::NotFoundInDB);
                 }
-                return self.search_key_in_sstables(key, ssts).await;
+                self.search_key_in_sstables(key, ssts).await
             }
         }
     }
@@ -418,7 +418,7 @@ impl DataStore<'static, Key> {
         if val.is_some() && val.as_ref().unwrap().as_ref().len() > MAX_VALUE_SIZE {
             return Err(crate::err::Error::ValMaxSizeExceeded);
         }
-        return Ok(());
+        Ok(())
     }
 
     /// Search for a key across SSTables
@@ -460,7 +460,7 @@ impl DataStore<'static, Key> {
             }
             return self.get_value_from_vlog(offset, insert_time).await;
         }
-        return Err(crate::err::Error::NotFoundInDB);
+        Err(crate::err::Error::NotFoundInDB)
     }
 
     /// Checks if insert time is greater than the least
@@ -490,7 +490,7 @@ impl DataStore<'static, Key> {
             }
             return Ok((value, creation_time));
         }
-        return Err(crate::err::Error::KeyNotFoundInValueLogError);
+        Err(crate::err::Error::KeyNotFoundInValueLogError)
     }
 
 
@@ -555,7 +555,7 @@ impl DataStore<'static, Key> {
         if vlog_empty {
             return DataStore::handle_empty_vlog(dir, buckets_path, vlog, key_range, &config, size_unit, meta).await;
         }
-        return DataStore::recover(dir, buckets_path, vlog, key_range, &config, size_unit, meta).await;
+        DataStore::recover(dir, buckets_path, vlog, key_range, &config, size_unit, meta).await
     }
 
     /// Strigger compaction mannually

@@ -349,25 +349,19 @@ impl<'a> SizedTierRunner<'a> {
                 if entry.is_tombstone {
                     self.tombstones.insert(entry.key.to_owned(), entry.created_at);
                     should_insert = !entry.to_owned().has_expired(self.config.tombstone_ttl);
-                } else {
-                    if self.config.use_ttl {
-                        should_insert = !entry.has_expired(self.config.entry_ttl);
-                    } else {
-                        should_insert = true
-                    }
-                }
-            }
-        } else {
-            if entry.is_tombstone {
-                self.tombstones.insert(entry.key.to_owned(), entry.created_at);
-                should_insert = !entry.has_expired(self.config.tombstone_ttl);
-            } else {
-                if self.config.use_ttl {
+                } else if self.config.use_ttl {
                     should_insert = !entry.has_expired(self.config.entry_ttl);
                 } else {
                     should_insert = true
                 }
             }
+        } else if entry.is_tombstone {
+            self.tombstones.insert(entry.key.to_owned(), entry.created_at);
+            should_insert = !entry.has_expired(self.config.tombstone_ttl);
+        } else if self.config.use_ttl {
+            should_insert = !entry.has_expired(self.config.entry_ttl);
+        } else {
+            should_insert = true
         }
         if should_insert {
             merged_entries.push(entry.clone())

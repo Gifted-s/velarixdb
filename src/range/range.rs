@@ -77,7 +77,7 @@ impl<'a> RangeIterator<'a> {
             return Some(entry);
         }
         //TODO: handle not allow prefetch option
-        return None;
+        None
     }
     pub fn prev(&mut self) -> Option<FetchedEntry> {
         None
@@ -98,13 +98,16 @@ impl<'a> RangeIterator<'a> {
     pub async fn prefetch_entries(&mut self) -> Result<(), Error> {
         let keys: Vec<Entry<Key, ValOffset>>;
         if self.current + self.prefetch_entries_size <= self.keys.len() {
-            keys = (&self.keys[self.current..self.current + self.prefetch_entries_size]).to_vec();
+            keys = self.keys[self.current..self.current + self.prefetch_entries_size].to_vec();
         } else {
-            keys = (&self.keys[self.current..]).to_vec();
+            keys = self.keys[self.current..].to_vec();
         }
         let entries = self.fetch_entries_in_parralel(&keys).await;
         match entries {
-            Ok(e) => Ok(self.prefetch_entries.extend(e)),
+            Ok(e) => {
+                self.prefetch_entries.extend(e);
+                Ok(())
+            },
             Err(err) => Err(err),
         }
     }
@@ -134,13 +137,13 @@ impl<'a> RangeIterator<'a> {
                 let entry_from_vlog = v_log.get(entry.val_offset).await;
                 match entry_from_vlog {
                     Ok(val_opt) => match val_opt {
-                        Some((val, is_deleted)) => return Ok((entry.key, val, is_deleted)),
+                        Some((val, is_deleted)) => Ok((entry.key, val, is_deleted)),
                         None => {
-                            return Err(Error::KeyNotFoundInValueLogError);
+                            Err(Error::KeyNotFoundInValueLogError)
                         }
                     },
-                    Err(err) => return Err(err),
-                };
+                    Err(err) => Err(err),
+                }
             })
         });
 

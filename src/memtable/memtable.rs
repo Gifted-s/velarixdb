@@ -94,11 +94,11 @@ pub struct Config {
 impl Config {
     /// Creates new `Config`
     fn new(size_unit: SizeUnit, capacity: usize, false_pos_rate: f64) -> Self {
-        return Self {
+        Self {
             size_unit,
             capacity,
             false_pos_rate,
-        };
+        }
     }
 }
 
@@ -148,7 +148,7 @@ impl InsertableToBucket for MemTable<Key> {
     }
 
     fn get_filter(&self) -> BloomFilter {
-        return self.bloom_filter.to_owned();
+        self.bloom_filter.to_owned()
     }
 }
 

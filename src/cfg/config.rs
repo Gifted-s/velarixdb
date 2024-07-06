@@ -246,7 +246,7 @@ impl DataStore<'static, Key> {
     /// The interval must be at least 1 hour.
     pub fn with_online_gc_interval(mut self, interval: std::time::Duration) -> Self {
         assert!(
-            interval.as_secs() >= Duration::from_secs(1 * 60 * 60).as_secs(),
+            interval.as_secs() >= Duration::from_secs(60 * 60).as_secs(),
             "online_gc_interval should not be less than 1 hour"
         );
         self.config.online_gc_interval = interval;

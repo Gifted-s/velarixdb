@@ -53,7 +53,7 @@ pub type KeyRangeHandle = Arc<RwLock<KeyRange>>;
 /// Represents read-only MemTables
 pub type ImmutableMemTables<K> = Arc<RwLock<IndexMap<K, Arc<RwLock<MemTable<K>>>>>>;
 
-/// Represents read-only memtables without locking
+/// Represents read-only memtables without lock
 pub type ImmutableMemTablesLockFree<K> = IndexMap<MemtableId, Arc<RwLock<MemTable<K>>>>;
 
 /// Alias for a boolean value

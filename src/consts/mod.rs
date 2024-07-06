@@ -50,7 +50,7 @@ pub const WRITE_BUFFER_SIZE: usize = SizeUnit::Kilobytes.to_bytes(50);
 pub const DEFAULT_TOMBSTONE_COMPACTION_INTERVAL: std::time::Duration = std::time::Duration::from_millis(5 * 86400000);
 
 // 1 Hour
-pub const DEFAULT_COMPACTION_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1 * 1000 * 60 * 60);
+pub const DEFAULT_COMPACTION_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1000 * 60 * 60);
 
 /// 1 Min
 pub const DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1000 * 60);

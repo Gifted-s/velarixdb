@@ -207,7 +207,7 @@ impl BucketMap {
         }
 
         let bucket = Bucket::new(self.dir.clone()).await?;
-        return self.insert_to_bucket(bucket, table, InsertionType::New).await;
+        self.insert_to_bucket(bucket, table, InsertionType::New).await
     }
 
     /// Determines which bucket to insert merged sstable or memtable based on `InsertionType`
@@ -236,7 +236,7 @@ impl BucketMap {
             InsertionType::New => {
                 bucket.avarage_size = fs::metadata(sst.clone().data_file.path)
                     .await
-                    .map_err(|err| GetFileMetaDataError(err))?
+                    .map_err(GetFileMetaDataError)?
                     .len() as usize;
                 self.buckets.insert(bucket.id, bucket);
             }
@@ -247,13 +247,13 @@ impl BucketMap {
                     .await
                     .iter_mut()
                     .for_each(|s| s.increase_hotness());
-                bucket.avarage_size = Bucket::cal_average_size((&bucket.sstables.read().await).to_vec()).await?;
+                bucket.avarage_size = Bucket::cal_average_size(bucket.sstables.read().await.to_vec()).await?;
                 bucket.size = bucket.avarage_size * bucket.sstables.read().await.len();
                 self.buckets.insert(bucket.id, bucket);
             }
         }
 
-        return Ok(sst);
+        Ok(sst)
     }
 
     /// Returns imbalanced [`Bucket`] and sstables to remove from that
@@ -266,7 +266,7 @@ impl BucketMap {
         let mut ssts_to_delete: SSTablesToRemove = Vec::new();
         let mut imbalanced_buckets: Vec<Bucket> = Vec::new();
         for (_, (bucket_id, bucket)) in self.buckets.iter().enumerate() {
-            let (ssts, avg) = Bucket::extract_sstables(&bucket).await?;
+            let (ssts, avg) = Bucket::extract_sstables(bucket).await?;
             if !ssts.is_empty() {
                 ssts_to_delete.push((*bucket_id, ssts.clone()));
                 imbalanced_buckets.push(Bucket {
@@ -288,7 +288,7 @@ impl BucketMap {
                 return false;
             }
         }
-        return true;
+        true
     }
     /// Deletes SSTables files
     ///

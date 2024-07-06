@@ -118,7 +118,7 @@ impl BloomFilter {
         let serialized_data = self.serialize();
         file.node.write_all(&serialized_data).await?;
         self.file_path = Some(file_path.to_owned());
-        return Ok(());
+        Ok(())
     }
 
     /// Reconstructs `bit_vec`` from entries
@@ -132,7 +132,7 @@ impl BloomFilter {
     ///
     /// Returns IO error in case recovery fails
     pub async fn recover_meta(&mut self) -> Result<(), Error> {
-        if self.file_path == None {
+        if self.file_path.is_none() {
             return Err(FilterFilePathNotProvided);
         };
         let (false_pos, no_hash_func, no_elements) = FilterFileNode::recover(self.file_path.as_ref().unwrap()).await?;
@@ -144,7 +144,7 @@ impl BloomFilter {
             self.false_positive_rate,
         );
         self.bit_vec = Arc::new(Mutex::new(BitVec::from_elem(no_of_bits as usize, false)));
-        return Ok(());
+        Ok(())
     }
 
     /// Serializes `BloomFilter` attributes
@@ -162,7 +162,7 @@ impl BloomFilter {
         serialized_data.extend_from_slice(&(self.no_of_hash_func as u32).to_le_bytes());
 
         serialized_data
-            .extend_from_slice(&(AtomicU32::load(&self.no_of_elements, Ordering::Relaxed) as u32).to_le_bytes());
+            .extend_from_slice(&AtomicU32::load(&self.no_of_elements, Ordering::Relaxed).to_le_bytes());
 
         serialized_data.extend_from_slice(&util::float_to_le_bytes(self.false_positive_rate));
 

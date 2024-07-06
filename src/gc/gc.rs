@@ -86,6 +86,7 @@ pub(crate) struct Config {
 /// Marks area of value log file
 /// to be punched
 #[derive(Clone, Debug)]
+#[derive(Default)]
 pub struct PunchMarker {
     /// Offset in value log to start punching hole
     pub(crate) punch_hole_start_offset: usize,
@@ -93,14 +94,7 @@ pub struct PunchMarker {
     /// Length of holes to punch
     pub(crate) punch_hole_length: usize,
 }
-impl Default for PunchMarker {
-    fn default() -> Self {
-        Self {
-            punch_hole_start_offset: Default::default(),
-            punch_hole_length: Default::default(),
-        }
-    }
-}
+
 
 impl GC {
     /// Creates `GC` instance
@@ -188,7 +182,7 @@ impl GC {
         let vlog_reader = vlog.read().await;
         let chunk_res = vlog_reader.read_chunk_to_garbage_collect(cfg.gc_chunk_size).await;
         drop(vlog_reader);
-        Ok(match chunk_res {
+        match chunk_res {
             Ok((entries, total_bytes_read)) => {
                 let tasks = entries.into_iter().map(|entry| {
                     let invalid_entries_ref = Arc::clone(&invalid_entries);
@@ -265,7 +259,8 @@ impl GC {
                 marker_lock.punch_hole_length = total_bytes_read;
             }
             Err(err) => return Err(GCError(err.to_string())),
-        })
+        };
+        Ok(())
     }
 
     /// Inserts tail entry to value log
@@ -359,7 +354,7 @@ impl GC {
             // synced to disk so we can update tail offset
             (self.vlog.write().await).tail_offset += marker_lock.punch_hole_length;
             let vlog_reader = self.vlog.read().await;
-            return Ok((vlog_reader.head_offset, vlog_reader.tail_offset));
+            Ok((vlog_reader.head_offset, vlog_reader.tail_offset))
         }
     }
 
@@ -404,7 +399,7 @@ impl GC {
         memtable: GCTable,
         gc_updated_entries: GCUpdatedEntries<Key>,
     ) {
-        let is_tombstone = value.as_ref().len() == 0;
+        let is_tombstone = value.as_ref().is_empty();
         let created_at = Utc::now();
         let v_offset = val_offset;
         let entry = Entry::new(key.as_ref(), v_offset, created_at, is_tombstone);
@@ -438,7 +433,7 @@ impl GC {
             if value.is_tombstone {
                 return Err(NotFoundInDB);
             }
-            return GC::get_value_from_vlog(&vlog, value.val_offset, value.created_at).await;
+            GC::get_value_from_vlog(&vlog, value.val_offset, value.created_at).await
         } else {
             // Step 2: Check the read-only memtables
             let mut is_deleted = false;
@@ -455,12 +450,12 @@ impl GC {
                 if is_deleted {
                     return Err(NotFoundInDB);
                 }
-                return GC::get_value_from_vlog(&vlog, offset, insert_time).await;
+                GC::get_value_from_vlog(&vlog, offset, insert_time).await
             } else {
                 // Step 3: Check sstables
                 let key_range = &key_range.read().await;
                 let ssts = key_range.filter_sstables_by_biggest_key(&key).await?;
-                return GC::search_key_in_sstables(key, ssts, &vlog).await;
+                GC::search_key_in_sstables(key, ssts, &vlog).await
             }
         }
     }
@@ -502,7 +497,7 @@ impl GC {
             }
             return GC::get_value_from_vlog(val_log, offset, insert_time).await;
         }
-        return Err(NotFoundInDB);
+        Err(NotFoundInDB)
     }
 
     pub(crate) fn found_in_table(insert_time: CreatedAt, lowest_insert_date: CreatedAt) -> bool {
@@ -529,7 +524,7 @@ impl GC {
             }
             return Ok((value, creation_at));
         }
-        return Err(KeyNotFoundInValueLogError);
+        Err(KeyNotFoundInValueLogError)
     }
 
     /// Handles entries marked as tombstone
@@ -549,7 +544,7 @@ impl GC {
                 invalid_entries.write().await.push(entry);
                 Ok(())
             }
-            _ => return Err(err),
+            _ => Err(err),
         }
     }
 }

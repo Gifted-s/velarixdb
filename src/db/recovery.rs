@@ -310,7 +310,7 @@ impl DataStore<'static, Key> {
             key_range.clone(),
         );
         let gc_updated_entries = Arc::new(RwLock::new(SkipMap::new()));
-        return Ok(DataStore {
+        Ok(DataStore {
             keyspace: DEFAULT_DB_NAME,
             active_memtable,
             val_log: vlog,
@@ -347,7 +347,7 @@ impl DataStore<'static, Key> {
             gc_table,
             gc_updated_entries,
             flush_stream: HashSet::new(),
-        });
+        })
     }
 
     fn get_bucket_id_from_full_bucket_path<P: AsRef<Path> + Send + Sync>(full_path: P) -> String {

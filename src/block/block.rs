@@ -180,7 +180,7 @@ impl Block {
 
         entry_vec.extend_from_slice(&entry.key);
 
-        entry_vec.extend_from_slice(&(entry.value_offset as u32).to_le_bytes());
+        entry_vec.extend_from_slice(&entry.value_offset.to_le_bytes());
 
         entry_vec.extend_from_slice(&entry.creation_date.timestamp_millis().to_le_bytes());
 
