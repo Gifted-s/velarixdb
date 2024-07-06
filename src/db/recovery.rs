@@ -1,26 +1,28 @@
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::path::Path;
 
-use super::{storage::DirPath, DataStore, SizeUnit};
+use super::{store::DirPath, DataStore, SizeUnit};
 
-use crate::bucket::bucket::InsertableToBucket;
 use crate::bucket::{Bucket, BucketID, BucketMap};
 use crate::cfg::Config;
 use crate::compactors::{self, Compactor};
 use crate::consts::{
-    DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE, HEAD_ENTRY_KEY, HEAD_ENTRY_VALUE, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8,
-    TAIL_ENTRY_KEY, TAIL_ENTRY_VALUE,
+    DEFAULT_DB_NAME, DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE, HEAD_ENTRY_KEY, HEAD_ENTRY_VALUE, SIZE_OF_U32, SIZE_OF_U64,
+    SIZE_OF_U8, TAIL_ENTRY_KEY, TAIL_ENTRY_VALUE,
 };
 use crate::err::Error;
 use crate::err::Error::*;
 use crate::filter::BloomFilter;
-use crate::flusher::Flusher;
+use crate::flush::Flusher;
+use crate::fs::FileAsync;
 use crate::gc::gc::GC;
 use crate::key_range::KeyRange;
 use crate::memtable::{Entry, MemTable};
 use crate::meta::Meta;
-use crate::sst::Table;
-use crate::types::{self, Key, MemtableId};
-use crate::value_log::ValueLog;
+use crate::open_dir_stream;
+use crate::sst::{Summary, Table};
+use crate::types::{ImmutableMemTablesLockFree, Key};
+use crate::vlog::ValueLog;
 use async_broadcast::broadcast;
 use chrono::Utc;
 use crossbeam_skiplist::SkipMap;
@@ -30,79 +32,68 @@ use tokio::fs::read_dir;
 use tokio::sync::RwLock;
 
 impl DataStore<'static, Key> {
-    pub async fn recover(
+    /// Recovers [`DataStore`] state after crash
+    ///
+    /// Errors
+    ///
+    /// Returns error incase there is an IO error
+    pub async fn recover<P: AsRef<Path> + Send + Sync + Clone>(
         dir: DirPath,
-        buckets_path: PathBuf,
+        buckets_path: P,
         mut vlog: ValueLog,
         mut key_range: KeyRange,
         config: &Config,
         size_unit: SizeUnit,
-        meta: Meta,
+        mut meta: Meta,
     ) -> Result<DataStore<'static, Key>, Error> {
         let mut recovered_buckets: IndexMap<BucketID, Bucket> = IndexMap::new();
-        let mut filters: Vec<BloomFilter> = Vec::new();
-        let mut most_recent_head_timestamp = 0;
-        let mut most_recent_head_offset = 0;
-        let mut most_recent_tail_timestamp = 0;
-        let mut most_recent_tail_offset = 0;
+        let filters: Vec<BloomFilter> = Vec::new();
 
         // Get bucket diretories streams
-        let mut buckets_stream = read_dir(buckets_path.to_owned())
-            .await
-            .map_err(|err| DirectoryOpenError {
-                path: buckets_path.to_owned(),
-                error: err,
-            })?;
+        let mut buckets_stream = open_dir_stream!(buckets_path.as_ref().to_path_buf());
         // for each bucket directory
-        while let Some(bucket_dir) = buckets_stream.next_entry().await.map_err(|err| DirectoryOpenError {
-            path: buckets_path.to_owned(),
+        while let Some(bucket_dir) = buckets_stream.next_entry().await.map_err(|err| DirOpenError {
+            path: buckets_path.as_ref().to_path_buf(),
             error: err,
         })? {
             // get read stream for sstable directories stream in the bucket
-            let mut sst_directories_stream =
-                read_dir(bucket_dir.path().to_owned())
-                    .await
-                    .map_err(|err| DirectoryOpenError {
-                        path: buckets_path.to_owned(),
-                        error: err,
-                    })?;
+            let mut sst_dir_stream = open_dir_stream!(bucket_dir.path());
+
             // iterate over each sstable directory
-            while let Some(sst_dir) = sst_directories_stream
-                .next_entry()
-                .await
-                .map_err(|err| DirectoryOpenError {
-                    path: buckets_path.to_owned(),
-                    error: err,
-                })?
-            {
+            while let Some(sst_dir) = sst_dir_stream.next_entry().await.map_err(|err| DirOpenError {
+                path: buckets_path.as_ref().to_path_buf(),
+                error: err,
+            })? {
                 // get read stream for files in the sstable directory
-                let files_read_stream = read_dir(sst_dir.path()).await.map_err(|err| FileOpenError {
-                    path: sst_dir.path(),
-                    error: err,
-                });
-                let mut sst_files = Vec::new();
-                let mut reader = files_read_stream.unwrap();
+                let mut files_stream = open_dir_stream!(sst_dir.path());
+                let mut files = Vec::new();
+
                 // iterate over each file
-                while let Some(file) = reader.next_entry().await.map_err(|err| DirectoryOpenError {
-                    path: buckets_path.to_owned(),
+                while let Some(file) = files_stream.next_entry().await.map_err(|err| DirOpenError {
+                    path: buckets_path.as_ref().to_path_buf(),
                     error: err,
                 })? {
                     let file_path = file.path();
                     if file_path.is_file() {
-                        sst_files.push(file_path);
+                        files.push(file_path);
                     }
                 }
                 // Sort to make order deterministic
-                sst_files.sort();
+                files.sort();
                 let bucket_id = Self::get_bucket_id_from_full_bucket_path(sst_dir.path());
-                if sst_files.len() < 2 {
+
+                if files.len() < 4 {
                     return Err(InvalidSSTableDirectoryError {
                         input_string: sst_dir.path().to_owned().to_string_lossy().to_string(),
                     });
                 }
-                let data_file_path = sst_files[0].to_owned();
-                let index_file_path = sst_files[1].to_owned();
-                let table = Table::build_from(
+
+                let data_file_path = files[0].to_owned();
+                let filter_file_path = files[1].to_owned();
+                let index_file_path = files[2].to_owned();
+                let _summary_file_path = files[3].to_owned();
+
+                let mut table = Table::build_from(
                     sst_dir.path().to_owned(),
                     data_file_path.to_owned(),
                     index_file_path.to_owned(),
@@ -125,45 +116,47 @@ impl DataStore<'static, Key> {
                     recovered_buckets.insert(bucket_uuid, updated_bucket);
                 }
 
-                let sstable = table.load_entries_from_file().await?;
-                let head_entry = sstable.get_value_from_entries(HEAD_ENTRY_KEY);
-                let tail_entry = sstable.get_value_from_entries(TAIL_ENTRY_KEY);
-                let biggest_key = sstable.find_biggest_key().unwrap();
-                let smallest_key = sstable.find_smallest_key().unwrap();
-                // update head
-                if let Some(value) = head_entry {
-                    if value.created_at > most_recent_head_timestamp {
-                        most_recent_head_offset = value.val_offset;
-                        most_recent_head_timestamp = value.created_at;
-                    }
-                }
-                // update tail
-                if let Some(value) = tail_entry {
-                    if value.created_at > most_recent_tail_timestamp {
-                        most_recent_tail_offset = value.val_offset;
-                        most_recent_tail_timestamp = value.created_at;
-                    }
-                }
-                let mut filter = Table::build_filter_from_sstable(&sstable.entries, config.false_positive_rate);
-                table.entries.clear();
-                filter.set_sstable(table.clone());
-                filters.push(filter);
-                key_range.set(data_file_path.to_owned(), smallest_key, biggest_key, table);
+                // recover summary
+                let mut summary = Summary::new(sst_dir.path());
+                summary.recover().await?;
+                table.summary = Some(summary.to_owned());
+
+                // store bloomfilter metadata in table
+                let mut new_filter = BloomFilter::default();
+                new_filter.file_path = Some(filter_file_path);
+                table.filter = Some(new_filter);
+
+                key_range.set(sst_dir.path(), summary.smallest_key, summary.biggest_key, table);
             }
         }
-        let mut buckets_map = BucketMap::new(buckets_path.clone()).await;
+        let mut buckets_map = BucketMap::new(buckets_path.clone()).await?;
         for (bucket_id, bucket) in recovered_buckets.iter() {
             buckets_map.buckets.insert(*bucket_id, bucket.clone());
         }
-        vlog.set_head(most_recent_head_offset);
-        vlog.set_tail(most_recent_tail_offset);
+        if meta.file_handle.file.node.size().await > 0 {
+            meta.recover().await?;
+            vlog.set_head(meta.v_log_head);
+            vlog.set_tail(meta.v_log_tail);
+        } else {
+            // if meta is empty then no flush has happened before crash
+            // therefore read from the beginning of vlog
+            vlog.set_head(
+                SIZE_OF_U32               // tail key length 
+                +SIZE_OF_U32              // tail value length
+                + SIZE_OF_U64             // date Length
+                + SIZE_OF_U8              // tombstone marker
+                + TAIL_ENTRY_KEY.len()    // tail key
+                + TAIL_ENTRY_VALUE.len(), // tail value
+            );
+            vlog.set_tail(0);
+        }
 
         let recover_res = DataStore::recover_memtable(
             size_unit,
             config.write_buffer_size,
             config.false_positive_rate,
             &dir.val_log,
-            most_recent_head_offset,
+            vlog.head_offset,
         )
         .await;
         let (flush_signal_tx, flush_signal_rx) = broadcast(DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE);
@@ -181,7 +174,9 @@ impl DataStore<'static, Key> {
                     filters.clone(),
                     key_range.clone(),
                 );
+                let gc_updated_entries = Arc::new(RwLock::new(SkipMap::new()));
                 Ok(DataStore {
+                    keyspace: DEFAULT_DB_NAME,
                     active_memtable: active_memtable.to_owned(),
                     val_log: vlog,
                     dir,
@@ -192,7 +187,7 @@ impl DataStore<'static, Key> {
                     flusher,
                     compactor: Compactor::new(
                         config.enable_ttl,
-                        config.entry_ttl_millis,
+                        config.entry_ttl,
                         config.tombstone_ttl,
                         config.background_compaction_interval,
                         config.compactor_flush_listener_interval,
@@ -207,6 +202,7 @@ impl DataStore<'static, Key> {
                         config.gc_chunk_size,
                         gc_table.clone(),
                         gc_log.clone(),
+                        gc_updated_entries.clone(),
                     ),
                     read_only_memtables,
                     range_iterator: None,
@@ -214,23 +210,29 @@ impl DataStore<'static, Key> {
                     flush_signal_rx,
                     gc_log,
                     gc_table,
-                    gc_updated_entries: Arc::new(RwLock::new(SkipMap::new())),
+                    gc_updated_entries,
+                    flush_stream: HashSet::new(),
                 })
             }
             Err(err) => Err(MemTableRecoveryError(Box::new(err))),
         }
     }
 
-    pub async fn recover_memtable(
+    /// Recovers memtable state
+    ///
+    /// Recovers both active and readonly memtable states using value log
+    ///
+    /// Returns a tuple of active memtable and read only memtables
+    pub async fn recover_memtable<P: AsRef<Path> + Send + Sync>(
         size_unit: SizeUnit,
         capacity: usize,
         false_positive_rate: f64,
-        vlog_path: &PathBuf,
+        vlog_path: P,
         head_offset: usize,
-    ) -> Result<(MemTable<Key>, IndexMap<MemtableId, Arc<RwLock<MemTable<Key>>>>), Error> {
-        let mut read_only_memtables: IndexMap<MemtableId, Arc<RwLock<MemTable<Key>>>> = IndexMap::new();
+    ) -> Result<(MemTable<Key>, ImmutableMemTablesLockFree<Key>), Error> {
+        let mut read_only_memtables: ImmutableMemTablesLockFree<Key> = IndexMap::new();
         let mut active_memtable = MemTable::with_specified_capacity_and_rate(size_unit, capacity, false_positive_rate);
-        let mut vlog = ValueLog::new(&vlog_path.clone()).await?;
+        let mut vlog = ValueLog::new(vlog_path.as_ref()).await?;
         let mut most_recent_offset = head_offset;
         let entries = vlog.recover(head_offset).await?;
 
@@ -250,7 +252,7 @@ impl DataStore<'static, Key> {
                     active_memtable =
                         MemTable::with_specified_capacity_and_rate(size_unit, capacity, false_positive_rate);
                 }
-                active_memtable.insert(&entry)?;
+                active_memtable.insert(&entry);
             }
             most_recent_offset += SIZE_OF_U32   // Key Size(for fetching key length)
                         +SIZE_OF_U32            // Value Length(for fetching value length)
@@ -259,37 +261,40 @@ impl DataStore<'static, Key> {
                         + e.key.len()           // Key Length
                         + e.value.len(); // Value Length
         }
+
         Ok((active_memtable, read_only_memtables))
     }
 
-    pub async fn handle_empty_vlog(
+    /// Creates new [`DataStore`]
+    /// Used in case there is no recovery needed
+    pub async fn handle_empty_vlog<P: AsRef<Path> + Send + Sync>(
         dir: DirPath,
-        buckets_path: PathBuf,
+        buckets_path: P,
         mut vlog: ValueLog,
         key_range: KeyRange,
         config: &Config,
         size_unit: SizeUnit,
         meta: Meta,
-    ) -> Result<DataStore<'static, types::Key>, Error> {
+    ) -> Result<DataStore<'static, Key>, Error> {
         let mut active_memtable =
             MemTable::with_specified_capacity_and_rate(size_unit, config.write_buffer_size, config.false_positive_rate);
         // if ValueLog is empty then we want to insert both tail and head
-        let created_at = Utc::now().timestamp_millis() as u64;
+        let created_at = Utc::now();
         let tail_offset = vlog
             .append(&TAIL_ENTRY_KEY.to_vec(), &TAIL_ENTRY_VALUE.to_vec(), created_at, false)
-            .await?;
+            .await;
         let tail_entry = Entry::new(TAIL_ENTRY_KEY.to_vec(), tail_offset, created_at, false);
         let head_offset = vlog
             .append(&HEAD_ENTRY_KEY.to_vec(), &HEAD_ENTRY_VALUE.to_vec(), created_at, false)
-            .await?;
+            .await;
         let head_entry = Entry::new(HEAD_ENTRY_KEY.to_vec(), head_offset, created_at, false);
         vlog.set_head(head_offset);
         vlog.set_tail(tail_offset);
 
         // insert tail and head to memtable
-        active_memtable.insert(&tail_entry.to_owned())?;
-        active_memtable.insert(&head_entry.to_owned())?;
-        let buckets = BucketMap::new(buckets_path).await;
+        active_memtable.insert(&tail_entry.to_owned());
+        active_memtable.insert(&head_entry.to_owned());
+        let buckets = BucketMap::new(buckets_path).await?;
         let (flush_signal_tx, flush_signal_rx) = broadcast(DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE);
         let read_only_memtables = IndexMap::new();
         let filters = Arc::new(RwLock::new(Vec::new()));
@@ -304,8 +309,9 @@ impl DataStore<'static, Key> {
             filters.clone(),
             key_range.clone(),
         );
-
-        return Ok(DataStore {
+        let gc_updated_entries = Arc::new(RwLock::new(SkipMap::new()));
+        Ok(DataStore {
+            keyspace: DEFAULT_DB_NAME,
             active_memtable,
             val_log: vlog,
             filters,
@@ -314,7 +320,7 @@ impl DataStore<'static, Key> {
             key_range,
             compactor: Compactor::new(
                 config.enable_ttl,
-                config.entry_ttl_millis,
+                config.entry_ttl,
                 config.tombstone_ttl,
                 config.background_compaction_interval,
                 config.compactor_flush_listener_interval,
@@ -335,15 +341,17 @@ impl DataStore<'static, Key> {
                 config.gc_chunk_size,
                 gc_table.clone(),
                 gc_log.clone(),
+                gc_updated_entries.clone(),
             ),
             gc_log,
             gc_table,
-            gc_updated_entries: Arc::new(RwLock::new(SkipMap::new())),
-        });
+            gc_updated_entries,
+            flush_stream: HashSet::new(),
+        })
     }
 
-    fn get_bucket_id_from_full_bucket_path(full_path: PathBuf) -> String {
-        let full_path_as_str = full_path.to_string_lossy().to_string();
+    fn get_bucket_id_from_full_bucket_path<P: AsRef<Path> + Send + Sync>(full_path: P) -> String {
+        let full_path_as_str = full_path.as_ref().to_string_lossy().to_string();
         let mut bucket_id = String::new();
         // Find the last occurrence of "bucket" in the file path
         if let Some(idx) = full_path_as_str.rfind("bucket") {

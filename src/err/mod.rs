@@ -16,6 +16,12 @@ pub enum Error {
     #[error("Directory deletion error")]
     DirDeleteError(#[source] io::Error),
 
+    #[error("Filter file path not provided")]
+    FilterFilePathNotProvided,
+
+    #[error("Filter file open error: path `{0}`")]
+    FilterFileOpenError(PathBuf),
+
     #[error("File deletion error")]
     FileDeleteError(#[source] io::Error),
 
@@ -28,17 +34,23 @@ pub enum Error {
     #[error("Failed to create directory")]
     DirCreationError { path: PathBuf, error: io::Error },
 
+    #[error("Failed to clear file: `{path}`: {error}")]
+    FileClearError { path: PathBuf, error: io::Error },
+
     #[error("Failed to read file `{path}`: {error}")]
     FileReadError { path: PathBuf, error: io::Error },
 
     #[error("Failed to write to file `{path}`: {error}")]
     FileWriteError { path: PathBuf, error: io::Error },
 
-    #[error("Failed to open bucket directory `{path}`: {error}")]
-    DirectoryOpenError { path: PathBuf, error: io::Error },
+    #[error("Failed to open directory `{path}`: {error}")]
+    DirOpenError { path: PathBuf, error: io::Error },
 
     #[error("File read ended unexpectedly")]
     UnexpectedEOF(#[source] io::Error),
+
+    #[error("GC error attempting to remove unsynced entries from disk")]
+    GCErrorAttemptToRemoveUnsyncedEntries,
 
     #[error("Failed to insert sstable to bucket because no insertion condition was met")]
     ConditionsToInsertToBucketNotMetError,
@@ -97,11 +109,32 @@ pub enum Error {
     #[error("Block is full")]
     BlockIsFullError,
 
+    #[error("Filter not provided, needed to flush table to disk")]
+    FilterNotProvidedForFlush,
+
+    #[error("Key size too large, key must not exceed 65536 bytes")]
+    KeyMaxSizeExceeded,
+
+    #[error("Key cannot be empty")]
+    KeySizeNone,
+
+    #[error("Value cannot be empty")]
+    ValueSizeNone,
+
+    #[error("Value too large, value must not exceed 2^32 bytes")]
+    ValMaxSizeExceeded,
+
+    #[error("Filter not found")]
+    FilterNotFoundError,
+
     #[error("Error finding biggest key in memtable (None was returned)")]
     BiggestKeyIndexError,
 
     #[error("Error finding lowest key in memtable (None was returned)")]
     LowestKeyIndexError,
+
+    #[error("SSTable summary field is None")]
+    TableSummaryIsNoneError,
 
     #[error("All bloom filters return false for all sstables")]
     KeyNotFoundByAnyBloomFilterError,
@@ -150,4 +183,7 @@ pub enum Error {
 
     #[error("Tokio join tasks error")]
     TokioJoinError,
+
+    #[error("Entries cannot be empty during flush")]
+    EntriesCannotBeEmptyDuringFlush,
 }

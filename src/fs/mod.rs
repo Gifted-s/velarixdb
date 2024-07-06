@@ -1,27 +1,39 @@
+use crate::{
+    consts::{EOF, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8},
+    err::Error::{self, *},
+    filter::{FalsePositive, NoHashFunc, NoOfElements},
+    index::RangeOffset,
+    key_range::{BiggestKey, SmallestKey},
+    load_buffer,
+    memtable::{Entry, SkipMapValue},
+    types::{
+        CreatedAt, IsTombStone, Key, LastModified, NoBytesRead, SkipMapEntries, VLogHead, VLogTail, ValOffset, Value,
+    },
+    util,
+    vlog::ValueLogEntry,
+};
 use async_trait::async_trait;
 use crossbeam_skiplist::SkipMap;
-use std::{fmt::Debug, fs::Metadata, io::SeekFrom, path::PathBuf, sync::Arc};
+use std::{
+    fmt::Debug,
+    fs::Metadata,
+    io::SeekFrom,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use tokio::{
     fs::{self, File, OpenOptions},
     io::{self, AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
     sync::{RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
-
-use crate::{
-    consts::{EOF, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8},
-    err::Error::{self, *},
-    index::RangeOffset,
-    load_buffer,
-    memtable::{Entry, SkipMapValue},
-    types::{CreationTime, IsTombStone, Key, NoBytesRead, SkipMapEntries, ValOffset},
-    value_log::ValueLogEntry,
-};
-
 #[derive(Debug, Clone)]
 pub enum FileType {
     Index,
     Data,
     ValueLog,
+    Filter,
+    Meta,
+    Summary,
 }
 pub type Buf = [u8];
 pub type RGuard<'a, T> = RwLockReadGuard<'a, T>;
@@ -29,13 +41,13 @@ pub type WGuard<'a, T> = RwLockWriteGuard<'a, T>;
 
 #[async_trait]
 pub trait FileAsync: Send + Sync + Debug + Clone {
-    async fn create(path: PathBuf) -> Result<File, Error>;
+    async fn create<P: AsRef<Path> + Send + Sync>(path: P) -> Result<File, Error>;
 
-    async fn create_dir_all(path: PathBuf) -> Result<(), Error>;
+    async fn create_dir_all<P: AsRef<Path> + Send + Sync>(path: P) -> Result<(), Error>;
 
     async fn metadata(&self) -> Result<Metadata, Error>;
 
-    async fn open(path: PathBuf) -> Result<File, Error>;
+    async fn open<P: AsRef<Path> + Send + Sync>(path: P) -> Result<File, Error>;
 
     async fn read_buf(&self, buf: &mut Buf) -> Result<usize, Error>;
 
@@ -46,6 +58,8 @@ pub trait FileAsync: Send + Sync + Debug + Clone {
     async fn flush(&self) -> Result<(), Error>;
 
     async fn seek(&self, start_offset: u64) -> Result<u64, Error>;
+
+    async fn clear(&self) -> Result<(), Error>;
 
     async fn remove_dir_all(&self) -> Result<(), Error>;
 
@@ -64,23 +78,23 @@ pub trait FileAsync: Send + Sync + Debug + Clone {
 
 #[async_trait]
 pub trait DataFs: Send + Sync + Debug + Clone {
-    async fn new(path: PathBuf, file_type: FileType) -> Result<Self, Error>;
+    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<Self, Error>;
     async fn load_entries(&self) -> Result<(SkipMapEntries<Key>, usize), Error>;
 
     async fn find_entry(
         &self,
         offset: u32,
         searched_key: &[u8],
-    ) -> Result<Option<(ValOffset, CreationTime, IsTombStone)>, Error>;
+    ) -> Result<Option<(ValOffset, CreatedAt, IsTombStone)>, Error>;
 
-    async fn load_entries_within_range(&self, range_offset: RangeOffset) -> Result<Vec<Entry<Vec<u8>, usize>>, Error>;
+    async fn load_entries_within_range(&self, range_offset: RangeOffset) -> Result<Vec<Entry<Key, usize>>, Error>;
 }
 
 #[async_trait]
 pub trait VLogFs: Send + Sync + Debug + Clone {
-    async fn new(path: PathBuf, file_type: FileType) -> Result<Self, Error>;
+    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<Self, Error>;
 
-    async fn get(&self, start_offset: usize) -> Result<Option<(Vec<u8>, bool)>, Error>;
+    async fn get(&self, start_offset: usize) -> Result<Option<(Key, bool)>, Error>;
 
     async fn recover(&self, start_offset: usize) -> Result<Vec<ValueLogEntry>, Error>;
 
@@ -92,12 +106,36 @@ pub trait VLogFs: Send + Sync + Debug + Clone {
 }
 
 #[async_trait]
+pub trait FilterFs: Send + Sync + Debug + Clone {
+    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<Self, Error>;
+
+    async fn recover<P: AsRef<Path> + Send + Sync>(path: P)
+        -> Result<(FalsePositive, NoHashFunc, NoOfElements), Error>;
+}
+
+#[async_trait]
 pub trait IndexFs: Send + Sync + Debug + Clone {
-    async fn new(path: PathBuf, file_type: FileType) -> Result<Self, Error>;
+    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<Self, Error>;
 
     async fn get_from_index(&self, searched_key: &[u8]) -> Result<Option<u32>, Error>;
 
     async fn get_block_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<RangeOffset, Error>;
+}
+
+#[async_trait]
+pub trait SummaryFs: Send + Sync + Debug + Clone {
+    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<Self, Error>;
+
+    async fn recover<P: AsRef<Path> + Send + Sync>(path: P) -> Result<(SmallestKey, BiggestKey), Error>;
+}
+
+#[async_trait]
+pub trait MetaFs: Send + Sync + Debug + Clone {
+    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<Self, Error>;
+
+    async fn recover<P: AsRef<Path> + Send + Sync>(
+        path: P,
+    ) -> Result<(VLogHead, VLogTail, CreatedAt, LastModified), Error>;
 }
 
 #[derive(Debug, Clone)]
@@ -108,59 +146,73 @@ pub struct FileNode {
 }
 
 impl FileNode {
-    pub async fn new(path: PathBuf, file_type: FileType) -> Result<Self, Error> {
-        let file = FileNode::create(path.to_owned()).await?;
+    pub async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<Self, Error> {
+        let file = FileNode::create(path.as_ref()).await?;
         return Ok(Self {
             file_type,
             file: Arc::new(RwLock::new(file)),
-            file_path: path,
+            file_path: path.as_ref().to_path_buf(),
         });
     }
 }
 
 #[async_trait]
 impl FileAsync for FileNode {
-    async fn create(path: PathBuf) -> Result<File, Error> {
+    async fn create<P: AsRef<Path> + Send + Sync>(path: P) -> Result<File, Error> {
         Ok(OpenOptions::new()
             .read(true)
             .append(true)
             .create(true)
-            .open(path.clone())
+            .open(path.as_ref())
             .await
-            .map_err(|err| FileCreationError { path, error: err })?)
+            .map_err(|err| FileCreationError {
+                path: path.as_ref().to_path_buf(),
+                error: err,
+            })?)
     }
 
-    async fn create_dir_all(dir: PathBuf) -> Result<(), Error> {
+    async fn create_dir_all<P: AsRef<Path> + Send + Sync>(dir: P) -> Result<(), Error> {
+        let dir = dir.as_ref();
         if !dir.exists() {
-            return Ok(fs::create_dir_all(&dir)
-                .await
-                .map_err(|err| DirCreationError { path: dir, error: err })?);
+            return fs::create_dir_all(&dir).await.map_err(|err| DirCreationError {
+                path: dir.to_path_buf(),
+                error: err,
+            });
         }
         Ok(())
     }
 
     async fn metadata(&self) -> Result<Metadata, Error> {
         let file = self.r_lock().await;
-        Ok(file.metadata().await.map_err(|err| GetFileMetaDataError(err))?)
+        Ok(file.metadata().await.map_err(GetFileMetaDataError)?)
     }
 
-    async fn open(path: PathBuf) -> Result<File, Error> {
-        Ok(File::open(path.to_owned())
-            .await
-            .map_err(|err| FileOpenError { path, error: err })?)
+    async fn open<P: AsRef<Path> + Send + Sync>(path: P) -> Result<File, Error> {
+        Ok(File::open(path.as_ref()).await.map_err(|err| FileOpenError {
+            path: path.as_ref().to_path_buf(),
+            error: err,
+        })?)
     }
 
-    async fn read_buf(&self, mut buf: &mut Buf) -> Result<usize, Error> {
+    async fn read_buf(&self, buf: &mut Buf) -> Result<usize, Error> {
         let mut file = self.w_lock().await;
-        Ok(file.read(&mut buf).await.map_err(|err| FileReadError {
+        Ok(file.read(buf).await.map_err(|err| FileReadError {
             path: self.file_path.clone(),
             error: err,
         })?)
     }
 
-    async fn write_all(&self, mut buf: &Buf) -> Result<(), Error> {
+    async fn write_all(&self, buf: &Buf) -> Result<(), Error> {
         let mut file = self.w_lock().await;
-        Ok(file.write_all(&mut buf).await.map_err(|err| FileWriteError {
+        Ok(file.write_all(buf).await.map_err(|err| FileWriteError {
+            path: self.file_path.clone(),
+            error: err,
+        })?)
+    }
+
+    async fn clear(&self) -> Result<(), Error> {
+        let file = self.w_lock().await;
+        Ok(file.set_len(0).await.map_err(|err| FileClearError {
             path: self.file_path.clone(),
             error: err,
         })?)
@@ -184,13 +236,13 @@ impl FileAsync for FileNode {
         Ok(file
             .seek(SeekFrom::Start(start_offset))
             .await
-            .map_err(|err| FileSeekError(err))?)
+            .map_err(FileSeekError)?)
     }
 
     async fn remove_dir_all(&self) -> Result<(), Error> {
         Ok(fs::remove_dir_all(&self.file_path)
             .await
-            .map_err(|err| DirDeleteError(err))?)
+            .map_err(DirDeleteError)?)
     }
 
     async fn w_lock(&self) -> WGuard<File> {
@@ -209,7 +261,7 @@ pub struct DataFileNode {
 
 #[async_trait]
 impl DataFs for DataFileNode {
-    async fn new(path: PathBuf, file_type: FileType) -> Result<DataFileNode, Error> {
+    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<DataFileNode, Error> {
         let node = FileNode::new(path, file_type).await?;
         Ok(DataFileNode { node })
     }
@@ -220,7 +272,7 @@ impl DataFs for DataFileNode {
         let mut file = self.node.file.write().await;
         file.seek(std::io::SeekFrom::Start(0))
             .await
-            .map_err(|err| FileSeekError(err))?;
+            .map_err(FileSeekError)?;
 
         loop {
             let mut key_len_bytes = [0; SIZE_OF_U32];
@@ -262,7 +314,14 @@ impl DataFs for DataFileNode {
             let created_at = u64::from_le_bytes(created_at_bytes);
             let value_offset = u32::from_le_bytes(val_offset_bytes);
             let is_tombstone = is_tombstone_byte[0] == 1;
-            entries.insert(key, SkipMapValue::new(value_offset as usize, created_at, is_tombstone));
+            entries.insert(
+                key,
+                SkipMapValue::new(
+                    value_offset as usize,
+                    util::milliseconds_to_datetime(created_at),
+                    is_tombstone,
+                ),
+            );
         }
         return Ok((entries, total_bytes_read));
     }
@@ -271,12 +330,12 @@ impl DataFs for DataFileNode {
         &self,
         offset: u32,
         searched_key: &[u8],
-    ) -> Result<Option<(ValOffset, CreationTime, IsTombStone)>, Error> {
+    ) -> Result<Option<(ValOffset, CreatedAt, IsTombStone)>, Error> {
         let path = &self.node.file_path;
         let mut file = self.node.file.write().await;
         file.seek(std::io::SeekFrom::Start(offset.into()))
             .await
-            .map_err(|err| FileSeekError(err))?;
+            .map_err(FileSeekError)?;
 
         loop {
             let mut key_len_bytes = [0; SIZE_OF_U32];
@@ -315,19 +374,23 @@ impl DataFs for DataFileNode {
             let value_offset = u32::from_le_bytes(val_offset_bytes);
             let is_tombstone = is_tombstone_byte[0] == 1;
             if key == searched_key {
-                return Ok(Some((value_offset as usize, created_at, is_tombstone)));
+                return Ok(Some((
+                    value_offset as usize,
+                    util::milliseconds_to_datetime(created_at),
+                    is_tombstone,
+                )));
             }
         }
     }
 
-    async fn load_entries_within_range(&self, range_offset: RangeOffset) -> Result<Vec<Entry<Vec<u8>, usize>>, Error> {
+    async fn load_entries_within_range(&self, range_offset: RangeOffset) -> Result<Vec<Entry<Key, ValOffset>>, Error> {
         let mut entries = Vec::new();
         let mut total_bytes_read = 0;
         let path = &self.node.file_path;
         let mut file = self.node.file.write().await;
         file.seek(std::io::SeekFrom::Start((range_offset.start_offset) as u64))
             .await
-            .map_err(|err| FileSeekError(err))?;
+            .map_err(FileSeekError)?;
 
         loop {
             let mut key_len_bytes = [0; SIZE_OF_U32];
@@ -369,7 +432,12 @@ impl DataFs for DataFileNode {
             let created_at = u64::from_le_bytes(created_at_bytes);
             let value_offset = u32::from_le_bytes(val_offset_bytes) as usize;
             let is_tombstone = is_tombstone_byte[0] == 1;
-            entries.push(Entry::new(key, value_offset, created_at, is_tombstone));
+            entries.push(Entry::new(
+                key,
+                value_offset,
+                util::milliseconds_to_datetime(created_at),
+                is_tombstone,
+            ));
 
             if total_bytes_read as u32 >= range_offset.end_offset {
                 return Ok(entries);
@@ -385,16 +453,16 @@ pub struct VLogFileNode {
 
 #[async_trait]
 impl VLogFs for VLogFileNode {
-    async fn new(path: PathBuf, file_type: FileType) -> Result<VLogFileNode, Error> {
+    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<VLogFileNode, Error> {
         let node = FileNode::new(path, file_type).await?;
         Ok(VLogFileNode { node })
     }
-    async fn get(&self, start_offset: usize) -> Result<Option<(Vec<u8>, bool)>, Error> {
+    async fn get(&self, start_offset: usize) -> Result<Option<(Value, bool)>, Error> {
         let path = &self.node.file_path;
         let mut file = self.node.file.write().await;
         file.seek(std::io::SeekFrom::Start((start_offset) as u64))
             .await
-            .map_err(|err| FileSeekError(err))?;
+            .map_err(FileSeekError)?;
 
         let mut key_len_bytes = [0; SIZE_OF_U32];
         let mut bytes_read = load_buffer!(file, &mut key_len_bytes, path.to_owned())?;
@@ -429,7 +497,6 @@ impl VLogFs for VLogFileNode {
         if bytes_read == 0 {
             return Err(FileNode::unexpected_eof());
         }
-
         let mut value = vec![0; val_len as usize];
         bytes_read = load_buffer!(file, &mut value, path.to_owned())?;
         if bytes_read == 0 {
@@ -444,7 +511,7 @@ impl VLogFs for VLogFileNode {
         let mut file = self.node.file.write().await;
         file.seek(std::io::SeekFrom::Start((start_offset) as u64))
             .await
-            .map_err(|err| FileSeekError(err))?;
+            .map_err(FileSeekError)?;
 
         loop {
             let mut key_len_bytes = [0; SIZE_OF_U32];
@@ -491,7 +558,7 @@ impl VLogFs for VLogFileNode {
                 vsize: val_len as usize,
                 key,
                 value,
-                created_at,
+                created_at: util::milliseconds_to_datetime(created_at),
                 is_tombstone,
             })
         }
@@ -505,9 +572,9 @@ impl VLogFs for VLogFileNode {
         let path = &self.node.file_path;
         let mut entries = Vec::new();
         let mut file = self.node.file.write().await;
-        file.seek(std::io::SeekFrom::Start((offset) as u64))
+        file.seek(std::io::SeekFrom::Start(offset))
             .await
-            .map_err(|err| FileSeekError(err))?;
+            .map_err(FileSeekError)?;
         let mut total_bytes_read: usize = 0;
         loop {
             let mut key_len_bytes = [0; SIZE_OF_U32];
@@ -532,8 +599,8 @@ impl VLogFs for VLogFileNode {
             if bytes_read == 0 {
                 return Err(FileNode::unexpected_eof());
             }
-
             let created_at = u64::from_le_bytes(creation_date_bytes);
+
             let mut istombstone_bytes = [0; SIZE_OF_U8];
             let mut bytes_read = load_buffer!(file, &mut istombstone_bytes, path.to_owned())?;
             total_bytes_read += bytes_read;
@@ -560,7 +627,7 @@ impl VLogFs for VLogFileNode {
                 vsize: val_len as usize,
                 key,
                 value,
-                created_at,
+                created_at: util::milliseconds_to_datetime(created_at),
                 is_tombstone,
             });
 
@@ -578,7 +645,7 @@ pub struct IndexFileNode {
 }
 #[async_trait]
 impl IndexFs for IndexFileNode {
-    async fn new(path: PathBuf, file_type: FileType) -> Result<IndexFileNode, Error> {
+    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<IndexFileNode, Error> {
         let node = FileNode::new(path, file_type).await?;
         Ok(IndexFileNode { node })
     }
@@ -586,9 +653,9 @@ impl IndexFs for IndexFileNode {
         let path = &self.node.file_path;
         let block_offset: i32 = -1;
         let mut file = self.node.file.write().await;
-        file.seek(std::io::SeekFrom::Start((0) as u64))
+        file.seek(std::io::SeekFrom::Start(0_u64))
             .await
-            .map_err(|err| FileSeekError(err))?;
+            .map_err(FileSeekError)?;
 
         loop {
             let mut key_len_bytes = [0; SIZE_OF_U32];
@@ -631,9 +698,9 @@ impl IndexFs for IndexFileNode {
         let path = &self.node.file_path;
         let mut range_offset = RangeOffset::new(0, 0);
         let mut file = self.node.file.write().await;
-        file.seek(std::io::SeekFrom::Start((0) as u64))
+        file.seek(std::io::SeekFrom::Start(0_u64))
             .await
-            .map_err(|err| FileSeekError(err))?;
+            .map_err(FileSeekError)?;
 
         loop {
             let mut key_len_bytes = [0; SIZE_OF_U32];
@@ -669,8 +736,149 @@ impl IndexFs for IndexFileNode {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct FilterFileNode {
+    pub node: FileNode,
+}
+
+#[async_trait]
+impl FilterFs for FilterFileNode {
+    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<FilterFileNode, Error> {
+        let node = FileNode::new(path, file_type).await?;
+        Ok(FilterFileNode { node })
+    }
+
+    async fn recover<P: AsRef<Path> + Send + Sync>(
+        path: P,
+    ) -> Result<(FalsePositive, NoHashFunc, NoOfElements), Error> {
+        let mut file = FileNode::open(path.as_ref())
+            .await
+            .map_err(|_| return FilterFileOpenError(path.as_ref().to_owned()))?;
+        let mut no_hash_func_bytes = [0; SIZE_OF_U32];
+        let mut bytes_read = load_buffer!(file, &mut no_hash_func_bytes, path.as_ref().to_path_buf())?;
+        if bytes_read == 0 {
+            return Err(FileNode::unexpected_eof());
+        }
+        let no_of_hash_func = u32::from_le_bytes(no_hash_func_bytes);
+
+        let mut no_of_elements_bytes = [0; SIZE_OF_U32];
+        bytes_read = load_buffer!(file, &mut no_of_elements_bytes, path.as_ref().to_path_buf())?;
+        if bytes_read == 0 {
+            return Err(FileNode::unexpected_eof());
+        }
+        let no_of_elements = u32::from_le_bytes(no_of_elements_bytes);
+
+        let mut false_positive_rate_bytes = [0; SIZE_OF_U64];
+        bytes_read = load_buffer!(file, &mut false_positive_rate_bytes, path.as_ref().to_path_buf())?;
+        if bytes_read == 0 {
+            return Err(FileNode::unexpected_eof());
+        }
+        let false_positive_rate = util::float_from_le_bytes(&false_positive_rate_bytes);
+        if false_positive_rate.is_none() {
+            return Err(FileNode::unexpected_eof());
+        }
+        return Ok((false_positive_rate.unwrap(), no_of_hash_func, no_of_elements));
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct MetaFileNode {
+    pub node: FileNode,
+}
+
+#[async_trait]
+impl MetaFs for MetaFileNode {
+    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<MetaFileNode, Error> {
+        let node = FileNode::new(path, file_type).await?;
+        Ok(MetaFileNode { node })
+    }
+    async fn recover<P: AsRef<Path> + Send + Sync>(
+        path: P,
+    ) -> Result<(VLogHead, VLogTail, CreatedAt, LastModified), Error> {
+        let mut file = FileNode::open(path.as_ref())
+            .await
+            .map_err(|_| return FilterFileOpenError(path.as_ref().to_owned()))?;
+        let mut head_offset_bytes = [0; SIZE_OF_U32];
+        let mut bytes_read = load_buffer!(file, &mut head_offset_bytes, path.as_ref().to_path_buf())?;
+        if bytes_read == 0 {
+            return Err(FileNode::unexpected_eof());
+        }
+        let head_offset = u32::from_le_bytes(head_offset_bytes);
+
+        let mut tail_offset_bytes = [0; SIZE_OF_U32];
+        bytes_read = load_buffer!(file, &mut tail_offset_bytes, path.as_ref().to_path_buf())?;
+        if bytes_read == 0 {
+            return Err(FileNode::unexpected_eof());
+        }
+        let tail_offset = u32::from_le_bytes(tail_offset_bytes);
+
+        let mut creation_date_bytes = [0; SIZE_OF_U64];
+        bytes_read = load_buffer!(file, &mut creation_date_bytes, path.as_ref().to_owned())?;
+        if bytes_read == 0 {
+            return Err(FileNode::unexpected_eof());
+        }
+        let created_at = u64::from_le_bytes(creation_date_bytes);
+
+        let mut last_modified_date_bytes = [0; SIZE_OF_U64];
+        bytes_read = load_buffer!(file, &mut last_modified_date_bytes, path.as_ref().to_owned())?;
+        if bytes_read == 0 {
+            return Err(FileNode::unexpected_eof());
+        }
+        let last_modified = u64::from_le_bytes(last_modified_date_bytes);
+        return Ok((
+            head_offset as usize,
+            tail_offset as usize,
+            util::milliseconds_to_datetime(created_at),
+            util::milliseconds_to_datetime(last_modified),
+        ));
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SummaryFileNode {
+    pub node: FileNode,
+}
+
+#[async_trait]
+impl SummaryFs for SummaryFileNode {
+    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<SummaryFileNode, Error> {
+        let node = FileNode::new(path, file_type).await?;
+        Ok(SummaryFileNode { node })
+    }
+    async fn recover<P: AsRef<Path> + Send + Sync>(path: P) -> Result<(SmallestKey, BiggestKey), Error> {
+        let mut file = FileNode::open(path.as_ref())
+            .await
+            .map_err(|_| return FilterFileOpenError(path.as_ref().to_owned()))?;
+        let mut smallest_key_len_bytes = [0; SIZE_OF_U32];
+        let mut bytes_read = load_buffer!(file, &mut smallest_key_len_bytes, path.as_ref().to_owned())?;
+        if bytes_read == 0 {
+            return Err(FileNode::unexpected_eof());
+        }
+        let smallest_key_len = u32::from_le_bytes(smallest_key_len_bytes);
+
+        let mut biggest_key_len_bytes = [0; SIZE_OF_U32];
+        bytes_read = load_buffer!(file, &mut biggest_key_len_bytes, path.as_ref().to_owned())?;
+        if bytes_read == 0 {
+            return Err(FileNode::unexpected_eof());
+        }
+        let biggest_key_len = u32::from_le_bytes(biggest_key_len_bytes);
+
+        let mut smallest_key = vec![0; smallest_key_len as usize];
+        bytes_read = load_buffer!(file, &mut smallest_key, path.as_ref().to_owned())?;
+        if bytes_read == 0 {
+            return Err(FileNode::unexpected_eof());
+        }
+        let mut biggest_key = vec![0; biggest_key_len as usize];
+        bytes_read = load_buffer!(file, &mut biggest_key, path.as_ref().to_owned())?;
+        if bytes_read == 0 {
+            return Err(FileNode::unexpected_eof());
+        }
+        return Ok((smallest_key, biggest_key));
+    }
+}
+
 impl FileNode {
     fn unexpected_eof() -> Error {
-        return UnexpectedEOF(io::Error::new(io::ErrorKind::UnexpectedEof, EOF));
+        UnexpectedEOF(io::Error::new(io::ErrorKind::UnexpectedEof, EOF))
     }
 }

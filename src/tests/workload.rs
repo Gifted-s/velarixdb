@@ -1,10 +1,12 @@
+use crate::memtable::SkipMapValue;
 use crate::tests::workload::Error::TokioJoinError;
 use crate::{
+    db::DataStore,
     err::Error,
-    helpers,
-    storage::DataStore,
     types::{Key, Value},
+    util,
 };
+use crossbeam_skiplist::SkipMap;
 use futures::future::join_all;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
@@ -18,17 +20,17 @@ type ReadWorkloadVec = Vec<Entry>;
 type WriteWorkloadVec = Vec<Entry>;
 
 #[derive(Clone, Debug)]
+pub struct Entry {
+    pub key: Key,
+    pub val: Value,
+}
+
+#[derive(Clone, Debug)]
 pub struct Workload {
     pub size: usize,
     pub key_len: usize,
     pub val_len: usize,
     pub write_read_ratio: f64,
-}
-
-#[derive(Clone, Debug)]
-pub struct Entry {
-    pub key: Vec<u8>,
-    pub val: Vec<u8>,
 }
 
 impl Workload {
@@ -45,8 +47,8 @@ impl Workload {
         let mut write_workload = HashMap::with_capacity(self.size);
         let mut read_workload = HashMap::with_capacity((self.size as f64 * self.write_read_ratio) as usize);
         for _ in 0..self.size {
-            let key = helpers::generate_random_id(self.key_len);
-            let val = helpers::generate_random_id(self.val_len);
+            let key = util::generate_random_id(self.key_len);
+            let val = util::generate_random_id(self.val_len);
             write_workload.insert(key.as_bytes().to_vec(), val.as_bytes().to_vec());
         }
 
@@ -64,8 +66,8 @@ impl Workload {
         let mut write_workload = Vec::with_capacity(self.size);
         let mut read_workload = Vec::with_capacity((self.size as f64 * self.write_read_ratio) as usize);
         for _ in 0..self.size {
-            let key = helpers::generate_random_id(self.key_len);
-            let val = helpers::generate_random_id(self.val_len);
+            let key = util::generate_random_id(self.key_len);
+            let val = util::generate_random_id(self.val_len);
             let entry = Entry {
                 key: key.as_bytes().to_vec(),
                 val: val.as_bytes().to_vec(),
@@ -84,7 +86,7 @@ impl Workload {
     pub async fn insert_parallel(
         &self,
         entries: &Vec<Entry>,
-        store: Arc<RwLock<DataStore<'static, Vec<u8>>>>,
+        store: Arc<RwLock<DataStore<'static, Key>>>,
     ) -> Result<(), Error> {
         let tasks = entries.iter().map(|e| {
             let s_engine = Arc::clone(&store);
@@ -110,5 +112,18 @@ impl Workload {
             }
         }
         return Ok(());
+    }
+}
+
+pub struct FilterWorkload {
+    pub false_pos: f64,
+    pub entries: Arc<SkipMap<Vec<u8>, SkipMapValue<usize>>>,
+}
+
+impl FilterWorkload {
+    pub fn new(false_pos: f64, entries: Arc<SkipMap<Vec<u8>, SkipMapValue<usize>>>) -> crate::filter::BloomFilter {
+        let mut filter = crate::filter::BloomFilter::new(false_pos, entries.len());
+        filter.build_filter_from_entries(&entries);
+        return filter;
     }
 }

@@ -8,7 +8,7 @@
 //! +----------------------------------+
 //! |             Block                |
 //! +----------------------------------+
-//! |  - entries: Vec<Entry>           |   // entries entries within the block
+//! |  - entries: Vec<Entry>           |   // entries within the block
 //! |                                  |
 //! |  - entry_count: usize            |   // Number of entries in the block
 //! |                                  |
@@ -61,66 +61,71 @@
 // NOTE: For creation time while a 32-bit integer can technically hold milliseconds, the usable range is limited,
 // making it unsuitable for long-term timekeeping applications. For those scenarios, 64-bit(8 byte) integers are typically used.
 
+use chrono::{DateTime, Utc};
 use err::Error::*;
 
 use crate::{
-    consts::{SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8},
+    consts::{BLOCK_SIZE, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8},
     err::{self, Error},
     fs::{FileAsync, FileNode},
+    types::ByteSerializedEntry,
 };
 type BytesWritten = usize;
-const BLOCK_SIZE: usize = 4 * 1024; // 4KB
 
 #[derive(Debug, Clone)]
+
+/// Handles every operation related to each data block in an SSTable
+///
 pub struct Block {
-    pub entries: Vec<BlockEntry>,
-    pub size: usize,
-    pub entry_count: usize,
+    pub(crate) entries: Vec<BlockEntry>,
+    pub(crate) size: usize,
+    pub(crate) entry_count: usize,
+    // TODO: pub: checksum
 }
 
+/// Each entry in the block
 #[derive(Debug, Clone)]
 pub struct BlockEntry {
     pub key_prefix: u32,
     pub key: Vec<u8>,
     pub value_offset: u32,
-    pub creation_date: u64,
+    pub creation_date: DateTime<Utc>,
     pub is_tombstone: bool,
 }
 impl Block {
     /// Creates a new empty Block.
     pub fn new() -> Self {
         Block {
-            size: 0,
+            size: Default::default(),
             entries: Vec::with_capacity(BLOCK_SIZE),
-            entry_count: 0,
+            entry_count: Default::default(),
         }
-    }
-
-    pub fn get_last_entry(&self) -> BlockEntry {
-        self.entries[self.entries.len() - 1].to_owned()
     }
 
     /// Sets an entry with the provided key and value offset in the Block.
     ///
-    /// Returns an `Result` indicating success or failure. An error is returned if the Block
-    /// is already full and cannot accommodate the new entry.
-    pub fn set_entry(
+    /// Returns an `Result` indicating success or failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the `Block` is already full and cannot accommodate the new entry.
+    pub fn set_entry<K: AsRef<[u8]>>(
         &mut self,
         key_prefix: u32,
-        key: Vec<u8>,
+        key: K,
         value_offset: u32,
-        creation_date: u64,
+        creation_date: DateTime<Utc>,
         is_tombstone: bool,
     ) -> Result<(), Error> {
         // Key + Key Prefix + Value Offset +  Creation Date + Tombstone Marker
-        let entry_size = key.len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
+        let entry_size = key.as_ref().len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
 
         if self.is_full(entry_size) {
             return Err(Error::BlockIsFullError);
         }
 
         let entry = BlockEntry {
-            key,
+            key: key.as_ref().to_vec(),
             key_prefix,
             creation_date,
             is_tombstone,
@@ -135,20 +140,28 @@ impl Block {
 
     /// Writes entries in the block to the sstable file
     ///
-    /// Returns an `Result` indicating success or failure. An error is returned if write fails
+    /// Returns a `Result` indicating success or failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if write fails
     pub async fn write_to_file(&self, file: FileNode) -> Result<BytesWritten, Error> {
         let mut bytes_written = 0;
         for entry in &self.entries {
             let serialized_entry = self.serialize(entry)?;
             file.write_all(&serialized_entry).await?;
-            bytes_written+=serialized_entry.len();
+            bytes_written += serialized_entry.len();
         }
         Ok(bytes_written)
     }
 
-    /// Checks if the Block is full given the size of an entry.
+    /// Checks if the Block is full
     pub fn is_full(&self, entry_size: usize) -> bool {
         self.size + entry_size > BLOCK_SIZE
+    }
+
+    pub fn get_last_entry(&self) -> BlockEntry {
+        return self.entries.last().unwrap().to_owned();
     }
 
     #[cfg(test)]
@@ -157,16 +170,20 @@ impl Block {
         self.entry_count
     }
 
-    /// Serializes the entries in the block as a byte vector
+    /// Serializes the entry in the block to a byte vector
     ///
-    /// Returns `Ok(entry_vec)`or Error if not
-    pub(crate) fn serialize(&self, entry: &BlockEntry) -> Result<Vec<u8>, Error> {
+    /// Returns `Ok(entry_vec)`or Error if serialization failed
+    pub(crate) fn serialize(&self, entry: &BlockEntry) -> Result<ByteSerializedEntry, Error> {
         let entry_len = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
         let mut entry_vec = Vec::with_capacity(entry_len);
         entry_vec.extend_from_slice(&(entry.key_prefix).to_le_bytes());
+
         entry_vec.extend_from_slice(&entry.key);
-        entry_vec.extend_from_slice(&(entry.value_offset as u32).to_le_bytes());
-        entry_vec.extend_from_slice(&entry.creation_date.to_le_bytes());
+
+        entry_vec.extend_from_slice(&entry.value_offset.to_le_bytes());
+
+        entry_vec.extend_from_slice(&entry.creation_date.timestamp_millis().to_le_bytes());
+
         entry_vec.push(entry.is_tombstone as u8);
         if entry_len != entry_vec.len() {
             return Err(SerializationError("Invalid input"));
@@ -175,21 +192,23 @@ impl Block {
         Ok(entry_vec)
     }
 
-    /// Retrieves the value offset associated with the provided key from the Block.
+    /// Constructs BlockEntry from file
     ///
-    /// Returns `Some(value)` if the key is found in the Block, `None` otherwise.
+    /// Returns `Some(&BlockEntry)` entry was constructed, `None` otherwise.
     /// Method will be used when we implement the block cache
     #[allow(dead_code)]
-    pub(crate) fn get_entry(&self, key: &[u8]) -> Option<&BlockEntry> {
-        self.entries.iter().find(|entry| *entry.key == *key)
+    pub(crate) fn get_entry<K: AsRef<[u8]>>(&self, key: &K) -> Option<&BlockEntry> {
+        self.entries.iter().find(|entry| *entry.key == *key.as_ref())
     }
 }
 
 #[cfg(test)]
 mod tests {
 
+    use crate::types::Key;
+
     use super::*;
-    use std::{fs, sync::Arc};
+    use std::sync::Arc;
     use tempfile::NamedTempFile;
     use tokio::{fs::File, sync::RwLock};
 
@@ -211,9 +230,9 @@ mod tests {
     #[test]
     fn test_set_entry() {
         let mut block = Block::new();
-        let key: Vec<u8> = vec![1, 2, 3];
+        let key: Key = vec![1, 2, 3];
         let value_offset: u32 = 1000;
-        let creation_date: u64 = 16345454545;
+        let creation_date = Utc::now();
         let is_tombstone: bool = false;
 
         let res = block.set_entry(
@@ -238,9 +257,9 @@ mod tests {
     #[test]
     fn test_serialize() {
         let block = Block::new();
-        let key: Vec<u8> = vec![1, 2, 3];
+        let key: Key = vec![1, 2, 3];
         let value_offset: u32 = 1000;
-        let creation_date: u64 = 16345454545;
+        let creation_date = Utc::now();
         let is_tombstone: bool = false;
 
         let entry = BlockEntry {
@@ -262,9 +281,9 @@ mod tests {
     #[tokio::test]
     async fn test_write_to_file() {
         let mut block = Block::new();
-        let key: Vec<u8> = vec![1, 2, 3];
+        let key: Key = vec![1, 2, 3];
         let value_offset: u32 = 1000;
-        let creation_date: u64 = 16345454545;
+        let creation_date = Utc::now();
         let is_tombstone: bool = false;
 
         let res = block.set_entry(
@@ -295,14 +314,15 @@ mod tests {
         };
         let write_res = block.write_to_file(file.clone()).await;
         assert!(write_res.is_ok());
+        assert_eq!(write_res.unwrap(), block.size)
     }
 
     #[test]
     fn test_get_entry() {
         let mut block = Block::new();
-        let key: Vec<u8> = vec![1, 2, 3];
+        let key: Key = vec![1, 2, 3];
         let value_offset: u32 = 1000;
-        let creation_date: u64 = 16345454545;
+        let creation_date = Utc::now();
         let is_tombstone: bool = false;
 
         let res = block.set_entry(
@@ -322,7 +342,7 @@ mod tests {
     fn test_get_value_nonexistent_key() {
         let block = Block::new();
         // Test case to check getting a value for a non-existent key
-        let key: Vec<u8> = vec![1, 2, 3];
+        let key: Key = vec![1, 2, 3];
         let value = block.get_entry(&key);
         assert!(value.is_none());
     }
@@ -331,9 +351,9 @@ mod tests {
     fn test_set_entry_full_block() {
         // Test case to check setting an entry when the block is already full
         let mut block = Block::new();
-        let key: Vec<u8> = vec![1, 2, 3];
+        let key: Key = vec![1, 2, 3];
         let value_offset: u32 = 1000;
-        let creation_date: u64 = 16345454545;
+        let creation_date = Utc::now();
         let is_tombstone: bool = false;
 
         // Fill the block to its maximum capacity

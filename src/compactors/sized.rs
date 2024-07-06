@@ -1,9 +1,4 @@
-use std::{
-    cmp::{self},
-    collections::HashMap,
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{cmp, collections::HashMap, path::PathBuf, sync::Arc};
 
 use crossbeam_skiplist::SkipMap;
 use uuid::Uuid;
@@ -13,25 +8,41 @@ use super::{
     MergedSSTable, TableInsertor,
 };
 use crate::{
-    bucket::{Bucket, BucketsToCompact, InsertableToBucket, SSTablesToRemove},
+    bucket::{Bucket, ImbalancedBuckets, InsertableToBucket, SSTablesToRemove},
     err::Error,
     filter::BloomFilter,
     memtable::Entry,
     sst::Table,
-    types::{BloomFilterHandle, Bool, BucketMapHandle, Key, KeyRangeHandle, ValOffset},
+    types::{BloomFilterHandle, Bool, BucketMapHandle, CreatedAt, Key, KeyRangeHandle, ValOffset},
 };
 use crate::{err::Error::*, memtable::SkipMapValue};
 
+/// Sized Tier Compaction Runner (STCS)
+///
+/// Responsible for merging sstables of almost similar sizes to form a bigger one,
+/// obsolete entries are removed from the sstables and expired tombstones are removed
+///
 #[derive(Debug, Clone)]
 pub struct SizedTierRunner<'a> {
+    /// A thread-safe BucketMap with each bucket mapped to its id
     bucket_map: BucketMapHandle,
+
+    /// A thread-safe vector of sstable bloom filters
     filters: BloomFilterHandle,
+
+    /// A thread-safe hashmap of sstables each mapped to its key range
     key_range: KeyRangeHandle,
+
+    /// Compaction configuration
     config: &'a Config,
-    tombstones: HashMap<Key, u64>,
+
+    /// Keeps track of tombstones encountered during compaction
+    /// to predict validity of subseqeunt entries
+    tombstones: HashMap<Key, CreatedAt>,
 }
 
 impl<'a> SizedTierRunner<'a> {
+    /// creates new instance of `SizedTierRunner`
     pub fn new(
         bucket_map: BucketMapHandle,
         filters: BloomFilterHandle,
@@ -46,9 +57,13 @@ impl<'a> SizedTierRunner<'a> {
             config,
         }
     }
-    pub async fn fetch_imbalanced_buckets(bucket_map: BucketMapHandle) -> BucketsToCompact {
+
+    /// Returns buckets whose size exceeds max threshold
+    pub async fn fetch_imbalanced_buckets(bucket_map: BucketMapHandle) -> ImbalancedBuckets {
         bucket_map.read().await.extract_imbalanced_buckets().await
     }
+
+    /// Main compaction runner
     pub async fn run_compaction(&mut self) -> Result<(), Error> {
         if self.bucket_map.read().await.is_balanced().await {
             return Ok(());
@@ -73,36 +88,31 @@ impl<'a> SizedTierRunner<'a> {
                 Ok(merged_sstables) => {
                     let mut tracker = WriteTracker::new(merged_sstables.len());
                     // Step 3: Insert Merged SSTs to appropriate buckets
-                    for mut merged_sst in merged_sstables.into_iter() {
+                    for merged_sst in merged_sstables.into_iter() {
                         let mut bucket = buckets.write().await;
                         let table = merged_sst.clone().sstable;
                         let insert_res = bucket.insert_to_appropriate_bucket(Arc::new(table)).await;
                         drop(bucket);
                         match insert_res {
                             Ok(sst) => {
-                                log::info!(
-                                    "SST written, data: {:?}, index {:?}",
-                                    sst.data_file.path,
-                                    sst.index_file.path
+                                if sst.summary.is_none() {
+                                    return Err(TableSummaryIsNoneError);
+                                }
+                                if sst.filter.is_none() {
+                                    return Err(FilterNotProvidedForFlush);
+                                }
+                                // IMPORTANT: Don't keep sst entries in memory
+                                sst.entries.clear();
+                                // Step 4 Store Filter in Filters Vec
+                                filters.write().await.push(sst.filter.to_owned().unwrap());
+                                let summary = sst.summary.clone().unwrap();
+                                // Step 5 Store sst key range
+                                key_range.write().await.set(
+                                    sst.dir.to_owned(),
+                                    summary.smallest_key,
+                                    summary.biggest_key,
+                                    sst,
                                 );
-                                // Step 4: Store SST in Filter
-                                let data_file_path = sst.get_data_file_path();
-                                merged_sst.filter.set_sstable(sst.clone());
-
-                                // Step 5: Store Filter in Filters Vec
-                                filters.write().await.push(merged_sst.filter);
-                                let biggest_key = merged_sst.sstable.find_biggest_key()?;
-                                let smallest_key = merged_sst.sstable.find_smallest_key()?;
-                                if biggest_key.is_empty() {
-                                    return Err(BiggestKeyIndexError);
-                                }
-                                if smallest_key.is_empty() {
-                                    return Err(LowestKeyIndexError);
-                                }
-                                key_range
-                                    .write()
-                                    .await
-                                    .set(data_file_path, smallest_key, biggest_key, sst);
                                 tracker.actual += 1;
                             }
                             Err(err) => {
@@ -111,13 +121,13 @@ impl<'a> SizedTierRunner<'a> {
                                 // Remove merged sstables written to disk so far to prevent stale data
                                 while tracker.actual > 0 {
                                     if let Some(filter) = filters.write().await.pop() {
-                                        let table = filter.get_sst().to_owned();
-                                        if let Err(err) = tokio::fs::remove_dir_all(table.dir).await {
+                                        let sst_dir = filter.get_sst_dir().to_owned();
+                                        if let Err(err) = tokio::fs::remove_dir_all(sst_dir.to_owned()).await {
                                             log::error!("{}", CompactionFailed(Box::new(DirDeleteError(err))));
                                             tracker.actual -= 1;
                                             continue;
                                         }
-                                        key_range.write().await.remove(table.data_file.path);
+                                        key_range.write().await.remove(sst_dir.to_owned());
                                     }
                                     tracker.actual -= 1;
                                 }
@@ -151,6 +161,14 @@ impl<'a> SizedTierRunner<'a> {
         }
     }
 
+    /// Removes sstables that are already merged to form larger table(s)
+    ///
+    /// NOTE: This should only be called if merged sstables have been written to disk
+    /// otherwise data loss can happen
+    ///
+    /// # Errors
+    ///
+    /// Returns error if deletion fails
     pub async fn clean_up_after_compaction(
         &self,
         buckets: BucketMapHandle,
@@ -180,12 +198,13 @@ impl<'a> SizedTierRunner<'a> {
         Ok(None)
     }
 
+    /// Remove filters of obsolete sstables from filters vector
     pub async fn filter_out_old_filter(&self, filters: BloomFilterHandle, ssts_to_delete: &Vec<(Uuid, Vec<Table>)>) {
         let mut filter_map: HashMap<PathBuf, BloomFilter> = filters
             .read()
             .await
             .iter()
-            .map(|b| (b.get_sst().dir.to_owned(), b.to_owned()))
+            .map(|b| (b.sst_dir.to_owned().unwrap(), b.to_owned()))
             .collect();
         ssts_to_delete.iter().for_each(|(_, tables)| {
             tables.iter().for_each(|t| {
@@ -196,24 +215,36 @@ impl<'a> SizedTierRunner<'a> {
         filters.write().await.extend(filter_map.into_values());
     }
 
+    /// Merges the sstables in each `Bucket` to form a larger one
+    ///
+    /// Returns `Result` with merged sstable or error
+    ///
+    /// # Errors
+    ///
+    /// Returns error incase an error occured during merge
     async fn merge_ssts_in_buckets(&mut self, buckets: &Vec<Bucket>) -> Result<Vec<MergedSSTable>, Error> {
         let mut merged_ssts = Vec::new();
         for bucket in buckets.iter() {
             let mut hotness = 0;
             let tables = &bucket.sstables.read().await;
+
             let mut merged_sst: Box<dyn InsertableToBucket> = Box::new(tables.get(0).unwrap().to_owned());
             for sst in tables[1..].iter() {
-                hotness += sst.hotness;
-                let table = sst
+                let mut insertable_sst = sst.to_owned();
+                hotness += insertable_sst.hotness;
+                insertable_sst
                     .load_entries_from_file()
                     .await
                     .map_err(|err| CompactionFailed(Box::new(err)))?;
                 merged_sst = self
-                    .merge_sstables(merged_sst, Box::new(table))
+                    .merge_sstables(merged_sst, Box::new(insertable_sst))
                     .await
                     .map_err(|err| CompactionFailed(Box::new(err)))?;
             }
-            let filter = Table::build_filter_from_sstable(&merged_sst.get_entries(), self.config.filter_false_positive);
+
+            let entries = &merged_sst.get_entries();
+            let mut filter = BloomFilter::new(self.config.filter_false_positive, entries.len());
+            filter.build_filter_from_entries(entries);
             merged_ssts.push(MergedSSTable::new(merged_sst, filter, hotness));
         }
         if merged_ssts.is_empty() {
@@ -222,12 +253,17 @@ impl<'a> SizedTierRunner<'a> {
         Ok(merged_ssts)
     }
 
+    /// Merge two `Table` together one returns a larger one
+    ///
+    /// Errors
+    ///
+    /// Returns error if an error occured during merge
     async fn merge_sstables(
         &mut self,
         sst1: Box<dyn InsertableToBucket>,
         sst2: Box<dyn InsertableToBucket>,
     ) -> Result<Box<dyn InsertableToBucket>, Error> {
-        let mut new_sst = TableInsertor::new();
+        let mut new_sst = TableInsertor::default();
         let new_sst_map = Arc::new(SkipMap::new());
         let mut merged_entries = Vec::new();
         let entries1 = sst1
@@ -235,10 +271,10 @@ impl<'a> SizedTierRunner<'a> {
             .iter()
             .map(|e| {
                 Entry::new(
-                    e.key().to_vec(),       // key
-                    e.value().val_offset,   // v_offset
-                    e.value().created_at,   // insertion time
-                    e.value().is_tombstone, // is tombstone
+                    e.key().to_vec(),
+                    e.value().val_offset,
+                    e.value().created_at,
+                    e.value().is_tombstone,
                 )
             })
             .collect::<Vec<Entry<Key, ValOffset>>>();
@@ -247,50 +283,46 @@ impl<'a> SizedTierRunner<'a> {
             .iter()
             .map(|e| {
                 Entry::new(
-                    e.key().to_vec(),       // key
-                    e.value().val_offset,   // v_offset
-                    e.value().created_at,   // insertion time
-                    e.value().is_tombstone, // is tombstone
+                    e.key().to_vec(),
+                    e.value().val_offset,
+                    e.value().created_at,
+                    e.value().is_tombstone,
                 )
             })
             .collect::<Vec<Entry<Key, ValOffset>>>();
         let mut ptr = MergePointer::new();
 
-        while ptr.a < entries1.len() && ptr.b < entries2.len() {
-            match entries1[ptr.a].key.cmp(&entries2[ptr.b].key) {
+        while ptr.ptr1 < entries1.len() && ptr.ptr2 < entries2.len() {
+            match entries1[ptr.ptr1].key.cmp(&entries2[ptr.ptr2].key) {
                 cmp::Ordering::Less => {
-                    self.tombstone_check(&entries1[ptr.a], &mut merged_entries)
-                        .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
-                    ptr.increment_a();
+                    self.tombstone_check(&entries1[ptr.ptr1], &mut merged_entries);
+
+                    ptr.increment_ptr1();
                 }
                 cmp::Ordering::Equal => {
-                    if entries1[ptr.a].created_at > entries2[ptr.b].created_at {
-                        self.tombstone_check(&entries1[ptr.a], &mut merged_entries)
-                            .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
+                    if entries1[ptr.ptr1].created_at > entries2[ptr.ptr2].created_at {
+                        self.tombstone_check(&entries1[ptr.ptr1], &mut merged_entries);
                     } else {
-                        self.tombstone_check(&entries2[ptr.b], &mut merged_entries)
-                            .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
+                        self.tombstone_check(&entries2[ptr.ptr2], &mut merged_entries);
                     }
-                    ptr.increment_a();
-                    ptr.increment_b();
+                    ptr.increment_ptr1();
+                    ptr.increment_ptr2();
                 }
                 cmp::Ordering::Greater => {
-                    self.tombstone_check(&entries2[ptr.b], &mut merged_entries)
-                        .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
-                    ptr.increment_b();
+                    self.tombstone_check(&entries2[ptr.ptr2], &mut merged_entries);
+                    ptr.increment_ptr2();
                 }
             }
         }
-        while ptr.a < entries1.len() {
-            self.tombstone_check(&entries1[ptr.a], &mut merged_entries)
-                .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
-            ptr.increment_a();
+
+        while ptr.ptr1 < entries1.len() {
+            self.tombstone_check(&entries1[ptr.ptr1], &mut merged_entries);
+            ptr.increment_ptr1();
         }
 
-        while ptr.b < entries2.len() {
-            self.tombstone_check(&entries2[ptr.b], &mut merged_entries)
-                .map_err(|err| TombStoneCheckFailed(err.to_string()))?;
-            ptr.increment_b();
+        while ptr.ptr2 < entries2.len() {
+            self.tombstone_check(&entries2[ptr.ptr2], &mut merged_entries);
+            ptr.increment_ptr2();
         }
 
         merged_entries.iter().for_each(|e| {
@@ -303,41 +335,37 @@ impl<'a> SizedTierRunner<'a> {
         Ok(Box::new(new_sst))
     }
 
-    fn tombstone_check(
-        &mut self,
-        entry: &Entry<Vec<u8>, usize>,
-        merged_entries: &mut Vec<Entry<Vec<u8>, usize>>,
-    ) -> Result<Bool, Error> {
+    /// Checks if an entry has been deleted or not
+    /// 
+    /// Deleted entries are discoverd using the tombstones hashmap
+    /// and prevented from being inserted
+    ///
+    /// Returns true if entry should be inserted or false otherwise
+    fn tombstone_check(&mut self, entry: &Entry<Key, usize>, merged_entries: &mut Vec<Entry<Key, usize>>) -> Bool {
         let mut should_insert = false;
         if self.tombstones.contains_key(&entry.key) {
             let tomb_insert_time = *self.tombstones.get(&entry.key).unwrap();
             if entry.created_at > tomb_insert_time {
                 if entry.is_tombstone {
                     self.tombstones.insert(entry.key.to_owned(), entry.created_at);
-                    should_insert = !entry.has_expired(self.config.tombstone_ttl);
-                } else {
-                    if self.config.use_ttl {
-                        should_insert = !entry.has_expired(self.config.entry_ttl);
-                    } else {
-                        should_insert = true
-                    }
-                }
-            }
-        } else {
-            if entry.is_tombstone {
-                self.tombstones.insert(entry.key.clone(), entry.created_at);
-                should_insert = !entry.has_expired(self.config.tombstone_ttl);
-            } else {
-                if self.config.use_ttl {
+                    should_insert = !entry.to_owned().has_expired(self.config.tombstone_ttl);
+                } else if self.config.use_ttl {
                     should_insert = !entry.has_expired(self.config.entry_ttl);
                 } else {
                     should_insert = true
                 }
             }
+        } else if entry.is_tombstone {
+            self.tombstones.insert(entry.key.to_owned(), entry.created_at);
+            should_insert = !entry.has_expired(self.config.tombstone_ttl);
+        } else if self.config.use_ttl {
+            should_insert = !entry.has_expired(self.config.entry_ttl);
+        } else {
+            should_insert = true
         }
         if should_insert {
             merged_entries.push(entry.clone())
         }
-        Ok(true)
+        true
     }
 }

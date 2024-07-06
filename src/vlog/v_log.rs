@@ -78,105 +78,154 @@
 //! - **Created At**: A 8-byte field representing the time of insertion in bytes.
 //! - **Is Tombstone**: A 1 byte field representing a boolean of deleted or not deleted entry
 
+use chrono::{DateTime, Utc};
+
 use crate::{
-    consts::{EOF, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, VLOG_FILE_NAME},
+    consts::{SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, VLOG_FILE_NAME},
     err::Error,
     fs::{FileAsync, FileNode, VLogFileNode, VLogFs},
+    types::{ByteSerializedEntry, CreatedAt, IsTombStone, ValOffset, Value},
 };
-use log::error;
-use std::{mem, path::PathBuf};
-use tokio::io::{self};
-
+use std::path::{Path, PathBuf};
 type TotalBytesRead = usize;
 
+/// Value log file
 #[derive(Debug, Clone)]
-pub struct VFile<F>
-where
-    F: VLogFs,
-{
-    pub(crate) file: F,
-    pub(crate) path: PathBuf,
+pub struct VFile<F: VLogFs> {
+    pub file: F,
+    pub path: PathBuf,
 }
 
-impl<F> VFile<F>
-where
-    F: VLogFs,
-{
-    pub fn new(path: PathBuf, file: F) -> Self {
-        Self { path, file }
+impl<F: VLogFs> VFile<F> {
+    pub fn new<P: AsRef<Path> + Send + Sync>(path: P, file: F) -> Self {
+        Self {
+            path: path.as_ref().to_path_buf(),
+            file,
+        }
     }
 }
 
+/// Append only log that keeps entries
+/// persisted on the disk
 #[derive(Debug, Clone)]
 pub struct ValueLog {
+    /// Value log file contents
     pub content: VFile<VLogFileNode>,
+
+    /// Head of value log (represents the offset reads will
+    /// start from in case of crash recovery, the field is updated to
+    /// offset of the most recent entry in a `MemTable` during flush)
     pub head_offset: usize,
+
+    /// Tail of the value log (represents the start offset of value log,
+    /// reads starts here and it is updated during Garbage collection)
     pub tail_offset: usize,
+
+    /// Size of the Value log
     pub size: usize,
 }
 
+/// Value log entry
 #[derive(PartialEq, Debug, Clone)]
 pub struct ValueLogEntry {
+    /// Represents size of key
     pub ksize: usize,
+
+    /// Represents size of value
     pub vsize: usize,
+
+    /// Represents key
     pub key: Vec<u8>,
+
+    /// Represents value
     pub value: Vec<u8>,
-    pub created_at: u64,
+
+    /// Represents when entry was created
+    pub created_at: DateTime<Utc>,
+
+    /// True means entry has been deleted
     pub is_tombstone: bool,
 }
 
 impl ValueLog {
-    pub async fn new(dir: &PathBuf) -> Result<Self, Error> {
-        let dir_path = PathBuf::from(dir);
-        FileNode::create_dir_all(dir_path.to_owned()).await?;
-        let file_path = dir_path.join(VLOG_FILE_NAME);
+    /// Creates new `ValueLog`
+    pub async fn new<P: AsRef<Path> + Send + Sync>(dir: P) -> Result<Self, Error> {
+        // will only create if directory does not exist
+        FileNode::create_dir_all(dir.as_ref()).await?;
+        let file_path = dir.as_ref().join(VLOG_FILE_NAME);
         let file = VLogFileNode::new(file_path.to_owned(), crate::fs::FileType::ValueLog)
             .await
             .unwrap();
+        // Get size from file in case of crash recovery
+        let size = file.node.size().await;
         Ok(Self {
             head_offset: 0,
             tail_offset: 0,
             content: VFile::new(file_path, file),
-            size: 0,
+            // IMPORTANT: cache vlog size in memory
+            size,
         })
     }
 
-    pub async fn append(
+    /// Appends new entry to value log
+    ///
+    /// Returns start offset of the newly inserted entry
+    pub async fn append<T: AsRef<[u8]>>(
         &mut self,
-        key: &Vec<u8>,
-        value: &Vec<u8>,
-        created_at: u64,
+        key: T,
+        value: T,
+        created_at: CreatedAt,
         is_tombstone: bool,
-    ) -> Result<usize, Error> {
+    ) -> ValOffset {
         let v_log_entry = ValueLogEntry::new(
-            key.len(),
-            value.len(),
-            key.to_vec(),
-            value.to_vec(),
+            key.as_ref().len(),
+            value.as_ref().len(),
+            key.as_ref().to_vec(),
+            value.as_ref().to_vec(),
             created_at,
             is_tombstone,
         );
+
         let serialized_data = v_log_entry.serialize();
         // Get the current offset before writing(this will be the offset of the value stored in the memtable)
         let last_offset = self.size;
         let data_file = &self.content;
         let _ = data_file.file.node.write_all(&serialized_data).await;
         self.size += serialized_data.len();
-        Ok(last_offset as usize)
+        last_offset
     }
 
-    pub async fn get(&self, start_offset: usize) -> Result<Option<(Vec<u8>, bool)>, Error> {
+    /// Fetches value from value log
+    ///
+    /// returns tuple of Value and Tombstone
+    ///
+    /// # Error
+    ///
+    /// Returns error in case there is an IO error
+    pub async fn get(&self, start_offset: usize) -> Result<Option<(Value, IsTombStone)>, Error> {
         self.content.file.get(start_offset).await
     }
 
+    /// Ensures value log entries are persisted on the disk
+    ///
+    ///
+    /// # Error
+    ///
+    /// Returns error in case there is an IO error
     pub async fn sync_to_disk(&self) -> Result<(), Error> {
         self.content.file.node.sync_all().await
     }
 
+    /// Fetches an entry from value log using the `start_offset`
     pub async fn recover(&mut self, start_offset: usize) -> Result<Vec<ValueLogEntry>, Error> {
         self.content.file.recover(start_offset).await
     }
 
+    /// Returns entries within `gc_chunk_size` to garbage collection
+    ///
+    /// # Errors
+    ///
+    /// Returns error in case there is an IO error
     pub async fn read_chunk_to_garbage_collect(
         &self,
         bytes_to_collect: usize,
@@ -198,37 +247,47 @@ impl ValueLog {
         self.head_offset = 0;
     }
 
+    /// Sets `head_offset` of `ValueLog`
     pub fn set_head(&mut self, head: usize) {
         self.head_offset = head;
     }
 
+    /// Sets `tail_offset` of `ValueLog`
     pub fn set_tail(&mut self, tail: usize) {
         self.tail_offset = tail;
     }
 }
 
 impl ValueLogEntry {
-    pub fn new(ksize: usize, vsize: usize, key: Vec<u8>, value: Vec<u8>, created_at: u64, is_tombstone: bool) -> Self {
+    /// Creates new `ValueLogEntry`
+    pub fn new<T: AsRef<[u8]>>(
+        ksize: usize,
+        vsize: usize,
+        key: T,
+        value: T,
+        created_at: CreatedAt,
+        is_tombstone: bool,
+    ) -> Self {
         Self {
             ksize,
             vsize,
-            key,
-            value,
+            key: key.as_ref().to_vec(),
+            value: value.as_ref().to_vec(),
             created_at,
             is_tombstone,
         }
     }
 
-    fn serialize(&self) -> Vec<u8> {
+    /// Converts value log entry to a byte vector
+    fn serialize(&self) -> ByteSerializedEntry {
         let entry_len = SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + self.key.len() + self.value.len() + SIZE_OF_U8;
-
         let mut serialized_data = Vec::with_capacity(entry_len);
 
         serialized_data.extend_from_slice(&(self.key.len() as u32).to_le_bytes());
 
         serialized_data.extend_from_slice(&(self.value.len() as u32).to_le_bytes());
 
-        serialized_data.extend_from_slice(&self.created_at.to_le_bytes());
+        serialized_data.extend_from_slice(&self.created_at.timestamp_millis().to_le_bytes());
 
         serialized_data.push(self.is_tombstone as u8);
 
@@ -242,8 +301,7 @@ impl ValueLogEntry {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
-    fn test_serialized_deserialized() {}
+    fn test_serialized() {}
 }

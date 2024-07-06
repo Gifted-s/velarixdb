@@ -3,25 +3,22 @@
 // each identified SSTable might still contain data outside your desired range. For heavily range query-focused workloads, LCS or TWSC should be considered
 // Although this stratedy is not available for now, It will be implmented in the future
 
-use crate::consts::{DEFAULT_ALLOW_PREFETCH, DEFAULT_PREFETCH_SIZE, HEAD_ENTRY_KEY};
+use crate::consts::HEAD_ENTRY_KEY;
 use crate::err::Error;
-use crate::index::Index;
-use crate::memtable::{Entry, MemTable};
-use crate::storage::DataStore;
+// use crate::index::Index;
+use crate::db::DataStore;
+use crate::memtable::Entry;
 use crate::types::{Key, ValOffset, Value};
-use crate::value_log::ValueLog;
-use async_trait::async_trait;
+use crate::vlog::ValueLog;
+// use async_trait::async_trait;
 use futures::future::join_all;
-use futures::stream::StreamExt;
 use log::error;
 use std::collections::BTreeMap;
-use std::path::PathBuf;
-use std::pin::Pin;
+// use std::path::PathBuf;
+use std::cmp::Ordering;
 use std::sync::Arc;
-use std::task::{Context, Poll};
-use std::{cmp::Ordering, collections::HashMap};
-use tokio::fs::{File, OpenOptions};
-use tokio::sync::RwLock;
+// use tokio::fs::{File, OpenOptions};
+// use tokio::sync::RwLock;
 #[derive(Debug, Clone)]
 pub struct FetchedEntry {
     pub key: Key,
@@ -80,7 +77,7 @@ impl<'a> RangeIterator<'a> {
             return Some(entry);
         }
         //TODO: handle not allow prefetch option
-        return None;
+        None
     }
     pub fn prev(&mut self) -> Option<FetchedEntry> {
         None
@@ -101,13 +98,16 @@ impl<'a> RangeIterator<'a> {
     pub async fn prefetch_entries(&mut self) -> Result<(), Error> {
         let keys: Vec<Entry<Key, ValOffset>>;
         if self.current + self.prefetch_entries_size <= self.keys.len() {
-            keys = (&self.keys[self.current..self.current + self.prefetch_entries_size]).to_vec();
+            keys = self.keys[self.current..self.current + self.prefetch_entries_size].to_vec();
         } else {
-            keys = (&self.keys[self.current..]).to_vec();
+            keys = self.keys[self.current..].to_vec();
         }
         let entries = self.fetch_entries_in_parralel(&keys).await;
         match entries {
-            Ok(e) => Ok(self.prefetch_entries.extend(e)),
+            Ok(e) => {
+                self.prefetch_entries.extend(e);
+                Ok(())
+            },
             Err(err) => Err(err),
         }
     }
@@ -137,13 +137,13 @@ impl<'a> RangeIterator<'a> {
                 let entry_from_vlog = v_log.get(entry.val_offset).await;
                 match entry_from_vlog {
                     Ok(val_opt) => match val_opt {
-                        Some((val, is_deleted)) => return Ok((entry.key, val, is_deleted)),
+                        Some((val, is_deleted)) => Ok((entry.key, val, is_deleted)),
                         None => {
-                            return Err(Error::KeyNotFoundInValueLogError);
+                            Err(Error::KeyNotFoundInValueLogError)
                         }
                     },
-                    Err(err) => return Err(err),
-                };
+                    Err(err) => Err(err),
+                }
             })
         });
 
@@ -174,7 +174,7 @@ impl<'a> RangeIterator<'a> {
 impl<'a> DataStore<'a, Key> {
     // Start if the range query
     pub async fn seek(&self, start: &'a [u8], end: &'a [u8]) -> Result<RangeIterator, Error> {
-        let mut merger = Merger::new();
+        let merger = Merger::new();
         // check entries within active memtable
         // if !self.active_memtable.index.is_empty() {
         //     if self
@@ -231,33 +231,33 @@ impl<'a> DataStore<'a, Key> {
         //     }
         // }
 
-        let sstables_within_range = {
-            let mut sstable_path = HashMap::new();
+        // let sstables_within_range = {
+        //     let mut sstable_path = HashMap::new();
 
-            for b in self.filters.read().await.to_owned().into_iter() {
-                let bf_inner = b.to_owned();
-                let bf_sstable = bf_inner.sst.to_owned().unwrap();
-                let data_path = bf_sstable.data_file.path.to_str().unwrap();
-                if bf_inner.contains(&start.to_vec()) || bf_inner.contains(&end.to_vec()) {
-                    // add to sstable path
-                    sstable_path.insert(data_path.to_owned(), bf_sstable.to_owned());
-                }
-            }
+        //     for b in self.filters.read().await.to_owned().into_iter() {
+        //         let bf_inner = b.to_owned();
+        //         let bf_sstable = bf_inner.sst.to_owned().unwrap();
+        //         let data_path = bf_sstable.data_file.path.to_str().unwrap();
+        //         if bf_inner.contains(&start.to_vec()) || bf_inner.contains(&end.to_vec()) {
+        //             // add to sstable path
+        //             sstable_path.insert(data_path.to_owned(), bf_sstable.to_owned());
+        //         }
+        //     }
 
-            let key_range = self.key_range.read().await;
-            let paths_from_key_range = key_range.range_scan(&start.to_vec(), &end.to_vec());
-            if !paths_from_key_range.is_empty() {
-                for range in paths_from_key_range.iter() {
-                    if !sstable_path.contains_key(range.sst.data_file.path.to_str().unwrap()) {
-                        sstable_path.insert(
-                            range.sst.data_file.path.to_str().unwrap().to_owned(),
-                            range.sst.to_owned(),
-                        );
-                    }
-                }
-            }
-            sstable_path
-        };
+        //     let key_range = self.key_range.read().await;
+        //     let paths_from_key_range = key_range.range_scan(&start.to_vec(), &end.to_vec());
+        //     if !paths_from_key_range.is_empty() {
+        //         for range in paths_from_key_range.iter() {
+        //             if !sstable_path.contains_key(range.sst.data_file.path.to_str().unwrap()) {
+        //                 sstable_path.insert(
+        //                     range.sst.data_file.path.to_str().unwrap().to_owned(),
+        //                     range.sst.to_owned(),
+        //                 );
+        //             }
+        //         }
+        //     }
+        //     sstable_path
+        // };
 
         // for (_, sst) in sstables_within_range {
         //     let sparse_index = SparseIndex::new(sst.index_file_path.clone(), sst).await;
@@ -298,6 +298,7 @@ impl Merger {
         Self { entries: Vec::new() }
     }
     // merge entries in sorted order
+    #[allow(dead_code)]
     fn merge_entries(&mut self, entries_to_merge: Vec<Entry<Key, ValOffset>>) {
         let mut merged_indexes = Vec::new();
         let e1 = &self.entries;
