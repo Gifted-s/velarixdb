@@ -116,7 +116,7 @@ impl Bucket {
         for meta_task in fetch_files_meta {
             let meta_data = meta_task
                 .await
-                .map_err(|err| GetFileMetaDataError(err.into()))?
+                .map_err(|err| GetFileMetaData(err.into()))?
                 .unwrap();
             all_sstable_size += meta_data.len() as usize;
         }
@@ -236,7 +236,7 @@ impl BucketMap {
             InsertionType::New => {
                 bucket.avarage_size = fs::metadata(sst.clone().data_file.path)
                     .await
-                    .map_err(GetFileMetaDataError)?
+                    .map_err(GetFileMetaData)?
                     .len() as usize;
                 self.buckets.insert(bucket.id, bucket);
             }
@@ -319,7 +319,7 @@ impl BucketMap {
                 } else {
                     buckets_to_delete.push(bucket_id);
                     if let Err(err) = fs::remove_dir_all(&bucket.dir).await {
-                        log::error!("{}", DirDeleteError(err));
+                        log::error!("{}", DirDelete(err));
                     }
                 }
             }
@@ -328,7 +328,7 @@ impl BucketMap {
                 if fs::metadata(&sst.dir).await.is_ok() {
                     if let Err(err) = fs::remove_dir_all(&sst.dir).await {
                         all_ssts_deleted = false;
-                        log::error!("{}", DirDeleteError(err));
+                        log::error!("{}", DirDelete(err));
                     }
                 }
             }
@@ -348,7 +348,7 @@ impl BucketMap {
         for (_, bucket) in &self.buckets {
             if fs::metadata(&bucket.dir).await.is_ok() {
                 if let Err(err) = fs::remove_dir_all(&bucket.dir).await {
-                    log::error!("{}", FileDeleteError(err));
+                    log::error!("{}", FileDelete(err));
                 }
             }
         }

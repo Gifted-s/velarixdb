@@ -1,4 +1,4 @@
-mod index;
-pub use index::Index;
-pub use index::IndexFile;
-pub use index::RangeOffset;
+mod indexer;
+pub use indexer::Index;
+pub use indexer::IndexFile;
+pub use indexer::RangeOffset;

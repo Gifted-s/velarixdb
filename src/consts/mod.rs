@@ -35,7 +35,7 @@ pub const SUMMARY_FILE_NAME: &str = "summary";
 
 pub const INDEX_FILE_NAME: &str = "index";
 
-pub const DEFAULT_DB_NAME: &str = "vikings";
+pub const DEFAULT_DB_NAME: &str = "velarix";
 
 pub const META_DIRECTORY_NAME: &str = "meta";
 
@@ -44,10 +44,10 @@ pub const TOMB_STONE_MARKER: &str = "*";
 /// TODO: Many lightweight computations here, benchmark against Lazy initialization
 
 /// 1KB
-pub static GC_CHUNK_SIZE: usize = SizeUnit::Kilobytes.to_bytes(1);
+pub static GC_CHUNK_SIZE: usize = SizeUnit::Kilobytes.as_bytes(1);
 
 /// 50KB
-pub const WRITE_BUFFER_SIZE: usize = SizeUnit::Kilobytes.to_bytes(50);
+pub const WRITE_BUFFER_SIZE: usize = SizeUnit::Kilobytes.as_bytes(50);
 
 /// 5 days
 pub const DEFAULT_TOMBSTONE_COMPACTION_INTERVAL: Duration = Duration::from_millis(5 * 86400000);
@@ -74,7 +74,7 @@ pub const BUCKET_LOW: f64 = 0.5;
 
 pub const BUCKET_HIGH: f64 = 1.5;
 
-pub const MIN_SSTABLE_SIZE: usize = SizeUnit::Kilobytes.to_bytes(4);
+pub const MIN_SSTABLE_SIZE: usize = SizeUnit::Kilobytes.as_bytes(4);
 
 pub const MIN_TRESHOLD: usize = 4;
 

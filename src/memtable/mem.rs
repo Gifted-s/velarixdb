@@ -34,6 +34,19 @@ pub struct Entry<Key: K, V: Ord> {
     pub is_tombstone: bool,
 }
 
+/// Entry returned to user upon  retreival
+pub struct UserEntry {
+   pub val: Value,
+   pub created_at: CreatedAt,
+}
+
+impl UserEntry {
+    /// Creates new `UserEntry`
+    pub fn new(val: Value, created_at: CreatedAt) -> Self {
+        Self { val, created_at }
+    }
+}
+
 /// Value in SkipMap
 #[derive(Clone, Debug, PartialEq)]
 pub struct SkipMapValue<V: Ord> {
@@ -43,6 +56,7 @@ pub struct SkipMapValue<V: Ord> {
 }
 
 impl<V: Ord> SkipMapValue<V> {
+    /// Creates new `SkipMapValue`
     pub(crate) fn new(val_offset: V, created_at: CreatedAt, is_tombstone: IsTombStone) -> Self {
         SkipMapValue {
             val_offset,
@@ -105,7 +119,7 @@ impl Config {
 #[allow(dead_code)]
 pub enum ValueOption {
     /// TODO: Value will be cached in memory if the size is small, this will reduce
-    /// number of Disk IO 
+    /// number of Disk IO
     Raw(Value),
 
     /// Value offset gotten from value position in value log
@@ -165,7 +179,7 @@ impl MemTable<Key> {
         );
         assert!(capacity > 0, "Capacity should be greater than 0");
 
-        let capacity_to_bytes = size_unit.to_bytes(capacity);
+        let capacity_to_bytes = size_unit.as_bytes(capacity);
         let avg_entry_size = 100;
         let max_no_of_entries = capacity_to_bytes / avg_entry_size as usize;
         let bf = BloomFilter::new(false_positive_rate, max_no_of_entries);
@@ -219,11 +233,11 @@ impl MemTable<Key> {
     }
 
     /// Updates an entry in `entries` map
-    /// 
+    ///
     /// # Error
-    /// 
+    ///
     /// Returns error if key was not found
-    /// 
+    ///
     pub fn update(&mut self, entry: &Entry<Key, ValOffset>) -> Result<(), Error> {
         if !self.bloom_filter.contains(&entry.key) {
             return Err(KeyNotFoundInMemTable);
@@ -248,9 +262,9 @@ impl MemTable<Key> {
     }
 
     /// Inserts an entry with tombstone to `entries` map
-    /// 
+    ///
     /// # Errors
-    /// 
+    ///
     /// Returns error if key was not found
     pub fn delete(&mut self, entry: &Entry<Key, ValOffset>) -> Result<(), Error> {
         if !self.bloom_filter.contains(&entry.key) {
@@ -312,7 +326,7 @@ impl MemTable<Key> {
 
     /// Clears all key-value entries in the MemTable.
     pub fn clear(&mut self) {
-        let capacity_to_bytes = self.config.size_unit.to_bytes(self.config.capacity);
+        let capacity_to_bytes = self.config.size_unit.as_bytes(self.config.capacity);
         let avg_entry_size = 100;
         let max_no_of_entries = capacity_to_bytes / avg_entry_size as usize;
 
@@ -339,10 +353,10 @@ mod tests {
         assert_eq!(memtable.config.size_unit, SizeUnit::Bytes);
         assert_eq!(
             memtable.config.capacity,
-            memtable.config.size_unit.to_bytes(buffer_size)
+            memtable.config.size_unit.as_bytes(buffer_size)
         );
         assert_eq!(memtable.config.false_pos_rate, false_pos_rate);
-        assert_eq!(memtable.read_only, false);
+        assert!(!memtable.read_only);
     }
 
     #[test]
@@ -356,10 +370,10 @@ mod tests {
         assert_eq!(memtable.config.size_unit, SizeUnit::Bytes);
         assert_eq!(
             memtable.config.capacity,
-            memtable.config.size_unit.to_bytes(buffer_size)
+            memtable.config.size_unit.as_bytes(buffer_size)
         );
         assert_eq!(memtable.config.false_pos_rate, false_pos_rate);
-        assert_eq!(memtable.read_only, false);
+        assert!(!memtable.read_only);
     }
 
     #[test]
@@ -378,14 +392,14 @@ mod tests {
         let entry = Entry::new(key, val_offset, created_at, is_tombstone);
         let expected_len = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
 
-        let _ = memtable.insert(&entry);
+        memtable.insert(&entry);
         println!("{}", memtable.size);
         assert_eq!(memtable.size, expected_len);
 
-        let _ = memtable.insert(&entry);
+        memtable.insert(&entry);
         assert_eq!(memtable.size, expected_len + expected_len);
 
-        let _ = memtable.insert(&entry);
+        memtable.insert(&entry);
         assert_eq!(memtable.size, expected_len + expected_len + expected_len);
     }
 
@@ -402,14 +416,14 @@ mod tests {
         let entry = Entry::new(key.to_owned(), val_offset, created_at, is_tombstone);
         let expected_len = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
 
-        let _ = memtable.insert(&entry);
+        memtable.insert(&entry);
         assert_eq!(memtable.size, expected_len);
         // get key
         let res = memtable.get(&key);
         assert!(res.is_some());
         // get key the was not inserted
         let invalid_key = vec![8, 2, 3, 4];
-        let res = memtable.get(&invalid_key);
+        let res = memtable.get(invalid_key);
         assert!(res.is_none());
     }
 
@@ -421,7 +435,7 @@ mod tests {
         let false_pos_rate = 1e-300;
         let memtable = MemTable::new(buffer_size, false_pos_rate);
         let memtable = Arc::new(Mutex::new(memtable));
-        let mut handlers = Vec::with_capacity(5 as usize);
+        let mut handlers = Vec::with_capacity(5_usize);
         let keys = vec![
             vec![1, 2, 3, 4],
             vec![2, 2, 3, 4],
@@ -501,7 +515,7 @@ mod tests {
         let created_at = Utc::now();
         let mut entry = Entry::new(key, val_offset, created_at, is_tombstone);
 
-        let _ = memtable.insert(&entry);
+        memtable.insert(&entry);
 
         let e = memtable.get(&entry.key);
         assert!(e.is_some());
@@ -517,7 +531,7 @@ mod tests {
         let _ = memtable.update(&entry);
 
         let e = memtable.get(&entry.key);
-        assert_eq!(e.unwrap().is_tombstone, true);
+        assert!(e.unwrap().is_tombstone);
 
         entry.key = vec![2, 2, 3, 4];
         let e = memtable.update(&entry);
@@ -540,7 +554,7 @@ mod tests {
         let created_at = Utc::now();
         let mut entry = Entry::new(key, val_offset, created_at, is_tombstone);
 
-        let _ = memtable.insert(&entry);
+        memtable.insert(&entry);
 
         let e = memtable.get(&entry.key);
         assert!(e.is_some());
@@ -549,7 +563,7 @@ mod tests {
         let _ = memtable.delete(&entry);
 
         let e = memtable.get(&entry.key);
-        assert_eq!(e.unwrap().is_tombstone, true);
+        assert!(e.unwrap().is_tombstone);
 
         entry.key = vec![2, 2, 3, 4];
         let e = memtable.delete(&entry);
@@ -588,17 +602,17 @@ mod tests {
 
         let within_range =
             MemTable::is_entry_within_range(&map.get(&keys[0]).unwrap(), keys[0].to_owned(), keys[3].to_owned());
-        assert_eq!(within_range, true);
+        assert!(within_range);
 
         let start_invalid = vec![10, 20, 30, 40];
         let end_invalid = vec![0, 0, 0, 0];
         let within_range = MemTable::is_entry_within_range(&map.get(&keys[0]).unwrap(), start_invalid, end_invalid);
-        assert_eq!(within_range, false);
+        assert!(!within_range);
 
         let start_valid = &keys[0];
         let end_invalid = vec![0, 0, 0, 0];
         let within_range = MemTable::is_entry_within_range(&map.get(&keys[0]).unwrap(), start_valid, &end_invalid);
-        assert_eq!(within_range, true);
+        assert!(within_range);
     }
 
     #[test]
@@ -606,10 +620,10 @@ mod tests {
         let buffer_size = 51200;
         let false_pos_rate = 1e-300;
         let memtable = MemTable::new(buffer_size, false_pos_rate);
-        let key = vec![1, 2, 3, 4];
+        let key = [1, 2, 3, 4];
         let is_full = memtable
             .to_owned()
             .is_full(key.len() + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8 + memtable.capacity());
-        assert_eq!(is_full, true);
+        assert!(is_full);
     }
 }

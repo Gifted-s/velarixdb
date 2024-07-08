@@ -1,3 +1,3 @@
-mod block;
+mod block_manager;
 
-pub use block::Block;
+pub use block_manager::Block;

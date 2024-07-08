@@ -1,5 +1,4 @@
 use crate::memtable::SkipMapValue;
-use crate::tests::workload::Error::TokioJoinError;
 use crate::{
     db::DataStore,
     err::Error,
@@ -85,7 +84,7 @@ impl Workload {
 
     pub async fn insert_parallel(
         &self,
-        entries: &Vec<Entry>,
+        entries: &[Entry],
         store: Arc<RwLock<DataStore<'static, Key>>>,
     ) -> Result<(), Error> {
         let tasks = entries.iter().map(|e| {
@@ -104,14 +103,12 @@ impl Workload {
         for tokio_response in all_results {
             match tokio_response {
                 Ok(entry) => {
-                    if let Err(err) = entry {
-                        return Err(err);
-                    }
+                    entry?;
                 }
-                Err(_) => return Err(TokioJoinError),
+                Err(_) => return Err(Error::TokioJoin),
             }
         }
-        return Ok(());
+        Ok(())
     }
 }
 
@@ -121,9 +118,9 @@ pub struct FilterWorkload {
 }
 
 impl FilterWorkload {
-    pub fn new(false_pos: f64, entries: Arc<SkipMap<Vec<u8>, SkipMapValue<usize>>>) -> crate::filter::BloomFilter {
+    pub fn from(false_pos: f64, entries: Arc<SkipMap<Vec<u8>, SkipMapValue<usize>>>) -> crate::filter::BloomFilter {
         let mut filter = crate::filter::BloomFilter::new(false_pos, entries.len());
         filter.build_filter_from_entries(&entries);
-        return filter;
+        filter
     }
 }

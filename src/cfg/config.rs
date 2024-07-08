@@ -75,6 +75,7 @@ fn get_open_file_limit() -> usize {
 }
 
 impl Config {
+    #![allow(clippy::too_many_arguments)]
     pub fn new(
         false_positive_rate: f64,
         enable_ttl: bool,
@@ -163,7 +164,7 @@ impl DataStore<'static, Key> {
     /// The size must be at least 50 kilobytes.
     pub fn with_write_buffer_size(mut self, size: usize) -> Self {
         assert!(size >= 50, "write_buffer_size should not be less than 50 Kilobytes");
-        self.config.write_buffer_size = SizeUnit::Kilobytes.to_bytes(size);
+        self.config.write_buffer_size = SizeUnit::Kilobytes.as_bytes(size);
         self
     }
 
@@ -258,7 +259,7 @@ impl DataStore<'static, Key> {
     /// The size must be at least 50 kilobytes.
     pub fn with_gc_chunk_size(mut self, size: usize) -> Self {
         assert!(size >= 50, "gc_chunk_size should not be less than 50 Kilobyte");
-        self.config.gc_chunk_size = SizeUnit::Kilobytes.to_bytes(size);
+        self.config.gc_chunk_size = SizeUnit::Kilobytes.as_bytes(size);
         self
     }
 }
@@ -270,11 +271,11 @@ mod tests {
     use crate::cfg::Config;
 
     use super::*;
-    use std::{path::PathBuf, time::Duration};
+    use std::time::Duration;
 
     async fn create_datastore() -> DataStore<'static, Key> {
         let root = tempdir().unwrap();
-        let path = PathBuf::from(root.path().join("store_test_3"));
+        let path = root.path().join("store_test_3");
         let mut store = DataStore::open("test", path).await.unwrap();
         // Initialize with default or dummy values
         let config = Config {
@@ -295,7 +296,7 @@ mod tests {
             open_files_limit: 150,
         };
         store.config = config;
-        return store;
+        store
     }
 
     #[tokio::test]
@@ -344,7 +345,7 @@ mod tests {
     async fn test_with_write_buffer_size() {
         let ds = create_datastore().await;
         let ds = ds.with_write_buffer_size(100);
-        assert_eq!(ds.config.write_buffer_size, SizeUnit::Kilobytes.to_bytes(100));
+        assert_eq!(ds.config.write_buffer_size, SizeUnit::Kilobytes.as_bytes(100));
     }
 
     #[tokio::test]
@@ -372,7 +373,7 @@ mod tests {
     #[should_panic(expected = "entry_ttl_millis cannot be less than 3 days if enable_ttl is set to true")]
     async fn test_with_entry_ttl_invalid() {
         let ds = create_datastore().await.with_enable_ttl(true);
-        ds.with_entry_ttl(Duration::from_secs(1 * 24 * 60 * 60)); // 1 day
+        ds.with_entry_ttl(Duration::from_secs(24 * 60 * 60)); // 1 day
     }
 
     #[tokio::test]
@@ -450,7 +451,7 @@ mod tests {
     async fn test_with_compaction_strategy() {
         let ds = create_datastore().await;
         let strategy = compactors::Strategy::STCS; // Replace with actual strategy
-        let ds = ds.with_compaction_strategy(strategy.clone());
+        let ds = ds.with_compaction_strategy(strategy);
         assert_eq!(ds.config.compaction_strategy, compactors::Strategy::STCS);
     }
 
@@ -479,6 +480,6 @@ mod tests {
     async fn test_with_gc_chunk_size() {
         let ds = create_datastore().await;
         let ds = ds.with_gc_chunk_size(100);
-        assert_eq!(ds.config.gc_chunk_size, SizeUnit::Kilobytes.to_bytes(100));
+        assert_eq!(ds.config.gc_chunk_size, SizeUnit::Kilobytes.as_bytes(100));
     }
 }

@@ -30,7 +30,7 @@ pub fn float_to_le_bytes(f: f64) -> [u8; 8] {
     let bits: u64 = f.to_bits();
 
     // Convert the u64 to an array of 8 bytes in little-endian order
-    let bytes: [u8; 8] = bits.to_le_bytes().try_into().unwrap();
+    let bytes: [u8; 8] = bits.to_le_bytes();
 
     bytes
 }

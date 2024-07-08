@@ -35,14 +35,6 @@
 //! - TODO: In the future we will introduce Snappy Compression to reduce the size on the disk and also
 //! introduce checksum to ensure the data has not been corrupted
 
-use chrono::Utc;
-use crossbeam_skiplist::SkipMap;
-use std::{
-    cmp::Ordering,
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::SystemTime,
-}; 
 use crate::{
     block::Block,
     bucket::InsertableToBucket,
@@ -55,6 +47,13 @@ use crate::{
     memtable::{Entry, SkipMapValue},
     types::{ByteSerializedEntry, CreatedAt, IsTombStone, Key, SkipMapEntries, ValOffset},
     util,
+};
+use chrono::Utc;
+use crossbeam_skiplist::SkipMap;
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::SystemTime,
 };
 use Error::*;
 
@@ -136,12 +135,12 @@ impl Table {
 
         Ok(Self {
             dir: dir.as_ref().to_path_buf(),
-            hotness: 0,
+            hotness: Default::default(),
             index_file: IndexFile::new(index_file_path, index_file),
             data_file: DataFile::new(data_file_path, data_file),
             created_at,
             entries: Arc::new(SkipMap::new()),
-            size: 0,
+            size: Default::default(),
             filter: None,
             summary: None,
         })
@@ -271,10 +270,7 @@ impl Table {
 
         // write filter to disk
         self.filter.as_mut().unwrap().write(self.dir.to_owned()).await?;
-        self.filter
-            .as_mut()
-            .unwrap()
-            .set_sstable_path(&self.data_file.path);
+        self.filter.as_mut().unwrap().set_sstable_path(&self.data_file.path);
         // write data blocks
         let mut current_block = Block::new();
         if self.size > 0 {
@@ -347,17 +343,6 @@ impl Table {
     /// Retrieves an entry from `entries` map
     pub(crate) fn get_value_from_entries<K: AsRef<[u8]>>(&self, key: K) -> Option<SkipMapValue<ValOffset>> {
         self.entries.get(key.as_ref()).map(|entry| entry.value().to_owned())
-    }
-
-    /// Compares two offsets
-    fn compare_offsets(offset_a: usize, offset_b: usize) -> Ordering {
-        if offset_a < offset_b {
-            Ordering::Less
-        } else if offset_a == offset_b {
-            Ordering::Equal
-        } else {
-            Ordering::Greater
-        }
     }
 
     /// Returns `size` of `Table`

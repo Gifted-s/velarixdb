@@ -1,2 +1,2 @@
-mod range;
-pub use range::RangeIterator;
+mod range_iterator;
+pub use range_iterator::RangeIterator;

@@ -85,8 +85,7 @@ pub(crate) struct Config {
 
 /// Marks area of value log file
 /// to be punched
-#[derive(Clone, Debug)]
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub struct PunchMarker {
     /// Offset in value log to start punching hole
     pub(crate) punch_hole_start_offset: usize,
@@ -94,7 +93,6 @@ pub struct PunchMarker {
     /// Length of holes to punch
     pub(crate) punch_hole_length: usize,
 }
-
 
 impl GC {
     /// Creates `GC` instance
@@ -118,7 +116,7 @@ impl GC {
     }
 
     /// Continues to check if it's time to run GC (works in background)
-    pub fn start_background_gc_task(&self, key_range: KeyRangeHandle, read_only_memtables: ImmutableMemTables<Key>) {
+    pub fn start_gc_worker(&self, key_range: KeyRangeHandle, read_only_memtables: ImmutableMemTables<Key>) {
         let cfg = self.config.to_owned();
         let memtable = self.table.clone();
         let vlog = self.vlog.clone();
@@ -151,7 +149,7 @@ impl GC {
                         log::info!("GC successful, awaiting sync")
                     }
                     Err(err) => {
-                        log::error!("{}", GCError(err.to_string()))
+                        log::error!("GC Error {}", err.to_string());
                     }
                 }
             }
@@ -217,13 +215,9 @@ impl GC {
                 let all_results = join_all(tasks).await;
                 for tokio_res in all_results {
                     match tokio_res {
-                        Ok(res) => {
-                            if let Err(err) = res {
-                                return Err(GCError(err.to_string()));
-                            }
-                        }
-                        Err(err) => {
-                            return Err(GCError(err.to_string()));
+                        Ok(res) => res?,
+                        Err(_) => {
+                            return Err(TokioJoin);
                         }
                     }
                 }
@@ -258,7 +252,7 @@ impl GC {
                 marker_lock.punch_hole_start_offset = vlog.read().await.tail_offset;
                 marker_lock.punch_hole_length = total_bytes_read;
             }
-            Err(err) => return Err(GCError(err.to_string())),
+            Err(err) => return Err(err),
         };
         Ok(())
     }
@@ -453,9 +447,8 @@ impl GC {
                 GC::get_value_from_vlog(&vlog, offset, insert_time).await
             } else {
                 // Step 3: Check sstables
-                let key_range = &key_range.read().await;
-                let ssts = key_range.filter_sstables_by_biggest_key(&key).await?;
-                GC::search_key_in_sstables(key, ssts, &vlog).await
+                let ssts = &key_range.filter_sstables_by_biggest_key(&key).await?;
+                GC::search_key_in_sstables(key, ssts.to_vec(), &vlog).await
             }
         }
     }
@@ -517,14 +510,13 @@ impl GC {
         creation_at: CreatedAt,
     ) -> Result<(Value, CreatedAt), Error> {
         let res = val_log.read().await.get(offset).await?;
-        if res.is_some() {
-            let (value, is_tombstone) = res.unwrap();
+        if let Some((value, is_tombstone)) = res {
             if is_tombstone {
-                return Err(KeyFoundAsTombstoneInValueLogError);
+                return Err(NotFoundInDB);
             }
             return Ok((value, creation_at));
         }
-        Err(KeyNotFoundInValueLogError)
+        Err(NotFoundInDB)
     }
 
     /// Handles entries marked as tombstone
@@ -534,13 +526,7 @@ impl GC {
         err: Error,
     ) -> std::result::Result<(), Error> {
         match err {
-            KeyFoundAsTombstoneInMemtableError
-            | KeyNotFoundInAnySSTableError
-            | KeyNotFoundByAnyBloomFilterError
-            | KeyFoundAsTombstoneInSSTableError
-            | KeyFoundAsTombstoneInValueLogError
-            | KeyNotFoundInValueLogError
-            | NotFoundInDB => {
+            NotFoundInDB => {
                 invalid_entries.write().await.push(entry);
                 Ok(())
             }

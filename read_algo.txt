@@ -1,9 +1,0 @@
-Read algorithm
-
-  - Check bloom filters to know which sstable contains the key 
-  
-  - Read that sstable 
-
-  - Read the index that maps the key to its value_offset in the value log
-
-  - Use this offset to read the value in value log file and return 

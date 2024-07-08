@@ -1,2 +1,2 @@
-mod meta;
-pub use meta::Meta;
+mod meta_manager;
+pub use meta_manager::Meta;

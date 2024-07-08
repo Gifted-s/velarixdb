@@ -1,1 +1,1 @@
-pub(crate) mod gc;
+pub(crate) mod garbage_collector;

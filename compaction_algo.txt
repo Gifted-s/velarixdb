@@ -6,7 +6,7 @@ Compaction algorithm (Adopted from Apache Cassandra Sized Tier Compaction Strate
     NOTE1: We also collect the Bucket ID and SSTable filepaths of the tables selected for compaction so that we can delete them from previous bucket where they existed 
     NOTE2: You cannot delete the sstbales until they have been compacted and written to disk to prevent data loss in case of outage
 
-  - Compact the SS Tables and write them to buckets
+  - Compact the SSTables and write them to buckets
 
   - Once write is complete, you can delete the sstables from the bucket it once exisited and recalculate the average size of this bucket for the future
     NOTE: The deletion should include both from the disk and in-memory buckets
