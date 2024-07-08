@@ -437,8 +437,8 @@ impl GC {
         } else {
             // Step 2: Check the read-only memtables
             let mut is_deleted = false;
-            for (_, table) in read_only_memtables.read().await.iter() {
-                if let Some(value) = table.read().await.get(&key) {
+            for table in read_only_memtables.iter() {
+                if let Some(value) = table.value().get(&key) {
                     if value.created_at > insert_time {
                         offset = value.val_offset;
                         insert_time = value.created_at;
