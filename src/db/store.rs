@@ -297,13 +297,12 @@ impl DataStore<'static, Key> {
 
     /// Flushes read-only memtable to disk using a background tokio task
     pub(crate) fn flush_read_only_memtables(&mut self) {
-        let tables = self.read_only_memtables.clone();
-        for table in tables.iter() {
-            if self.flush_stream.contains(table.key()) {
+        for table in self.read_only_memtables.iter() {
+            let key = table.key().to_owned();
+            let value = table.value().clone();
+            if self.flush_stream.contains(&key) {
                 continue;
             }
-            let table_inner = table.clone();
-            let id = table_inner.key().to_owned();
             let mut flusher = self.flusher.clone();
             let tx = self.flush_signal_tx.clone();
             // NOTE: If the put method returns before the code inside tokio::spawn finishes executing,
@@ -311,9 +310,9 @@ impl DataStore<'static, Key> {
             // This is because tokio::spawn creates a new asynchronous task that is managed by the Tokio runtime.
             // The spawned task is executed concurrently and its lifecycle is not tied to the function that spawned it.
             // TODO: See if we can introduce semaphors to prevent overloading the system
-            self.flush_stream.insert(id.to_owned());
+            self.flush_stream.insert(key.to_vec());
             tokio::spawn(async move {
-                flusher.flush_handler(table.key().to_owned(), table.value().to_owned(), tx);
+                flusher.flush_handler(key, value, tx);
             });
         }
     }
@@ -504,10 +503,8 @@ impl DataStore<'static, Key> {
 
         self.active_memtable.read_only = true;
 
-        self.read_only_memtables.insert(
-            MemTable::generate_table_id(),
-            Arc::new(self.active_memtable.to_owned()),
-        );
+        self.read_only_memtables
+            .insert(MemTable::generate_table_id(), Arc::new(self.active_memtable.to_owned()));
         let immutable_tables = self.read_only_memtables.to_owned();
         let mut flusher = Flusher::new(
             Arc::clone(&self.read_only_memtables),
