@@ -6,10 +6,9 @@ use crate::types::{self, BloomFilterHandle, BucketMapHandle, FlushSignal, Immuta
 use crate::{err::Error, memtable::MemTable};
 use std::fmt::Debug;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 type K = types::Key;
-pub type InActiveMemtable = Arc<RwLock<MemTable<K>>>;
+pub type InActiveMemtable = Arc<MemTable<K>>;
 
 /// Responsible for flushing memtables to disk
 #[derive(Debug, Clone)]
@@ -41,13 +40,13 @@ impl Flusher {
     /// `KeyRange` with the new sstable
     pub async fn flush(&mut self, table: InActiveMemtable) -> Result<(), Error> {
         let flush_data = self;
-        let table_reader = table.read().await;
+        let table_reader = table;
         if table_reader.entries.is_empty() {
             return Err(Error::FailedToInsertToBucket("Cannot flush an empty table".to_string()));
         }
         let mut bucket_lock = flush_data.bucket_map.write().await;
         let sst = bucket_lock
-            .insert_to_appropriate_bucket(Arc::new(Box::new(table_reader.to_owned())))
+            .insert_to_appropriate_bucket(Arc::new(Box::new(table_reader.as_ref().to_owned())))
             .await?;
         drop(table_reader);
         if sst.summary.is_none() {
@@ -89,10 +88,7 @@ impl Flusher {
             let mut flusher = Flusher::new(read_only_memtable.clone(), buckets, filters, key_range);
             match flusher.flush(table_to_flush).await {
                 Ok(_) => {
-                    read_only_memtable
-                        .write()
-                        .await
-                        .shift_remove(&table_id.as_ref().to_vec());
+                    read_only_memtable.remove(&table_id.as_ref().to_vec());
                     if let Err(err) = tx.try_broadcast(FLUSH_SIGNAL) {
                         match err {
                             async_broadcast::TrySendError::Full(_) => {

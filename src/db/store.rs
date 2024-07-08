@@ -79,7 +79,7 @@ where
     /// Flush listeners receives signals from this channel
     pub(crate) flush_signal_rx: async_broadcast::Receiver<FlushSignal>,
 
-    /// Stores valid entries gotten from garbage collection but yet to be synced with 
+    /// Stores valid entries gotten from garbage collection but yet to be synced with
     /// memtable
     pub(crate) gc_updated_entries: GCUpdatedEntries<Key>,
 
@@ -216,11 +216,11 @@ impl DataStore<'static, Key> {
         Ok(true)
     }
 
-    /// Moves active memtable to read-only memtables 
+    /// Moves active memtable to read-only memtables
     ///
     /// Marks the active memtable as read only,
     /// updates store metadata and moves the memtable
-    /// to read-only memtables 
+    /// to read-only memtables
     pub(crate) async fn migrate_memtable_to_read_only(&mut self) {
         let head_offset = self.active_memtable.get_most_recent_offset();
 
@@ -237,14 +237,12 @@ impl DataStore<'static, Key> {
         self.active_memtable.insert(&head_entry);
         self.active_memtable.mark_readonly();
         self.update_meta_background();
-        self.read_only_memtables.write().await.insert(
-            MemTable::generate_table_id(),
-            Arc::new(RwLock::new(self.active_memtable.to_owned())),
-        );
+        self.read_only_memtables
+            .insert(MemTable::generate_table_id(), Arc::new(self.active_memtable.to_owned()));
 
-        if self.read_only_memtables.read().await.len() >= self.config.max_buffer_write_number {
+        if self.read_only_memtables.len() >= self.config.max_buffer_write_number {
             // Background
-            let _ = self.flush_read_only_memtables().await;
+            let _ = self.flush_read_only_memtables();
         }
         self.reset_memtables();
     }
@@ -298,14 +296,13 @@ impl DataStore<'static, Key> {
     }
 
     /// Flushes read-only memtable to disk using a background tokio task
-    pub(crate) async fn flush_read_only_memtables(&mut self) {
-        let tables = self.read_only_memtables.read().await;
-        for (table_id, table) in tables.iter() {
-            if self.flush_stream.contains(table_id) {
+    pub(crate) fn flush_read_only_memtables(&mut self) {
+        for table in self.read_only_memtables.iter() {
+            let key = table.key().to_owned();
+            let value = table.value().clone();
+            if self.flush_stream.contains(&key) {
                 continue;
             }
-            let table_inner = Arc::clone(table);
-            let id = table_id.clone();
             let mut flusher = self.flusher.clone();
             let tx = self.flush_signal_tx.clone();
             // NOTE: If the put method returns before the code inside tokio::spawn finishes executing,
@@ -313,9 +310,9 @@ impl DataStore<'static, Key> {
             // This is because tokio::spawn creates a new asynchronous task that is managed by the Tokio runtime.
             // The spawned task is executed concurrently and its lifecycle is not tied to the function that spawned it.
             // TODO: See if we can introduce semaphors to prevent overloading the system
-            self.flush_stream.insert(id.to_owned());
+            self.flush_stream.insert(key.to_vec());
             tokio::spawn(async move {
-                flusher.flush_handler(id, table_inner, tx);
+                flusher.flush_handler(key, value, tx);
             });
         }
     }
@@ -357,8 +354,8 @@ impl DataStore<'static, Key> {
             self.get_value_from_vlog(value.val_offset, value.created_at).await
         } else {
             let mut is_deleted = false;
-            for (_, table) in self.read_only_memtables.read().await.iter() {
-                if let Some(value) = table.read().await.get(key.as_ref()) {
+            for table in self.read_only_memtables.iter() {
+                if let Some(value) = table.value().get(key.as_ref()) {
                     if value.created_at > insert_time {
                         offset = value.val_offset;
                         insert_time = value.created_at;
@@ -493,8 +490,6 @@ impl DataStore<'static, Key> {
         Err(crate::err::Error::KeyNotFoundInValueLogError)
     }
 
-
-
     /// Flushes all memtable (active and read-only) to disk
     ///
     ///
@@ -503,30 +498,28 @@ impl DataStore<'static, Key> {
     /// Returns error, if an IO error occurs or key was not found
     #[cfg(test)]
     pub(crate) async fn flush_all_memtables(&mut self) -> Result<(), crate::err::Error> {
-        use indexmap::IndexMap;
+        use crossbeam_skiplist::SkipMap;
 
         self.active_memtable.read_only = true;
 
-        self.read_only_memtables.write().await.insert(
-            MemTable::generate_table_id(),
-            Arc::new(RwLock::new(self.active_memtable.to_owned())),
-        );
-        let immutable_tables = self.read_only_memtables.read().await.to_owned();
+        self.read_only_memtables
+            .insert(MemTable::generate_table_id(), Arc::new(self.active_memtable.to_owned()));
+        let immutable_tables = self.read_only_memtables.to_owned();
         let mut flusher = Flusher::new(
             Arc::clone(&self.read_only_memtables),
             Arc::clone(&self.buckets),
             Arc::clone(&self.filters),
             Arc::clone(&self.key_range),
         );
-        for (id, table) in immutable_tables.iter() {
-            if self.flush_stream.contains(id) {
+        for table in immutable_tables.iter() {
+            if self.flush_stream.contains(table.key()) {
                 continue;
             }
-            self.flush_stream.insert(id.to_vec());
-            flusher.flush(table.to_owned()).await?;
+            self.flush_stream.insert(table.key().to_vec());
+            flusher.flush(table.value().to_owned()).await?;
         }
         self.active_memtable.clear();
-        self.read_only_memtables = Arc::new(RwLock::new(IndexMap::new()));
+        self.read_only_memtables = Arc::new(SkipMap::new());
         Ok(())
     }
 

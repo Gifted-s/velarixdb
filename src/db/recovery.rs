@@ -165,7 +165,7 @@ impl DataStore<'static, Key> {
                 let buckets = Arc::new(RwLock::new(buckets_map.to_owned()));
                 let filters = Arc::new(RwLock::new(filters));
                 let key_range = Arc::new(RwLock::new(key_range.to_owned()));
-                let read_only_memtables = Arc::new(RwLock::new(read_only_memtables));
+                let read_only_memtables = Arc::new(read_only_memtables);
                 let gc_table = Arc::new(RwLock::new(active_memtable.to_owned()));
                 let gc_log = Arc::new(RwLock::new(vlog.to_owned()));
                 let flusher = Flusher::new(
@@ -230,7 +230,7 @@ impl DataStore<'static, Key> {
         vlog_path: P,
         head_offset: usize,
     ) -> Result<(MemTable<Key>, ImmutableMemTablesLockFree<Key>), Error> {
-        let mut read_only_memtables: ImmutableMemTablesLockFree<Key> = IndexMap::new();
+        let read_only_memtables: ImmutableMemTablesLockFree<Key> = SkipMap::new();
         let mut active_memtable = MemTable::with_specified_capacity_and_rate(size_unit, capacity, false_positive_rate);
         let mut vlog = ValueLog::new(vlog_path.as_ref()).await?;
         let mut most_recent_offset = head_offset;
@@ -247,7 +247,7 @@ impl DataStore<'static, Key> {
                     active_memtable.read_only = true;
                     read_only_memtables.insert(
                         MemTable::generate_table_id(),
-                        Arc::new(RwLock::new(active_memtable.to_owned())),
+                        Arc::new(active_memtable.to_owned()),
                     );
                     active_memtable =
                         MemTable::with_specified_capacity_and_rate(size_unit, capacity, false_positive_rate);
@@ -296,11 +296,11 @@ impl DataStore<'static, Key> {
         active_memtable.insert(&head_entry.to_owned());
         let buckets = BucketMap::new(buckets_path).await?;
         let (flush_signal_tx, flush_signal_rx) = broadcast(DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE);
-        let read_only_memtables = IndexMap::new();
+        let read_only_memtables = SkipMap::new();
         let filters = Arc::new(RwLock::new(Vec::new()));
         let buckets = Arc::new(RwLock::new(buckets.to_owned()));
         let key_range = Arc::new(RwLock::new(key_range));
-        let read_only_memtables = Arc::new(RwLock::new(read_only_memtables));
+        let read_only_memtables = Arc::new(read_only_memtables);
         let gc_table = Arc::new(RwLock::new(active_memtable.to_owned()));
         let gc_log = Arc::new(RwLock::new(vlog.to_owned()));
         let flusher = Flusher::new(

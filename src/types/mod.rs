@@ -6,12 +6,11 @@ use crate::{
 };
 use chrono::{DateTime, Utc};
 use crossbeam_skiplist::SkipMap;
-use indexmap::IndexMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// Contains type aliases to help with readability
-/// Represents a key 
+/// Represents a key
 pub type Key = Vec<u8>;
 
 /// Represents a value
@@ -51,10 +50,10 @@ pub type BloomFilterHandle = Arc<RwLock<Vec<BloomFilter>>>;
 pub type KeyRangeHandle = Arc<RwLock<KeyRange>>;
 
 /// Represents read-only MemTables
-pub type ImmutableMemTables<K> = Arc<RwLock<IndexMap<K, Arc<RwLock<MemTable<K>>>>>>;
+pub type ImmutableMemTables<K> = Arc<SkipMap<K, Arc<MemTable<K>>>>;
 
 /// Represents read-only memtables without lock
-pub type ImmutableMemTablesLockFree<K> = IndexMap<MemtableId, Arc<RwLock<MemTable<K>>>>;
+pub type ImmutableMemTablesLockFree<K> = SkipMap<MemtableId, Arc<MemTable<K>>>;
 
 /// Alias for a boolean value
 pub type Bool = bool;
