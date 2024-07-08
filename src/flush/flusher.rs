@@ -6,7 +6,6 @@ use crate::types::{self, BloomFilterHandle, BucketMapHandle, FlushSignal, Immuta
 use crate::{err::Error, memtable::MemTable};
 use std::fmt::Debug;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 type K = types::Key;
 pub type InActiveMemtable = Arc<MemTable<K>>;

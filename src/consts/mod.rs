@@ -1,3 +1,6 @@
+
+use std::time::Duration;
+
 use crate::db::SizeUnit;
 
 pub const KB: usize = 1024;
@@ -47,23 +50,23 @@ pub static GC_CHUNK_SIZE: usize = SizeUnit::Kilobytes.to_bytes(1);
 pub const WRITE_BUFFER_SIZE: usize = SizeUnit::Kilobytes.to_bytes(50);
 
 /// 5 days
-pub const DEFAULT_TOMBSTONE_COMPACTION_INTERVAL: std::time::Duration = std::time::Duration::from_millis(5 * 86400000);
+pub const DEFAULT_TOMBSTONE_COMPACTION_INTERVAL: Duration = Duration::from_millis(5 * 86400000);
 
 // 1 Hour
-pub const DEFAULT_COMPACTION_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1000 * 60 * 60);
+pub const DEFAULT_COMPACTION_INTERVAL: Duration = Duration::from_millis(1000 * 60 * 60);
 
 /// 1 Min
-pub const DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1000 * 60);
+pub const DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL: Duration = Duration::from_millis(1000 * 60);
 
 /// 10 hours
-pub const DEFAULT_ONLINE_GC_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10 * 1000 * 60 * 60);
+pub const DEFAULT_ONLINE_GC_INTERVAL: Duration = Duration::from_millis(10 * 1000 * 60 * 60);
 
 /// If entry TTL enabled, it is automatically deleted after 1 year
-pub const ENTRY_TTL: std::time::Duration = std::time::Duration::from_millis(365 * 86400000);
+pub const ENTRY_TTL: Duration = Duration::from_millis(365 * 86400000);
 
 /// Tombstone should only be removed after 120 days to guarantee that obsolete data don't
 /// resurrect by prematurelly deleting tombstone
-pub const DEFAULT_TOMBSTONE_TTL: std::time::Duration = std::time::Duration::from_millis(120 * 86400000);
+pub const DEFAULT_TOMBSTONE_TTL: Duration = Duration::from_millis(120 * 86400000);
 
 pub const DEFAULT_ENABLE_TTL: bool = false;
 

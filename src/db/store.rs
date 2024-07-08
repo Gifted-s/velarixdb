@@ -499,7 +499,6 @@ impl DataStore<'static, Key> {
     #[cfg(test)]
     pub(crate) async fn flush_all_memtables(&mut self) -> Result<(), crate::err::Error> {
         use crossbeam_skiplist::SkipMap;
-        use indexmap::IndexMap;
 
         self.active_memtable.read_only = true;
 
