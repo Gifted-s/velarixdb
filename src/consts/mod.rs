@@ -55,8 +55,8 @@ pub const DEFAULT_TOMBSTONE_COMPACTION_INTERVAL: Duration = Duration::from_milli
 // 1 Hour
 pub const DEFAULT_COMPACTION_INTERVAL: Duration = Duration::from_millis(1000 * 60 * 60);
 
-/// 1 Min
-pub const DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL: Duration = Duration::from_millis(1000 * 60);
+/// 5 Min
+pub const DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL: Duration = Duration::from_millis(1000 * 60 * 5);
 
 /// 10 hours
 pub const DEFAULT_ONLINE_GC_INTERVAL: Duration = Duration::from_millis(10 * 1000 * 60 * 60);
