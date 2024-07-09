@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use serde_json;
 use tempfile::tempdir;
 use velarixdb::db::DataStore;
 
@@ -27,7 +26,7 @@ async fn main() {
 
     let entry = store.get("google").await.unwrap().unwrap();
     let entry_string = std::str::from_utf8(&entry.val).unwrap();
-    let big_tech: BigTech = serde_json::from_str(&entry_string).unwrap();
+    let big_tech: BigTech = serde_json::from_str(entry_string).unwrap();
 
     assert_eq!(big_tech.name, new_entry.name);
     assert_eq!(big_tech.rank, new_entry.rank);

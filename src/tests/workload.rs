@@ -112,10 +112,7 @@ impl Workload {
     }
 }
 
-pub struct FilterWorkload {
-    pub false_pos: f64,
-    pub entries: Arc<SkipMap<Vec<u8>, SkipMapValue<usize>>>,
-}
+pub struct FilterWorkload {}
 
 impl FilterWorkload {
     pub fn from(false_pos: f64, entries: Arc<SkipMap<Vec<u8>, SkipMapValue<usize>>>) -> crate::filter::BloomFilter {

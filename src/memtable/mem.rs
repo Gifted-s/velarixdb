@@ -36,8 +36,8 @@ pub struct Entry<Key: K, V: Ord> {
 
 /// Entry returned to user upon  retreival
 pub struct UserEntry {
-   pub val: Value,
-   pub created_at: CreatedAt,
+    pub val: Value,
+    pub created_at: CreatedAt,
 }
 
 impl UserEntry {
@@ -207,7 +207,7 @@ impl MemTable<Key> {
                 SkipMapValue::new(entry.val_offset, entry.created_at, entry.is_tombstone),
             );
             if entry.val_offset > self.most_recent_entry.val_offset {
-                self.most_recent_entry = entry.to_owned();
+                entry.clone_into(&mut self.most_recent_entry)
             }
             self.size += entry_length_byte;
             return;
@@ -218,7 +218,7 @@ impl MemTable<Key> {
             SkipMapValue::new(entry.val_offset, entry.created_at, entry.is_tombstone),
         );
         if entry.val_offset > self.most_recent_entry.val_offset {
-            self.most_recent_entry = entry.to_owned();
+            entry.clone_into(&mut self.most_recent_entry);
         }
         self.size += entry_length_byte;
     }
@@ -583,7 +583,7 @@ mod tests {
 
     #[test]
     fn test_is_entry_within_range() {
-        let keys = vec![
+        let keys = [
             vec![1, 2, 3, 4],
             vec![2, 2, 3, 4],
             vec![3, 2, 3, 4],

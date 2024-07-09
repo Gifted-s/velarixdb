@@ -336,7 +336,7 @@ impl GC {
             .await?;
             (self.vlog.write().await).tail_offset += marker_lock.punch_hole_length;
             let vlog_reader = self.vlog.read().await;
-            return Ok((vlog_reader.head_offset, vlog_reader.tail_offset));
+            Ok((vlog_reader.head_offset, vlog_reader.tail_offset))
         }
         #[cfg(not(target_os = "linux"))]
         {

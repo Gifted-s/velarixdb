@@ -265,7 +265,7 @@ impl BucketMap {
     pub(crate) async fn extract_imbalanced_buckets(&self) -> ImbalancedBuckets {
         let mut ssts_to_delete: SSTablesToRemove = Vec::new();
         let mut imbalanced_buckets: Vec<Bucket> = Vec::new();
-        for (_, (bucket_id, bucket)) in self.buckets.iter().enumerate() {
+        for (bucket_id, bucket) in self.buckets.iter() {
             let (ssts, avg) = Bucket::extract_sstables(bucket).await?;
             if !ssts.is_empty() {
                 ssts_to_delete.push((*bucket_id, ssts.clone()));

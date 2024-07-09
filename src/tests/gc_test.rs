@@ -78,7 +78,7 @@ mod tests{
         }
         let storage_reader = store.read().await;
         let config = storage_reader.gc.config.clone();
-        let res = GC::gc_handler(
+        let _res = GC::gc_handler(
             &config,
             Arc::clone(&storage_reader.gc_table),
             Arc::clone(&storage_reader.gc_log),
@@ -91,7 +91,7 @@ mod tests{
     
         #[cfg(not(target_os = "linux"))]
         {
-            assert!(res.is_ok());
+            assert!(_res.is_ok());
         }
     }
     
