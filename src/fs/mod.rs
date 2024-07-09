@@ -40,6 +40,7 @@ pub type RGuard<'a, T> = RwLockReadGuard<'a, T>;
 pub type WGuard<'a, T> = RwLockWriteGuard<'a, T>;
 
 #[async_trait]
+#[allow(dead_code)] // contains method for future features
 pub trait FileAsync: Send + Sync + Debug + Clone {
     async fn create<P: AsRef<Path> + Send + Sync>(path: P) -> Result<File, Error>;
 
@@ -114,11 +115,13 @@ pub trait FilterFs: Send + Sync + Debug + Clone {
 }
 
 #[async_trait]
+
 pub trait IndexFs: Send + Sync + Debug + Clone {
     async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<Self, Error>;
 
     async fn get_from_index(&self, searched_key: &[u8]) -> Result<Option<u32>, Error>;
 
+    #[allow(dead_code)] // will be used for range queries(future)
     async fn get_block_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<RangeOffset, Error>;
 }
 
@@ -204,7 +207,7 @@ impl FileAsync for FileNode {
 
     async fn write_all(&self, buf: &Buf) -> Result<(), Error> {
         let mut file = self.w_lock().await;
-        Ok(file.write_all(buf).await.map_err(|err| FileWrite  {
+        Ok(file.write_all(buf).await.map_err(|err| FileWrite {
             path: self.file_path.clone(),
             error: err,
         })?)
@@ -212,7 +215,7 @@ impl FileAsync for FileNode {
 
     async fn clear(&self) -> Result<(), Error> {
         let file = self.w_lock().await;
-        Ok(file.set_len(0).await.map_err(|err| FileClear{
+        Ok(file.set_len(0).await.map_err(|err| FileClear {
             path: self.file_path.clone(),
             error: err,
         })?)
@@ -220,10 +223,7 @@ impl FileAsync for FileNode {
 
     async fn sync_all(&self) -> Result<(), Error> {
         let file = self.w_lock().await;
-        Ok(file
-            .sync_all()
-            .await
-            .map_err(|err| Error::FileSync { error: err })?)
+        Ok(file.sync_all().await.map_err(|err| Error::FileSync { error: err })?)
     }
 
     async fn flush(&self) -> Result<(), Error> {
@@ -233,16 +233,11 @@ impl FileAsync for FileNode {
 
     async fn seek(&self, start_offset: u64) -> Result<u64, Error> {
         let mut file = self.w_lock().await;
-        Ok(file
-            .seek(SeekFrom::Start(start_offset))
-            .await
-            .map_err(FileSeek)?)
+        Ok(file.seek(SeekFrom::Start(start_offset)).await.map_err(FileSeek)?)
     }
 
     async fn remove_dir_all(&self) -> Result<(), Error> {
-        Ok(fs::remove_dir_all(&self.file_path)
-            .await
-            .map_err(DirDelete)?)
+        Ok(fs::remove_dir_all(&self.file_path).await.map_err(DirDelete)?)
     }
 
     async fn w_lock(&self) -> WGuard<File> {
@@ -270,9 +265,7 @@ impl DataFs for DataFileNode {
         let mut total_bytes_read = 0;
         let path = &self.node.file_path;
         let mut file = self.node.file.write().await;
-        file.seek(std::io::SeekFrom::Start(0))
-            .await
-            .map_err(FileSeek)?;
+        file.seek(std::io::SeekFrom::Start(0)).await.map_err(FileSeek)?;
 
         loop {
             let mut key_len_bytes = [0; SIZE_OF_U32];
@@ -572,9 +565,7 @@ impl VLogFs for VLogFileNode {
         let path = &self.node.file_path;
         let mut entries = Vec::new();
         let mut file = self.node.file.write().await;
-        file.seek(std::io::SeekFrom::Start(offset))
-            .await
-            .map_err(FileSeek)?;
+        file.seek(std::io::SeekFrom::Start(offset)).await.map_err(FileSeek)?;
         let mut total_bytes_read: usize = 0;
         loop {
             let mut key_len_bytes = [0; SIZE_OF_U32];
@@ -653,9 +644,7 @@ impl IndexFs for IndexFileNode {
         let path = &self.node.file_path;
         let block_offset: i32 = -1;
         let mut file = self.node.file.write().await;
-        file.seek(std::io::SeekFrom::Start(0_u64))
-            .await
-            .map_err(FileSeek)?;
+        file.seek(std::io::SeekFrom::Start(0_u64)).await.map_err(FileSeek)?;
 
         loop {
             let mut key_len_bytes = [0; SIZE_OF_U32];
@@ -698,9 +687,7 @@ impl IndexFs for IndexFileNode {
         let path = &self.node.file_path;
         let mut range_offset = RangeOffset::new(0, 0);
         let mut file = self.node.file.write().await;
-        file.seek(std::io::SeekFrom::Start(0_u64))
-            .await
-            .map_err(FileSeek)?;
+        file.seek(std::io::SeekFrom::Start(0_u64)).await.map_err(FileSeek)?;
 
         loop {
             let mut key_len_bytes = [0; SIZE_OF_U32];

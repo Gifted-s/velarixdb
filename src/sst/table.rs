@@ -340,11 +340,6 @@ impl Table {
         self.size = 0;
     }
 
-    /// Retrieves an entry from `entries` map
-    pub(crate) fn get_value_from_entries<K: AsRef<[u8]>>(&self, key: K) -> Option<SkipMapValue<ValOffset>> {
-        self.entries.get(key.as_ref()).map(|entry| entry.value().to_owned())
-    }
-
     /// Returns `size` of `Table`
     pub fn size(&self) -> usize {
         self.size

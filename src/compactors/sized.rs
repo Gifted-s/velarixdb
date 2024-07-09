@@ -179,7 +179,7 @@ impl<'a> SizedTierRunner<'a> {
             let mut hotness = 0;
             let tables = &bucket.sstables.read().await;
 
-            let mut merged_sst: Box<dyn InsertableToBucket> = Box::new(tables.get(0).unwrap().to_owned());
+            let mut merged_sst: Box<dyn InsertableToBucket> = Box::new(tables.first().unwrap().to_owned());
             for sst in tables[1..].iter() {
                 let mut insertable_sst = sst.to_owned();
                 hotness += insertable_sst.hotness;

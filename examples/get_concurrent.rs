@@ -37,7 +37,7 @@ async fn main() {
 
 
     // Read entries concurently
-    let reads = entries.iter().map(|(k, _)| {
+    let reads = entries.keys().map(|k| {
         let store_inner = Arc::clone(&store_ref);
         let key = k.to_owned();
         tokio::spawn(async move {
