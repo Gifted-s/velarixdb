@@ -6,7 +6,7 @@
 
 VelarixDB is an LSM-based storage engine designed to significantly reduce IO amplification, resulting in better performance and durability for storage devices.
 
-
+[![Clippy](https://github.com/Gifted-s/bd/actions/workflows/clippy.yml/badge.svg)](https://github.com/Gifted-s/bd/actions/workflows/clippy.yml)
 [![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](code_of_conduct.md)
 
 ## Introduction
