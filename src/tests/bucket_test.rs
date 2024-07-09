@@ -115,52 +115,53 @@ mod tests {
     ];
             let mut ssts = Vec::new();
             for i in 0..number {
+                let idx = i as usize;
                 ssts.push(Table {
-                    dir: sst_contructor[i as usize].dir.to_owned(),
+                    dir: sst_contructor[idx].dir.to_owned(),
                     hotness: 100,
                     size: 4096,
                     created_at: Utc::now(),
                     data_file: DataFile {
                         file: DataFileNode {
                             node: FileNode {
-                                file_path: sst_contructor[i as usize].data_path.to_owned(),
+                                file_path: sst_contructor[idx].data_path.to_owned(),
                                 file: Arc::new(RwLock::new(
-                                    File::open(sst_contructor[i as usize].data_path.to_owned())
+                                    File::open(sst_contructor[idx].data_path.to_owned())
                                         .await
                                         .unwrap(),
                                 )),
                                 file_type: FileType::Data,
                             },
                         },
-                        path: sst_contructor[i as usize].data_path.to_owned(),
+                        path: sst_contructor[idx].data_path.to_owned(),
                     },
                     index_file: IndexFile {
                         file: IndexFileNode {
                             node: FileNode {
-                                file_path: sst_contructor[i as usize].index_path.to_owned(),
+                                file_path: sst_contructor[idx].index_path.to_owned(),
                                 file: Arc::new(RwLock::new(
-                                    File::open(sst_contructor[i as usize].index_path.to_owned())
+                                    File::open(sst_contructor[idx].index_path.to_owned())
                                         .await
                                         .unwrap(),
                                 )),
                                 file_type: FileType::Index,
                             },
                         },
-                        path: sst_contructor[i as usize].index_path.to_owned(),
+                        path: sst_contructor[idx].index_path.to_owned(),
                     },
                     entries: Arc::new(SkipMap::default()),
                     filter: None,
                     summary: None,
                 })
             }
-            return ssts;
+            ssts
         }
     }
 
     #[tokio::test]
     async fn test_bucket_new() {
         let root = tempdir().unwrap();
-        let path = PathBuf::from(root.path().join("."));
+        let path = root.path().join(".");
         let new_bucket = Bucket::new(path.to_owned()).await;
         assert!(new_bucket.is_ok());
         let new_bucket = new_bucket.unwrap();
@@ -175,7 +176,7 @@ mod tests {
     #[tokio::test]
     async fn test_bucket_from_with_empty() {
         let root = tempdir().unwrap();
-        let path = PathBuf::from(root.path().join("."));
+        let path = root.path().join(".");
         let id = Uuid::new_v4();
         let average_size = 0;
         let sstables = Vec::new();
@@ -191,7 +192,7 @@ mod tests {
     #[tokio::test]
     async fn test_bucket_from_with_sstables() {
         let root = tempdir().unwrap();
-        let path = PathBuf::from(root.path().join("."));
+        let path = root.path().join(".");
         let id = Uuid::new_v4();
         let sst_count = 3;
         let sst_samples = SSTContructor::generate_ssts(sst_count).await;
@@ -202,7 +203,7 @@ mod tests {
         for meta_task in sst_meta {
             let meta_data = meta_task
                 .await
-                .map_err(|err| Error::GetFileMetaDataError(err.into()))
+                .map_err(|err| Error::GetFileMetaData(err.into()))
                 .unwrap();
             all_sstable_size += meta_data.unwrap().len() as usize;
         }
@@ -227,7 +228,7 @@ mod tests {
         for meta_task in sst_meta {
             let meta_data = meta_task
                 .await
-                .map_err(|err| Error::GetFileMetaDataError(err.into()))
+                .map_err(|err| Error::GetFileMetaData(err.into()))
                 .unwrap();
             all_sstable_size += meta_data.unwrap().len() as usize;
         }
@@ -240,24 +241,24 @@ mod tests {
     #[tokio::test]
     async fn test_sstcount_exceed_threshold() {
         let root = tempdir().unwrap();
-        let path = PathBuf::from(root.path().join("."));
+        let path = root.path().join(".");
         let new_bucket = Bucket::new(path.to_owned()).await.unwrap();
         let sst_count = 5;
         let sst_samples = SSTContructor::generate_ssts(sst_count).await;
         for s in sst_samples {
             new_bucket.sstables.write().await.push(s)
         }
-        assert_eq!(new_bucket.sstable_count_exceeds_threshhold().await, true);
+        assert!(new_bucket.sstable_count_exceeds_threshhold().await);
 
         new_bucket.sstables.write().await.clear();
 
-        assert_eq!(new_bucket.sstable_count_exceeds_threshhold().await, false);
+        assert!(!(new_bucket.sstable_count_exceeds_threshhold().await));
     }
 
     #[tokio::test]
     async fn test_extract_sstable_to_compact() {
         let root = tempdir().unwrap();
-        let path = PathBuf::from(root.path().join("."));
+        let path = root.path().join(".");
         let new_bucket = Bucket::new(path.to_owned()).await.unwrap();
         let sst_count = 5;
         let sst_samples = SSTContructor::generate_ssts(sst_count).await;
@@ -268,7 +269,7 @@ mod tests {
         for meta_task in sst_meta {
             let meta_data = meta_task
                 .await
-                .map_err(|err| Error::GetFileMetaDataError(err.into()))
+                .map_err(|err| Error::GetFileMetaData(err.into()))
                 .unwrap();
             all_sstable_size += meta_data.unwrap().len() as usize;
         }
@@ -286,7 +287,7 @@ mod tests {
     #[tokio::test]
     async fn table_fits_into_bucket() {
         let root = tempdir().unwrap();
-        let path = PathBuf::from(root.path().join("."));
+        let path =root.path().join(".");
         let mut new_bucket = Bucket::new(path.to_owned()).await.unwrap();
         let sst_sample = SSTContructor::generate_ssts(2).await;
         for s in sst_sample {
@@ -296,23 +297,23 @@ mod tests {
         new_bucket.avarage_size = sst_within_size_range.size();
         let fits_into_bucket = new_bucket.fits_into_bucket(Arc::new(Box::new(sst_within_size_range.to_owned())));
         // size of sstable is not less than bucket low
-        assert_eq!(fits_into_bucket, true);
+        assert!(fits_into_bucket);
         // increase sstable size to be greater than bucket high range
         sst_within_size_range.size = ((new_bucket.avarage_size as f64 * BUCKET_HIGH) * 2.0) as usize;
         let fits_into_bucket = new_bucket.fits_into_bucket(Arc::new(Box::new(sst_within_size_range.to_owned())));
         // sstable size is greater than bucket high range
-        assert_eq!(fits_into_bucket, false);
+        assert!(!fits_into_bucket);
         // increase bucket average
         new_bucket.avarage_size = ((new_bucket.avarage_size as f64 * BUCKET_HIGH) * 2.0) as usize;
         let fits_into_bucket = new_bucket.fits_into_bucket(Arc::new(Box::new(sst_within_size_range.to_owned())));
         // sstable size is within bucket range
-        assert_eq!(fits_into_bucket, true);
+        assert!(fits_into_bucket);
     }
 
     #[tokio::test]
     async fn test_bucket_map_new() {
         let root = tempdir().unwrap();
-        let path = PathBuf::from(root.path().join("."));
+        let path = root.path().join(".");
         let bucket_map = BucketMap::new(path.to_owned()).await;
         assert!(bucket_map.is_ok());
         let bucket_map = bucket_map.unwrap();
@@ -323,31 +324,31 @@ mod tests {
     #[tokio::test]
     async fn test_bucket_map_extract_imbalanced_buckets() {
         let root = tempdir().unwrap();
-        let path = PathBuf::from(root.path().join("."));
+        let path = root.path().join(".");
         let new_bucket1 = Bucket::new(path.to_owned()).await.unwrap();
         let sst_count = 6;
         let sst_samples = SSTContructor::generate_ssts(sst_count).await;
-        for s in sst_samples.to_owned() {
+        for s in sst_samples.iter().cloned() {
             new_bucket1.sstables.write().await.push(s)
         }
 
         let new_bucket2 = Bucket::new(path.to_owned()).await.unwrap();
-        for s in sst_samples.to_owned() {
+        for s in sst_samples.iter().cloned() {
             new_bucket2.sstables.write().await.push(s)
         }
 
         let new_bucket3 = Bucket::new(path.to_owned()).await.unwrap();
-        for s in sst_samples.to_owned() {
+        for s in sst_samples.iter().cloned() {
             new_bucket3.sstables.write().await.push(s)
         }
 
         let new_bucket4 = Bucket::new(path.to_owned()).await.unwrap();
-        for s in sst_samples.to_owned() {
+        for s in sst_samples.iter().cloned() {
             new_bucket4.sstables.write().await.push(s)
         }
 
         let root = tempdir().unwrap();
-        let path = PathBuf::from(root.path().join("."));
+        let path = root.path().join(".");
         let mut bucket_map = BucketMap::new(path.to_owned()).await.unwrap();
         bucket_map.buckets.insert(new_bucket1.id, new_bucket1.to_owned());
         bucket_map.buckets.insert(new_bucket2.id, new_bucket2);
@@ -359,7 +360,7 @@ mod tests {
         let (buckets, ssts_to_remove) = imbalanced_buckets.unwrap();
         let mut expected_ssts_to_remove_in_buckets = 0;
         assert_eq!(buckets.len(), 4);
-        for bucket in buckets.to_owned() {
+        for bucket in buckets.iter().cloned() {
             let sst_len = bucket.sstables.read().await.len();
             assert!(sst_len == sst_count as usize);
             assert!(sst_len > MIN_TRESHOLD);
@@ -393,31 +394,31 @@ mod tests {
     #[tokio::test]
     async fn test_bucket_map_is_balanced() {
         let root = tempdir().unwrap();
-        let path = PathBuf::from(root.path().join("."));
+        let path = root.path().join(".");
         let new_bucket1 = Bucket::new(path.to_owned()).await.unwrap();
         let sst_count = 6;
         let sst_samples = SSTContructor::generate_ssts(sst_count).await;
-        for s in sst_samples.to_owned() {
+        for s in sst_samples.iter().cloned() {
             new_bucket1.sstables.write().await.push(s)
         }
 
         let new_bucket2 = Bucket::new(path.to_owned()).await.unwrap();
-        for s in sst_samples.to_owned() {
+        for s in sst_samples.iter().cloned() {
             new_bucket2.sstables.write().await.push(s)
         }
 
         let new_bucket3 = Bucket::new(path.to_owned()).await.unwrap();
-        for s in sst_samples.to_owned() {
+        for s in sst_samples.iter().cloned() {
             new_bucket3.sstables.write().await.push(s)
         }
 
         let new_bucket4 = Bucket::new(path.to_owned()).await.unwrap();
-        for s in sst_samples.to_owned() {
+        for s in sst_samples.iter().cloned() {
             new_bucket4.sstables.write().await.push(s)
         }
 
         let root = tempdir().unwrap();
-        let path = PathBuf::from(root.path().join("."));
+        let path = root.path().join(".");
         let mut bucket_map = BucketMap::new(path.to_owned()).await.unwrap();
         bucket_map.buckets.insert(new_bucket1.id, new_bucket1.to_owned());
         bucket_map.buckets.insert(new_bucket2.id, new_bucket2);
@@ -425,30 +426,33 @@ mod tests {
         bucket_map.buckets.insert(new_bucket4.id, new_bucket4);
 
         let is_balanced = bucket_map.is_balanced().await;
-        assert_eq!(is_balanced, false);
+        assert!(!is_balanced);
 
         // test empty map
         bucket_map.buckets.clear();
         let is_balanced = bucket_map.is_balanced().await;
-        assert_eq!(is_balanced, true);
+        assert!(is_balanced);
 
         // Should not return false if all buckets are balanced
         new_bucket1.sstables.write().await.clear();
         new_bucket1.sstables.write().await.push(sst_samples[0].to_owned());
         bucket_map.buckets.insert(new_bucket1.id, new_bucket1);
         let is_balanced = bucket_map.is_balanced().await;
-        assert_eq!(is_balanced, true);
+        assert!(is_balanced); 
     }
 
     #[tokio::test]
     async fn table_insert_to_appropriate_bucket() {
         let root = tempdir().unwrap();
-        let path = PathBuf::from(root.path().join("."));
+        let path =root.path().join(".");
         let mut bucket_map = BucketMap::new(path.to_owned()).await.unwrap();
         let false_pos = 0.1;
         let mut sst_within_size_range = SSTContructor::generate_ssts(1).await[0].to_owned();
         sst_within_size_range.load_entries_from_file().await.unwrap();
-        sst_within_size_range.filter = Some(FilterWorkload::new(false_pos, sst_within_size_range.entries.to_owned()));
+        sst_within_size_range.filter = Some(FilterWorkload::from(
+            false_pos,
+            sst_within_size_range.entries.to_owned(),
+        ));
         // bucket insertion is succeeds
         let insert_res = bucket_map
             .insert_to_appropriate_bucket(Arc::new(Box::new(sst_within_size_range.to_owned())))
@@ -473,36 +477,36 @@ mod tests {
     #[tokio::test]
     async fn test_delete_sstables() {
         let root = tempdir().unwrap();
-        let path = PathBuf::from(root.path().join("."));
+        let path =root.path().join(".");
         let new_bucket1 = Bucket::new(path.to_owned()).await.unwrap();
         let sst_count = 6;
         let sst_samples = SSTContructor::generate_ssts(sst_count).await;
-        for s in sst_samples.to_owned() {
+        for s in sst_samples.iter().cloned() {
             new_bucket1.sstables.write().await.push(s)
         }
 
         let new_bucket2 = Bucket::new(path.to_owned()).await.unwrap();
-        for s in sst_samples.to_owned() {
+        for s in sst_samples.iter().cloned() {
             new_bucket2.sstables.write().await.push(s)
         }
 
         let new_bucket3 = Bucket::new(path.to_owned()).await.unwrap();
-        for s in sst_samples.to_owned() {
+        for s in sst_samples.iter().cloned() {
             new_bucket3.sstables.write().await.push(s)
         }
 
         let new_bucket4 = Bucket::new(path.to_owned()).await.unwrap();
-        for s in sst_samples.to_owned() {
+        for s in sst_samples.iter().cloned() {
             new_bucket4.sstables.write().await.push(s)
         }
 
         let new_bucket5 = Bucket::new(path.to_owned()).await.unwrap();
-        for s in sst_samples.to_owned() {
+        for s in sst_samples.iter().cloned() {
             new_bucket5.sstables.write().await.push(s)
         }
 
         let root = tempdir().unwrap();
-        let path = PathBuf::from(root.path().join("."));
+        let path = root.path().join(".");
         let mut bucket_map = BucketMap::new(path.to_owned()).await.unwrap();
         bucket_map.buckets.insert(new_bucket1.id, new_bucket1.to_owned());
         bucket_map.buckets.insert(new_bucket2.id, new_bucket2);

@@ -6,16 +6,16 @@ use crate::consts::{
 };
 use crate::db::keyspace::is_valid_keyspace_name;
 use crate::flush::Flusher;
-use crate::gc::gc::GC;
+use crate::gc::garbage_collector::GC;
 use crate::index::Index;
 use crate::key_range::KeyRange;
-use crate::memtable::{Entry, MemTable, K};
+use crate::memtable::{Entry, MemTable, UserEntry, K};
 use crate::meta::Meta;
 use crate::range::RangeIterator;
 use crate::sst::Table;
 use crate::types::{
-    BloomFilterHandle, Bool, BucketMapHandle, CreatedAt, FlushSignal, GCUpdatedEntries, ImmutableMemTables, Key,
-    KeyRangeHandle, MemtableFlushStream, Value,
+    Bool, BucketMapHandle, CreatedAt, FlushSignal, GCUpdatedEntries, ImmutableMemTables, Key, KeyRangeHandle,
+    MemtableFlushStream,
 };
 use crate::util;
 use crate::vlog::ValueLog;
@@ -39,9 +39,6 @@ where
 
     /// Active memtable that accepts read and writes using a lock free skipmap
     pub(crate) active_memtable: MemTable<Key>,
-
-    /// In memory bloom filters for fast retreival
-    pub(crate) filters: BloomFilterHandle,
 
     /// Value log to perisist entries and for crash recovery
     pub(crate) val_log: ValueLog,
@@ -112,7 +109,7 @@ pub enum SizeUnit {
 }
 
 impl SizeUnit {
-    pub(crate) const fn to_bytes(&self, value: usize) -> usize {
+    pub(crate) const fn as_bytes(&self, value: usize) -> usize {
         match self {
             SizeUnit::Bytes => value,
             SizeUnit::Kilobytes => value * KB,
@@ -174,21 +171,49 @@ impl DataStore<'static, Key> {
     /// Should not be called, unless [`DataStore::open`]
     /// and should not be user-facing.
     pub(crate) fn start_background_tasks(&self) {
-        self.compactor.start_periodic_background_compaction(
-            Arc::clone(&self.buckets),
-            Arc::clone(&self.filters),
-            Arc::clone(&self.key_range),
-        );
+        // NOTE: we only incrememnt the ref counter not a deep clone
+        self.compactor
+            .spawn_compaction_worker(self.buckets.clone(), self.key_range.clone());
+
         self.compactor.start_flush_listener(
             self.flush_signal_rx.clone(),
-            Arc::clone(&self.buckets),
-            Arc::clone(&self.filters),
-            Arc::clone(&self.key_range),
+            self.buckets.clone(),
+            self.key_range.clone(),
         );
+
         self.gc
-            .start_background_gc_task(Arc::clone(&self.key_range), Arc::clone(&self.read_only_memtables));
+            .start_gc_worker(self.key_range.clone(), self.read_only_memtables.clone());
     }
 
+    /// Inserts a new entry into the store
+    ///
+    /// # Examples
+    /// ```
+    /// # use tempfile::tempdir;
+    /// use velarixdb::db::DataStore;
+
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let root = tempdir().unwrap();
+    ///     let path = root.path().join("velarixdb");
+    ///     let mut store = DataStore::open("big_tech", path).await.unwrap(); // handle IO error
+    ///
+    ///     let res1 = store.put("apple", "tim cook").await;
+    ///     let res2 = store.put("google", "sundar pichai").await;
+    ///     let res3 = store.put("nvidia", "jensen huang").await;
+    ///     let res4 = store.put("microsoft", "satya nadella").await;
+    ///     let res5 = store.put("meta", "mark zuckerberg").await;
+    ///     let res6 = store.put("openai", "sam altman").await;
+    ///
+    ///     assert!(res1.is_ok());
+    ///     assert!(res2.is_ok());
+    ///     assert!(res3.is_ok());
+    ///     assert!(res4.is_ok());
+    ///     assert!(res5.is_ok());
+    ///     assert!(res6.is_ok());
+    /// }
+    ///
+    /// ```
     pub async fn put<K: AsRef<[u8]>, V: AsRef<[u8]>>(&mut self, key: K, val: V) -> Result<Bool, crate::err::Error> {
         self.validate_size(key.as_ref(), Some(val.as_ref()))?;
 
@@ -197,7 +222,7 @@ impl DataStore<'static, Key> {
         }
 
         // This ensures sstables in key range whose filter is newly loaded(after crash) are mapped to the sstables
-        self.key_range.write().await.update_key_range().await;
+        self.key_range.update_key_range().await;
         let is_tombstone = std::str::from_utf8(val.as_ref()).unwrap() == TOMB_STONE_MARKER;
         let created_at = Utc::now();
         let v_offset = self
@@ -242,7 +267,7 @@ impl DataStore<'static, Key> {
 
         if self.read_only_memtables.len() >= self.config.max_buffer_write_number {
             // Background
-            let _ = self.flush_read_only_memtables();
+            self.flush_read_only_memtables();
         }
         self.reset_memtables();
     }
@@ -278,7 +303,7 @@ impl DataStore<'static, Key> {
     }
 
     /// Updates metadata in background
-    /// #[doc(hidden)]
+    #[doc(hidden)]
     pub(crate) fn update_meta_background(&self) {
         let meta = Arc::new(Mutex::new(self.meta.to_owned()));
         tokio::spawn(async move {
@@ -287,6 +312,36 @@ impl DataStore<'static, Key> {
             }
         });
     }
+
+    /// Removes an entry from the store
+    ///
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tempfile::tempdir;
+    /// use velarixdb::db::DataStore;
+    ///
+    /// #[tokio::main]
+    ///  async fn main() {
+    ///  let root = tempdir().unwrap();
+    ///  let path = root.path().join("velarixdb");
+    ///  let mut store = DataStore::open("big_tech", path).await.unwrap(); // handle IO error
+    ///
+    ///   store.put("apple", "tim cook").await.unwrap(); // handle error
+    ///   // Retrieve entry
+    ///   let entry = store.get("apple").await.unwrap();
+    ///   assert!(entry.is_some());
+    ///
+    ///   // Delete entry
+    ///   store.delete("apple").await.unwrap();
+    ///
+    ///   // Entry should now be None
+    ///   let entry = store.get("apple").await.unwrap();
+    ///   assert!(entry.is_none());
+    /// }
+    ///
+    /// ```
 
     pub async fn delete<T: AsRef<[u8]>>(&mut self, key: T) -> Result<bool, crate::err::Error> {
         self.validate_size(key.as_ref(), None::<T>)?;
@@ -330,7 +385,56 @@ impl DataStore<'static, Key> {
         )));
     }
 
-    pub async fn get<T: AsRef<[u8]>>(&self, key: T) -> Result<(Value, CreatedAt), crate::err::Error> {
+    /// Reteives an entry from the [`DataStore`]
+    ///
+    ///
+    /// This is user facing and its asyncronous
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tempfile::tempdir;
+    /// use velarixdb::db::DataStore;
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///  let root = tempdir().unwrap();
+    ///  let path = root.path().join("velarixdb");
+    ///  let mut store = DataStore::open("big_tech", path).await.unwrap(); // handle IO error
+    ///
+    ///  let res1 = store.put("apple", "tim cook").await;
+    ///  let res2 = store.put("google", "sundar pichai").await;
+    ///  let res3 = store.put("nvidia", "jensen huang").await;
+    ///  let res4 = store.put("microsoft", "satya nadella").await;
+    ///  let res5 = store.put("meta", "mark zuckerberg").await;
+    ///  let res6 = store.put("openai", "sam altman").await;
+    ///
+    ///  assert!(res1.is_ok());
+    ///  assert!(res2.is_ok());
+    ///  assert!(res3.is_ok());
+    ///  assert!(res4.is_ok());
+    ///  assert!(res5.is_ok());
+    ///  assert!(res6.is_ok());
+    ///
+    ///  let entry1 = store.get("apple").await.unwrap(); // Handle error
+    ///  let entry2 = store.get("google").await.unwrap();
+    ///  let entry3 = store.get("nvidia").await.unwrap();
+    ///  let entry4 = store.get("microsoft").await.unwrap();
+    ///  let entry5 = store.get("meta").await.unwrap();
+    ///  let entry6 = store.get("openai").await.unwrap();
+    ///  let entry7 = store.get("***not_found_key**").await.unwrap();
+    ///
+    ///  assert_eq!(std::str::from_utf8(&entry1.unwrap().val).unwrap(), "tim cook");
+    ///  assert_eq!(std::str::from_utf8(&entry2.unwrap().val).unwrap(), "sundar pichai");
+    ///  assert_eq!(std::str::from_utf8(&entry3.unwrap().val).unwrap(), "jensen huang");
+    ///  assert_eq!(std::str::from_utf8(&entry4.unwrap().val).unwrap(), "satya nadella");
+    ///  assert_eq!(std::str::from_utf8(&entry5.unwrap().val).unwrap(), "mark zuckerberg");
+    ///  assert_eq!(std::str::from_utf8(&entry6.unwrap().val).unwrap(), "sam altman");
+    ///  assert!(entry7.is_none())
+    /// }
+    /// ```
+
+    pub async fn get<T: AsRef<[u8]>>(&self, key: T) -> Result<Option<UserEntry>, crate::err::Error> {
         self.validate_size(key.as_ref(), None::<T>)?;
         let gc_entries_reader = self.gc_updated_entries.read().await;
         if !gc_entries_reader.is_empty() {
@@ -338,7 +442,7 @@ impl DataStore<'static, Key> {
             if res.is_some() {
                 let value = res.to_owned().unwrap().value().to_owned();
                 if value.is_tombstone {
-                    return Err(crate::err::Error::NotFoundInDB);
+                    return Ok(None);
                 }
                 return self.get_value_from_vlog(value.val_offset, value.created_at).await;
             }
@@ -349,7 +453,7 @@ impl DataStore<'static, Key> {
         let lowest_insert_time = util::default_datetime();
         if let Some(value) = self.active_memtable.get(key.as_ref()) {
             if value.is_tombstone {
-                return Err(crate::err::Error::NotFoundInDB);
+                return Ok(None);
             }
             self.get_value_from_vlog(value.val_offset, value.created_at).await
         } else {
@@ -366,25 +470,51 @@ impl DataStore<'static, Key> {
 
             if self.found_in_table(insert_time, lowest_insert_time) {
                 if is_deleted {
-                    return Err(crate::err::Error::NotFoundInDB);
+                    return Ok(None);
                 }
                 self.get_value_from_vlog(offset, insert_time).await
             } else {
-                let key_range = &self.key_range.read().await;
-                let ssts = key_range.filter_sstables_by_biggest_key(key.as_ref()).await?;
+                let ssts = &self.key_range.filter_sstables_by_biggest_key(key.as_ref()).await?;
                 if ssts.is_empty() {
-                    return Err(crate::err::Error::NotFoundInDB);
+                    return Ok(None);
                 }
-                self.search_key_in_sstables(key, ssts).await
+                self.search_key_in_sstables(key, ssts.to_vec()).await
             }
         }
     }
+
+    /// Removes an entry from the store
+    ///
+    /// # Examples
+    /// 
+    /// ```
+    /// # use tempfile::tempdir;
+    /// use velarixdb::db::DataStore;
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let root = tempdir().unwrap();
+    ///     let path = root.path().join("velarixdb");
+    ///     let mut store = DataStore::open("big_tech", path).await.unwrap(); // handle IO error
+    
+    ///     store.put("apple", "tim cook").await.unwrap(); // handle error
+    
+    ///     // Update entry
+    ///     let success = store.update("apple", "elon musk").await;
+    ///     assert!(success.is_ok());
+    
+    ///     // Entry should now be updated
+    ///     let entry = store.get("apple").await.unwrap(); // handle error
+    ///     assert!(entry.is_some());
+    ///     assert_eq!(std::str::from_utf8(&entry.unwrap().val).unwrap(), "elon musk")
+    /// }
+    /// ```
 
     pub async fn update<T: AsRef<[u8]>>(&mut self, key: T, value: T) -> Result<bool, crate::err::Error> {
         self.validate_size(key.as_ref(), Some(value.as_ref()))?;
         self.get(key.as_ref()).await?;
         self.put(key, value).await
     }
+
 
     /// Validate key and value sizes.
     ///
@@ -431,7 +561,7 @@ impl DataStore<'static, Key> {
         &self,
         key: K,
         ssts: Vec<Table>,
-    ) -> Result<(Value, CreatedAt), crate::err::Error> {
+    ) -> Result<Option<UserEntry>, crate::err::Error> {
         let mut insert_time = util::default_datetime();
         let lowest_insert_date = util::default_datetime();
         let mut offset = 0;
@@ -453,7 +583,7 @@ impl DataStore<'static, Key> {
         }
         if self.found_in_table(insert_time, lowest_insert_date) {
             if is_deleted {
-                return Err(crate::err::Error::NotFoundInDB);
+                return Ok(None);
             }
             return self.get_value_from_vlog(offset, insert_time).await;
         }
@@ -477,17 +607,16 @@ impl DataStore<'static, Key> {
     pub(crate) async fn get_value_from_vlog(
         &self,
         offset: usize,
-        creation_time: CreatedAt,
-    ) -> Result<(Value, CreatedAt), crate::err::Error> {
+        created_at: CreatedAt,
+    ) -> Result<Option<UserEntry>, crate::err::Error> {
         let res = self.val_log.get(offset).await?;
-        if res.is_some() {
-            let (value, is_tombstone) = res.unwrap();
+        if let Some((value, is_tombstone)) = res {
             if is_tombstone {
-                return Err(crate::err::Error::KeyFoundAsTombstoneInValueLogError);
+                return Ok(None);
             }
-            return Ok((value, creation_time));
+            return Ok(Some(UserEntry::new(value, created_at)));
         }
-        Err(crate::err::Error::KeyNotFoundInValueLogError)
+        Ok(None)
     }
 
     /// Flushes all memtable (active and read-only) to disk
@@ -496,8 +625,9 @@ impl DataStore<'static, Key> {
     /// # Errors
     ///
     /// Returns error, if an IO error occurs or key was not found
+    #[doc(hidden)]
     #[cfg(test)]
-    pub(crate) async fn flush_all_memtables(&mut self) -> Result<(), crate::err::Error> {
+    pub(crate) async fn force_flush(&mut self) -> Result<(), crate::err::Error> {
         use crossbeam_skiplist::SkipMap;
 
         self.active_memtable.read_only = true;
@@ -508,7 +638,6 @@ impl DataStore<'static, Key> {
         let mut flusher = Flusher::new(
             Arc::clone(&self.read_only_memtables),
             Arc::clone(&self.buckets),
-            Arc::clone(&self.filters),
             Arc::clone(&self.key_range),
         );
         for table in immutable_tables.iter() {
@@ -539,10 +668,10 @@ impl DataStore<'static, Key> {
         let vlog_empty = !vlog_exit
             || fs::metadata(vlog_path)
                 .await
-                .map_err(crate::err::Error::GetFileMetaDataError)?
+                .map_err(crate::err::Error::GetFileMetaData)?
                 .len()
                 == 0;
-        let key_range = KeyRange::new();
+        let key_range = KeyRange::default();
         let vlog = ValueLog::new(vlog_path).await?;
         let meta = Meta::new(&dir.meta).await?;
         if vlog_empty {
@@ -560,7 +689,6 @@ impl DataStore<'static, Key> {
         self.compactor.reason = CompactionReason::Manual;
         Compactor::handle_compaction(
             Arc::clone(&self.buckets),
-            Arc::clone(&self.filters.clone()),
             Arc::clone(&self.key_range),
             &self.compactor.config,
         )
@@ -568,12 +696,12 @@ impl DataStore<'static, Key> {
     }
 
     /// Returns length of entries in active memtable
-    pub async fn len_of_entries_in_memtable(&mut self) -> usize {
+    pub fn len_of_entries_in_memtable(&self) -> usize {
         self.active_memtable.entries.len()
     }
 
     /// Get [`DataStore`] directories
-    pub async fn get_dir(&mut self) -> DirPath {
+    pub async fn get_dir(&self) -> DirPath {
         self.dir.to_owned()
     }
 

@@ -15,7 +15,7 @@ use crate::err::Error::*;
 use crate::filter::BloomFilter;
 use crate::flush::Flusher;
 use crate::fs::FileAsync;
-use crate::gc::gc::GC;
+use crate::gc::garbage_collector::GC;
 use crate::key_range::KeyRange;
 use crate::memtable::{Entry, MemTable};
 use crate::meta::Meta;
@@ -41,18 +41,17 @@ impl DataStore<'static, Key> {
         dir: DirPath,
         buckets_path: P,
         mut vlog: ValueLog,
-        mut key_range: KeyRange,
+        key_range: KeyRange,
         config: &Config,
         size_unit: SizeUnit,
         mut meta: Meta,
     ) -> Result<DataStore<'static, Key>, Error> {
         let mut recovered_buckets: IndexMap<BucketID, Bucket> = IndexMap::new();
-        let filters: Vec<BloomFilter> = Vec::new();
 
         // Get bucket diretories streams
         let mut buckets_stream = open_dir_stream!(buckets_path.as_ref().to_path_buf());
         // for each bucket directory
-        while let Some(bucket_dir) = buckets_stream.next_entry().await.map_err(|err| DirOpenError {
+        while let Some(bucket_dir) = buckets_stream.next_entry().await.map_err(|err| DirOpen {
             path: buckets_path.as_ref().to_path_buf(),
             error: err,
         })? {
@@ -60,7 +59,7 @@ impl DataStore<'static, Key> {
             let mut sst_dir_stream = open_dir_stream!(bucket_dir.path());
 
             // iterate over each sstable directory
-            while let Some(sst_dir) = sst_dir_stream.next_entry().await.map_err(|err| DirOpenError {
+            while let Some(sst_dir) = sst_dir_stream.next_entry().await.map_err(|err| DirOpen {
                 path: buckets_path.as_ref().to_path_buf(),
                 error: err,
             })? {
@@ -69,7 +68,7 @@ impl DataStore<'static, Key> {
                 let mut files = Vec::new();
 
                 // iterate over each file
-                while let Some(file) = files_stream.next_entry().await.map_err(|err| DirOpenError {
+                while let Some(file) = files_stream.next_entry().await.map_err(|err| DirOpen {
                     path: buckets_path.as_ref().to_path_buf(),
                     error: err,
                 })? {
@@ -83,7 +82,7 @@ impl DataStore<'static, Key> {
                 let bucket_id = Self::get_bucket_id_from_full_bucket_path(sst_dir.path());
 
                 if files.len() < 4 {
-                    return Err(InvalidSSTableDirectoryError {
+                    return Err(InvalidSSTableDirectory {
                         input_string: sst_dir.path().to_owned().to_string_lossy().to_string(),
                     });
                 }
@@ -122,11 +121,10 @@ impl DataStore<'static, Key> {
                 table.summary = Some(summary.to_owned());
 
                 // store bloomfilter metadata in table
-                let mut new_filter = BloomFilter::default();
-                new_filter.file_path = Some(filter_file_path);
+                let new_filter = BloomFilter { file_path: Some(filter_file_path), ..Default::default() };
                 table.filter = Some(new_filter);
 
-                key_range.set(sst_dir.path(), summary.smallest_key, summary.biggest_key, table);
+                key_range.set(sst_dir.path(), summary.smallest_key, summary.biggest_key, table).await;
             }
         }
         let mut buckets_map = BucketMap::new(buckets_path.clone()).await?;
@@ -163,15 +161,13 @@ impl DataStore<'static, Key> {
         match recover_res {
             Ok((active_memtable, read_only_memtables)) => {
                 let buckets = Arc::new(RwLock::new(buckets_map.to_owned()));
-                let filters = Arc::new(RwLock::new(filters));
-                let key_range = Arc::new(RwLock::new(key_range.to_owned()));
+                let key_range = Arc::new(key_range.to_owned());
                 let read_only_memtables = Arc::new(read_only_memtables);
                 let gc_table = Arc::new(RwLock::new(active_memtable.to_owned()));
                 let gc_log = Arc::new(RwLock::new(vlog.to_owned()));
                 let flusher = Flusher::new(
                     read_only_memtables.clone(),
                     buckets.clone(),
-                    filters.clone(),
                     key_range.clone(),
                 );
                 let gc_updated_entries = Arc::new(RwLock::new(SkipMap::new()));
@@ -181,7 +177,6 @@ impl DataStore<'static, Key> {
                     val_log: vlog,
                     dir,
                     buckets,
-                    filters,
                     key_range,
                     meta,
                     flusher,
@@ -214,7 +209,7 @@ impl DataStore<'static, Key> {
                     flush_stream: HashSet::new(),
                 })
             }
-            Err(err) => Err(MemTableRecoveryError(Box::new(err))),
+            Err(err) => Err(MemTableRecovery(Box::new(err))),
         }
     }
 
@@ -297,16 +292,14 @@ impl DataStore<'static, Key> {
         let buckets = BucketMap::new(buckets_path).await?;
         let (flush_signal_tx, flush_signal_rx) = broadcast(DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE);
         let read_only_memtables = SkipMap::new();
-        let filters = Arc::new(RwLock::new(Vec::new()));
         let buckets = Arc::new(RwLock::new(buckets.to_owned()));
-        let key_range = Arc::new(RwLock::new(key_range));
+        let key_range = Arc::new(key_range);
         let read_only_memtables = Arc::new(read_only_memtables);
         let gc_table = Arc::new(RwLock::new(active_memtable.to_owned()));
         let gc_log = Arc::new(RwLock::new(vlog.to_owned()));
         let flusher = Flusher::new(
             read_only_memtables.clone(),
             buckets.clone(),
-            filters.clone(),
             key_range.clone(),
         );
         let gc_updated_entries = Arc::new(RwLock::new(SkipMap::new()));
@@ -314,7 +307,6 @@ impl DataStore<'static, Key> {
             keyspace: DEFAULT_DB_NAME,
             active_memtable,
             val_log: vlog,
-            filters,
             buckets,
             dir,
             key_range,

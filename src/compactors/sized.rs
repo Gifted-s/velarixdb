@@ -1,7 +1,6 @@
-use std::{cmp, collections::HashMap, path::PathBuf, sync::Arc};
+use std::{cmp, collections::HashMap, sync::Arc};
 
 use crossbeam_skiplist::SkipMap;
-use uuid::Uuid;
 
 use super::{
     compact::{Config, MergePointer, WriteTracker},
@@ -12,8 +11,7 @@ use crate::{
     err::Error,
     filter::BloomFilter,
     memtable::Entry,
-    sst::Table,
-    types::{BloomFilterHandle, Bool, BucketMapHandle, CreatedAt, Key, KeyRangeHandle, ValOffset},
+    types::{ Bool, BucketMapHandle, CreatedAt, Key, KeyRangeHandle, ValOffset},
 };
 use crate::{err::Error::*, memtable::SkipMapValue};
 
@@ -26,9 +24,6 @@ use crate::{err::Error::*, memtable::SkipMapValue};
 pub struct SizedTierRunner<'a> {
     /// A thread-safe BucketMap with each bucket mapped to its id
     bucket_map: BucketMapHandle,
-
-    /// A thread-safe vector of sstable bloom filters
-    filters: BloomFilterHandle,
 
     /// A thread-safe hashmap of sstables each mapped to its key range
     key_range: KeyRangeHandle,
@@ -45,14 +40,12 @@ impl<'a> SizedTierRunner<'a> {
     /// creates new instance of `SizedTierRunner`
     pub fn new(
         bucket_map: BucketMapHandle,
-        filters: BloomFilterHandle,
         key_range: KeyRangeHandle,
         config: &'a Config,
     ) -> SizedTierRunner<'a> {
         Self {
             tombstones: HashMap::new(),
             bucket_map,
-            filters,
             key_range,
             config,
         }
@@ -73,7 +66,6 @@ impl<'a> SizedTierRunner<'a> {
         // TODO: Handle this with multiple threads
         loop {
             let buckets: BucketMapHandle = Arc::clone(&self.bucket_map);
-            let filters = Arc::clone(&self.filters);
             let key_range = Arc::clone(&self.key_range);
             // Step 1: Extract imbalanced buckets
             let (imbalanced_buckets, ssts_to_remove) =
@@ -96,64 +88,44 @@ impl<'a> SizedTierRunner<'a> {
                         match insert_res {
                             Ok(sst) => {
                                 if sst.summary.is_none() {
-                                    return Err(TableSummaryIsNoneError);
+                                    return Err(TableSummaryIsNone);
                                 }
                                 if sst.filter.is_none() {
                                     return Err(FilterNotProvidedForFlush);
                                 }
                                 // IMPORTANT: Don't keep sst entries in memory
                                 sst.entries.clear();
-                                // Step 4 Store Filter in Filters Vec
-                                filters.write().await.push(sst.filter.to_owned().unwrap());
                                 let summary = sst.summary.clone().unwrap();
                                 // Step 5 Store sst key range
-                                key_range.write().await.set(
-                                    sst.dir.to_owned(),
-                                    summary.smallest_key,
-                                    summary.biggest_key,
-                                    sst,
-                                );
+                                key_range
+                                    .set(sst.dir.to_owned(), summary.smallest_key, summary.biggest_key, sst)
+                                    .await;
                                 tracker.actual += 1;
                             }
                             Err(err) => {
-                                // Step 6 (Optional): Trigger recovery in case compaction failed at any point
-                                // Ensure filters are restored to the previous state
-                                // Remove merged sstables written to disk so far to prevent stale data
-                                while tracker.actual > 0 {
-                                    if let Some(filter) = filters.write().await.pop() {
-                                        let sst_dir = filter.get_sst_dir().to_owned();
-                                        if let Err(err) = tokio::fs::remove_dir_all(sst_dir.to_owned()).await {
-                                            log::error!("{}", CompactionFailed(Box::new(DirDeleteError(err))));
-                                            tracker.actual -= 1;
-                                            continue;
-                                        }
-                                        key_range.write().await.remove(sst_dir.to_owned());
-                                    }
-                                    tracker.actual -= 1;
-                                }
                                 return Err(CompactionFailed(Box::new(err)));
                             }
                         }
                     }
 
                     if tracker.expected == tracker.actual {
-                        // Step 7:  Delete the sstables that we already merged from their previous buckets and update bloom filters
+                        // Step 6:  Delete the sstables that we already merged from their previous buckets and update bloom filters
                         let filters_updated = self
-                            .clean_up_after_compaction(buckets, &ssts_to_remove.clone(), filters, key_range)
+                            .clean_up_after_compaction(buckets, &ssts_to_remove.clone(), key_range)
                             .await;
                         match filters_updated {
                             Ok(None) => {
                                 return Err(Error::CompactionPartiallyFailed(Box::new(
-                                    CompactionCleanupPartialError,
+                                    CompactionCleanupPartial,
                                 )));
                             }
                             Err(err) => {
-                                return Err(Error::CompactionCleanupError(Box::new(err)));
+                                return Err(Error::CompactionCleanup(Box::new(err)));
                             }
                             _ => {}
                         }
                     } else {
-                        log::error!("{}", Error::CannotRemoveObsoleteSSTError)
+                        log::error!("{}", Error::CannotRemoveObsoleteSST)
                     }
                 }
                 Err(err) => return Err(CompactionFailed(Box::new(err))),
@@ -173,46 +145,25 @@ impl<'a> SizedTierRunner<'a> {
         &self,
         buckets: BucketMapHandle,
         ssts_to_delete: &SSTablesToRemove,
-        filters: BloomFilterHandle,
         key_range: KeyRangeHandle,
     ) -> Result<Option<()>, Error> {
-        // Remove obsolete keys from keys range
-        ssts_to_delete.iter().for_each(|(_, sstables)| {
-            sstables.iter().for_each(|s| {
-                let range = Arc::clone(&key_range);
-                let path = s.get_data_file_path();
-                tokio::spawn(async move {
-                    range.write().await.remove(path);
-                });
-            })
-        });
-
         // if all obsolete sstables were not deleted then don't remove the associated filters
         // although this can lead to redundancy but bloom filters are in-memory and its also less costly
         // in terms of memory
         if buckets.write().await.delete_ssts(ssts_to_delete).await? {
-            // Step 8: Delete the filters associated with the sstables that we already merged
-            self.filter_out_old_filter(filters, ssts_to_delete).await;
+            // Step 7: Remove obsolete keys from keys range
+            ssts_to_delete.iter().for_each(|(_, sstables)| {
+                sstables.iter().for_each(|s| {
+                    let range = Arc::clone(&key_range);
+                    let path = s.get_data_file_path();
+                    tokio::spawn(async move {
+                        range.remove(path).await;
+                    });
+                })
+            });
             return Ok(Some(()));
         }
         Ok(None)
-    }
-
-    /// Remove filters of obsolete sstables from filters vector
-    pub async fn filter_out_old_filter(&self, filters: BloomFilterHandle, ssts_to_delete: &Vec<(Uuid, Vec<Table>)>) {
-        let mut filter_map: HashMap<PathBuf, BloomFilter> = filters
-            .read()
-            .await
-            .iter()
-            .map(|b| (b.sst_dir.to_owned().unwrap(), b.to_owned()))
-            .collect();
-        ssts_to_delete.iter().for_each(|(_, tables)| {
-            tables.iter().for_each(|t| {
-                filter_map.remove(&t.dir);
-            })
-        });
-        filters.write().await.clear();
-        filters.write().await.extend(filter_map.into_values());
     }
 
     /// Merges the sstables in each `Bucket` to form a larger one
@@ -222,7 +173,7 @@ impl<'a> SizedTierRunner<'a> {
     /// # Errors
     ///
     /// Returns error incase an error occured during merge
-    async fn merge_ssts_in_buckets(&mut self, buckets: &Vec<Bucket>) -> Result<Vec<MergedSSTable>, Error> {
+    async fn merge_ssts_in_buckets(&mut self, buckets: &[Bucket]) -> Result<Vec<MergedSSTable>, Error> {
         let mut merged_ssts = Vec::new();
         for bucket in buckets.iter() {
             let mut hotness = 0;
@@ -336,7 +287,7 @@ impl<'a> SizedTierRunner<'a> {
     }
 
     /// Checks if an entry has been deleted or not
-    /// 
+    ///
     /// Deleted entries are discoverd using the tombstones hashmap
     /// and prevented from being inserted
     ///

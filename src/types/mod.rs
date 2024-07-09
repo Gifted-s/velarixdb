@@ -1,6 +1,5 @@
 use crate::{
     bucket::BucketMap,
-    filter::BloomFilter,
     key_range::KeyRange,
     memtable::{MemTable, SkipMapValue},
 };
@@ -43,11 +42,8 @@ pub type FlushReceiver = async_broadcast::Receiver<FlushSignal>;
 /// Thread-safe BucketMap
 pub type BucketMapHandle = Arc<RwLock<BucketMap>>;
 
-/// Thread-safe vector of BloomFilters
-pub type BloomFilterHandle = Arc<RwLock<Vec<BloomFilter>>>;
-
 /// Thread-safe KeyRange type
-pub type KeyRangeHandle = Arc<RwLock<KeyRange>>;
+pub type KeyRangeHandle = Arc<KeyRange>;
 
 /// Represents read-only MemTables
 pub type ImmutableMemTables<K> = Arc<SkipMap<K, Arc<MemTable<K>>>>;

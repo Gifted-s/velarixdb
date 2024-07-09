@@ -34,7 +34,7 @@ mod tests {
         assert!(is_valid_keyspace_name("valid_keyspace-123"));
 
         // Valid but maximum length keyspace name
-        let max_length_name: String = "a".repeat(MAX_KEY_SPACE_SIZE as usize);
+        let max_length_name: String = "a".repeat(MAX_KEY_SPACE_SIZE);
         assert!(is_valid_keyspace_name(&max_length_name));
     }
 
@@ -44,7 +44,7 @@ mod tests {
         assert!(!is_valid_keyspace_name(""));
 
         // Keyspace name too long
-        let too_long_name: String = "a".repeat((MAX_KEY_SPACE_SIZE + 1) as usize);
+        let too_long_name: String = "a".repeat(MAX_KEY_SPACE_SIZE + 1);
         assert!(!is_valid_keyspace_name(&too_long_name));
 
         // Keyspace name with invalid characters

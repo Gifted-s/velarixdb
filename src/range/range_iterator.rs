@@ -64,12 +64,9 @@ impl<'a> RangeIterator<'a> {
                 if self.current_is_at_last_key() {
                     return None;
                 }
-                match self.prefetch_entries().await {
-                    Err(err) => {
-                        error!("{}", Error::RangeScanError(Box::new(err)));
-                        return None;
-                    }
-                    _ => {}
+                if let Err(err) = self.prefetch_entries().await {
+                    error!("{}", Error::RangeScan(Box::new(err)));
+                    return None;
                 }
             }
             let entry = self.current_entry();
@@ -96,18 +93,17 @@ impl<'a> RangeIterator<'a> {
     }
 
     pub async fn prefetch_entries(&mut self) -> Result<(), Error> {
-        let keys: Vec<Entry<Key, ValOffset>>;
-        if self.current + self.prefetch_entries_size <= self.keys.len() {
-            keys = self.keys[self.current..self.current + self.prefetch_entries_size].to_vec();
+        let keys: Vec<Entry<Key, ValOffset>> = if self.current + self.prefetch_entries_size <= self.keys.len() {
+            self.keys[self.current..self.current + self.prefetch_entries_size].to_vec()
         } else {
-            keys = self.keys[self.current..].to_vec();
-        }
+            self.keys[self.current..].to_vec()
+        };
         let entries = self.fetch_entries_in_parralel(&keys).await;
         match entries {
             Ok(e) => {
                 self.prefetch_entries.extend(e);
                 Ok(())
-            },
+            }
             Err(err) => Err(err),
         }
     }
@@ -138,9 +134,7 @@ impl<'a> RangeIterator<'a> {
                 match entry_from_vlog {
                     Ok(val_opt) => match val_opt {
                         Some((val, is_deleted)) => Ok((entry.key, val, is_deleted)),
-                        None => {
-                            Err(Error::KeyNotFoundInValueLogError)
-                        }
+                        None => Err(Error::KeyNotFoundInValueLog),
                     },
                     Err(err) => Err(err),
                 }

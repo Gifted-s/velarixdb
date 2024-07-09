@@ -121,7 +121,7 @@ impl Block {
         let entry_size = key.as_ref().len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
 
         if self.is_full(entry_size) {
-            return Err(Error::BlockIsFullError);
+            return Err(Error::BlockIsFull);
         }
 
         let entry = BlockEntry {
@@ -186,7 +186,7 @@ impl Block {
 
         entry_vec.push(entry.is_tombstone as u8);
         if entry_len != entry_vec.len() {
-            return Err(SerializationError("Invalid input"));
+            return Err(Serialization("Invalid input"));
         }
 
         Ok(entry_vec)
@@ -237,7 +237,7 @@ mod tests {
 
         let res = block.set_entry(
             key.len() as u32,
-            key.to_owned(),
+            &key,
             value_offset,
             creation_date,
             is_tombstone,
@@ -288,7 +288,7 @@ mod tests {
 
         let res = block.set_entry(
             key.len() as u32,
-            key.to_owned(),
+            &key,
             value_offset,
             creation_date,
             is_tombstone,
@@ -327,7 +327,7 @@ mod tests {
 
         let res = block.set_entry(
             key.len() as u32,
-            key.to_owned(),
+            &key,
             value_offset,
             creation_date,
             is_tombstone,
@@ -361,7 +361,7 @@ mod tests {
             block
                 .set_entry(
                     key.len() as u32,
-                    key.to_owned(),
+                    &key,
                     value_offset,
                     creation_date,
                     is_tombstone,
@@ -372,7 +372,7 @@ mod tests {
         // Attempt to set a new entry, which should result in an error
         let res = block.set_entry(
             key.len() as u32,
-            key.to_owned(),
+            &key,
             value_offset,
             creation_date,
             is_tombstone,

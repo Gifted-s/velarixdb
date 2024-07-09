@@ -1,7 +1,8 @@
 use crate::bucket::InsertableToBucket;
-use crate::types::{BloomFilterHandle, Bool, BucketMapHandle, FlushReceiver, KeyRangeHandle};
+use crate::types::{Bool, BucketMapHandle, FlushReceiver, KeyRangeHandle};
 use crate::{err::Error, filter::BloomFilter};
 use std::sync::Arc;
+use std::time;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
 use Error::*;
@@ -14,7 +15,7 @@ use Error::*;
 ///   These expired tombstones are removed entirely during compaction, freeing up disk space.
 ///
 /// - **Unexpired Tombstones**: If a tombstone is not expired, it means the data it shadows might still be relevant in other tiers.
-///   In this case, VikingsDB keeps both the tombstone and the data in the new SSTable. This ensures consistency across tiers and allows for repairs if needed.
+///   In this case, velarixDB keeps both the tombstone and the data in the new SSTable. This ensures consistency across tiers and allows for repairs if needed.
 ///
 /// Currently, only the Sized-Tier Compaction Strategy (STCS) is supported. However, support for Leveled Compaction (LCS), Time-Window Compaction (TWCS), and Unified Compaction (UCS) strategies is planned.
 #[derive(Debug, Clone)]
@@ -55,6 +56,7 @@ pub struct Config {
     pub(crate) filter_false_positive: f64,
 }
 impl Config {
+    #![allow(clippy::too_many_arguments)]
     pub fn new(
         use_ttl: Bool,
         entry_ttl: std::time::Duration,
@@ -81,9 +83,9 @@ impl Config {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Strategy {
     STCS,
-    LCS, // TODO
-    TCS, // TODO
-    UCS, // TODO
+    // LCS,  TODO
+    // TCS,  TODO
+    // UCS,  TODO
 }
 
 #[derive(Debug, Clone)]
@@ -128,7 +130,7 @@ impl MergePointer {
     }
 }
 
-/// Merged SSTable stored here 
+/// Merged SSTable stored here
 /// before being flushed to disk
 #[derive(Debug)]
 pub struct MergedSSTable {
@@ -159,14 +161,15 @@ impl MergedSSTable {
 }
 
 impl Compactor {
+    #![allow(clippy::too_many_arguments)]
     // Creates new `Compactor`
     pub fn new(
         use_ttl: Bool,
-        entry_ttl: std::time::Duration,
-        tombstone_ttl: std::time::Duration,
-        background_interval: std::time::Duration,
-        flush_listener_interval: std::time::Duration,
-        tombstone_compaction_interval: std::time::Duration,
+        entry_ttl: time::Duration,
+        tombstone_ttl: time::Duration,
+        background_interval: time::Duration,
+        flush_listener_interval: time::Duration,
+        tombstone_compaction_interval: time::Duration,
         strategy: Strategy,
         reason: CompactionReason,
         filter_false_positive: f64,
@@ -192,7 +195,6 @@ impl Compactor {
     pub fn tombstone_compaction_condition_background_checker(
         &self,
         bucket_map: BucketMapHandle,
-        filter: BloomFilterHandle,
         key_range: KeyRangeHandle,
     ) {
         let cfg = self.config.to_owned();
@@ -210,7 +212,6 @@ impl Compactor {
         &self,
         flush_rx: FlushReceiver,
         bucket_map: BucketMapHandle,
-        filter: BloomFilterHandle,
         key_range: KeyRangeHandle,
     ) {
         let mut rx = flush_rx.clone();
@@ -226,10 +227,10 @@ impl Compactor {
                         drop(state);
                         match err {
                             async_broadcast::TryRecvError::Overflowed(_) => {
-                                log::error!("{}", FlushSignalChannelOverflowError)
+                                log::error!("{}", FlushSignalChannelOverflow)
                             }
                             async_broadcast::TryRecvError::Closed => {
-                                log::error!("{}", FlushSignalChannelClosedError)
+                                log::error!("{}", FlushSignalChannelClosed)
                             }
                             async_broadcast::TryRecvError::Empty => {}
                         }
@@ -237,13 +238,8 @@ impl Compactor {
                     }
                     *state = CompState::Active;
                     drop(state);
-                    if let Err(err) = Compactor::handle_compaction(
-                        Arc::clone(&bucket_map),
-                        Arc::clone(&filter),
-                        Arc::clone(&key_range),
-                        &cfg,
-                    )
-                    .await
+                    if let Err(err) =
+                        Compactor::handle_compaction(Arc::clone(&bucket_map), Arc::clone(&key_range), &cfg).await
                     {
                         log::info!("{}", Error::CompactionFailed(Box::new(err)));
                         continue;
@@ -257,12 +253,7 @@ impl Compactor {
     }
 
     /// Background compaction runner for maintenance
-    pub fn start_periodic_background_compaction(
-        &self,
-        buckets: BucketMapHandle,
-        filter: BloomFilterHandle,
-        key_range: KeyRangeHandle,
-    ) {
+    pub fn spawn_compaction_worker(&self, buckets: BucketMapHandle, key_range: KeyRangeHandle) {
         let cfg = self.config.to_owned();
         let comp_state = Arc::clone(&self.is_active);
         tokio::spawn(async move {
@@ -272,13 +263,8 @@ impl Compactor {
                 if let CompState::Sleep = *state {
                     *state = CompState::Active;
                     drop(state);
-                    if let Err(err) = Compactor::handle_compaction(
-                        Arc::clone(&buckets),
-                        Arc::clone(&filter),
-                        Arc::clone(&key_range),
-                        &cfg,
-                    )
-                    .await
+                    if let Err(err) =
+                        Compactor::handle_compaction(Arc::clone(&buckets), Arc::clone(&key_range), &cfg).await
                     {
                         log::info!("{}", Error::CompactionFailed(Box::new(err)))
                     }
@@ -291,32 +277,15 @@ impl Compactor {
 
     pub async fn handle_compaction(
         buckets: BucketMapHandle,
-        filter: BloomFilterHandle,
         key_range: KeyRangeHandle,
         cfg: &Config,
     ) -> Result<(), Error> {
         match cfg.strategy {
             Strategy::STCS => {
-                let mut runner = super::sized::SizedTierRunner::new(
-                    Arc::clone(&buckets),
-                    Arc::clone(&filter),
-                    Arc::clone(&key_range),
-                    cfg,
-                );
+                let mut runner = super::sized::SizedTierRunner::new(Arc::clone(&buckets), Arc::clone(&key_range), cfg);
                 runner.run_compaction().await
             }
-            Strategy::LCS => {
-                log::info!("LCS not curently supported, try SCS instead");
-                Ok(())
-            }
-            Strategy::TCS => {
-                log::info!("TCS not curently supported, try SCS instead");
-                Ok(())
-            }
-            Strategy::UCS => {
-                log::info!("UCS not curently supported, try SCS instead");
-                Ok(())
-            }
+            // LCS, UCS and TWS will be added later
         }
     }
 

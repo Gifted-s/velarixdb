@@ -5,46 +5,46 @@ use thiserror::Error;
 #[non_exhaustive]
 pub enum Error {
     #[error("Failed to sync writes to file : {error}")]
-    FileSyncError { error: io::Error },
+    FileSync { error: io::Error },
 
     #[error("Failed to create file: `{path}`: {error}")]
-    FileCreationError { path: PathBuf, error: io::Error },
+    FileCreation { path: PathBuf, error: io::Error },
 
     #[error("File seek error")]
-    FileSeekError(#[source] io::Error),
+    FileSeek(#[source] io::Error),
 
     #[error("Directory deletion error")]
-    DirDeleteError(#[source] io::Error),
+    DirDelete(#[source] io::Error),
 
     #[error("Filter file path not provided")]
     FilterFilePathNotProvided,
 
     #[error("Filter file open error: path `{0}`")]
-    FilterFileOpenError(PathBuf),
+    FilterFileOpen(PathBuf),
 
     #[error("File deletion error")]
-    FileDeleteError(#[source] io::Error),
+    FileDelete(#[source] io::Error),
 
     #[error("Failed to open file")]
-    FileOpenError { path: PathBuf, error: io::Error },
+    FileOpen { path: PathBuf, error: io::Error },
 
     #[error("Failed to get file metadata")]
-    GetFileMetaDataError(#[source] std::io::Error),
+    GetFileMetaData(#[source] std::io::Error),
 
     #[error("Failed to create directory")]
-    DirCreationError { path: PathBuf, error: io::Error },
+    DirCreation { path: PathBuf, error: io::Error },
 
     #[error("Failed to clear file: `{path}`: {error}")]
-    FileClearError { path: PathBuf, error: io::Error },
+    FileClear { path: PathBuf, error: io::Error },
 
     #[error("Failed to read file `{path}`: {error}")]
-    FileReadError { path: PathBuf, error: io::Error },
+    FileRead { path: PathBuf, error: io::Error },
 
     #[error("Failed to write to file `{path}`: {error}")]
-    FileWriteError { path: PathBuf, error: io::Error },
+    FileWrite{ path: PathBuf, error: io::Error },
 
     #[error("Failed to open directory `{path}`: {error}")]
-    DirOpenError { path: PathBuf, error: io::Error },
+    DirOpen{ path: PathBuf, error: io::Error },
 
     #[error("File read ended unexpectedly")]
     UnexpectedEOF(#[source] io::Error),
@@ -53,25 +53,25 @@ pub enum Error {
     GCErrorAttemptToRemoveUnsyncedEntries,
 
     #[error("Failed to insert sstable to bucket because no insertion condition was met")]
-    ConditionsToInsertToBucketNotMetError,
+    ConditionsToInsertToBucketNotMet,
 
     #[error("Error occured while flushing to disk")]
-    FlushToDiskError {
+    FlushToDisk{
         #[source]
         error: Box<Self>, // Flush to disk can be caused by any of the errors above
     },
 
     #[error("Error occured while inserting entry to memtable value  Key: `{key}` Value: `{value_offset}`")]
-    InsertToMemTableFailedError { key: String, value_offset: usize },
+    InsertToMemTableFailed { key: String, value_offset: usize },
 
     #[error("Error while recovering memtable from value log")]
-    MemTableRecoveryError(#[source] Box<Self>),
+    MemTableRecovery(#[source] Box<Self>),
 
     #[error("Invalid string provided to be parsed to UUID input `{input_string}`: {error}")]
     InvaidUUIDParseString { input_string: String, error: uuid::Error },
 
     #[error("Invalid sstable directory error: `{input_string}`")]
-    InvalidSSTableDirectoryError { input_string: String },
+    InvalidSSTableDirectory { input_string: String },
 
     #[error("Compaction failed reason : {0}")]
     CompactionFailed(Box<Self>),
@@ -80,22 +80,22 @@ pub enum Error {
     CompactionPartiallyFailed(Box<Self>),
 
     #[error("No SSTable contains the searched key")]
-    KeyNotFoundInAnySSTableError,
+    KeyNotFoundInAnySSTable,
 
     #[error("Key found as tombstone in sstable")]
-    KeyFoundAsTombstoneInSSTableError,
+    KeyFoundAsTombstoneInSSTable,
 
     #[error("Key found as tombstone in memtable")]
-    KeyFoundAsTombstoneInMemtableError,
+    KeyFoundAsTombstoneInMemtable,
 
     #[error("Key found as tombstone in value log")]
-    KeyFoundAsTombstoneInValueLogError,
+    KeyFoundAsTombstoneInValueLog,
 
     #[error("Memtable does not contains the searched key")]
     KeyNotFoundInMemTable,
 
     #[error("Key does not exist in value log")]
-    KeyNotFoundInValueLogError,
+    KeyNotFoundInValueLog,
 
     #[error("Key not found, reason: ")]
     KeyNotFound(#[source] Box<Self>),
@@ -107,7 +107,7 @@ pub enum Error {
     TombStoneCheckFailed(String),
 
     #[error("Block is full")]
-    BlockIsFullError,
+    BlockIsFull,
 
     #[error("Filter not provided, needed to flush table to disk")]
     FilterNotProvidedForFlush,
@@ -125,19 +125,19 @@ pub enum Error {
     ValMaxSizeExceeded,
 
     #[error("Filter not found")]
-    FilterNotFoundError,
+    FilterNotFound,
 
     #[error("Error finding biggest key in memtable (None was returned)")]
-    BiggestKeyIndexError,
+    BiggestKeyIndex,
 
     #[error("Error finding lowest key in memtable (None was returned)")]
-    LowestKeyIndexError,
+    LowestKeyIndex,
 
     #[error("SSTable summary field is None")]
-    TableSummaryIsNoneError,
+    TableSummaryIsNone,
 
     #[error("All bloom filters return false for all sstables")]
-    KeyNotFoundByAnyBloomFilterError,
+    KeyNotFoundByAnyBloomFilter,
 
     #[error("Failed to insert to a bucket, reason `{0}`")]
     FailedToInsertToBucket(String),
@@ -148,41 +148,35 @@ pub enum Error {
     #[error("Unsuported OS for garbage collection, err message `{0}`")]
     GCErrorUnsupportedPlatform(String),
 
-    #[error("GC Error `{0}`")]
-    GCError(String),
-
     #[error("Range scan error `{0}`")]
-    RangeScanError(Box<Self>),
+    RangeScan(Box<Self>),
 
     #[error("Flush signal channel was overloaded with signals, please check all signal consumers or try again later")]
-    FlushSignalChannelOverflowError,
+    FlushSignalChannelOverflow,
 
     #[error("GC update channel was overloaded with data, please check all  consumers")]
-    GCUpdateChannelOverflowError,
+    GCUpdateChannelOverflow,
 
     #[error("Flush signal channel has been closed")]
-    FlushSignalChannelClosedError,
+    FlushSignalChannelClosed,
 
     #[error("Serializartion error: {0} ")]
-    SerializationError(&'static str),
-
-    #[error("Flush error: {0} ")]
-    FlushError(Box<Self>),
+    Serialization(&'static str),
 
     #[error("Partial failure, sstable merge was successful but obsolete sstables not deleted  ")]
-    CompactionCleanupPartialError,
+    CompactionCleanupPartial,
 
     #[error("Compaction cleanup failed but sstable merge was successful : {0} ")]
-    CompactionCleanupError(Box<Self>),
+    CompactionCleanup(Box<Self>),
 
     #[error("Cannot remove obsolete sstables from disk because not every merged sstable was written to disk")]
-    CannotRemoveObsoleteSSTError,
+    CannotRemoveObsoleteSST,
 
     #[error("Error, merged sstables has empty entries")]
     MergeSSTContainsZeroEntries,
 
     #[error("Tokio join tasks error")]
-    TokioJoinError,
+    TokioJoin,
 
     #[error("Entries cannot be empty during flush")]
     EntriesCannotBeEmptyDuringFlush,

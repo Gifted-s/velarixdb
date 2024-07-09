@@ -1,7 +1,8 @@
-pub(crate) mod bucket;
-pub use bucket::Bucket;
-pub use bucket::BucketID;
-pub use bucket::BucketMap;
-pub use bucket::ImbalancedBuckets;
-pub use bucket::InsertableToBucket;
-pub use bucket::SSTablesToRemove;
+
+pub(crate) mod bucket_manager;
+pub use bucket_manager::Bucket;
+pub use bucket_manager::BucketID;
+pub use bucket_manager::BucketMap;
+pub use bucket_manager::ImbalancedBuckets;
+pub use bucket_manager::InsertableToBucket;
+pub use bucket_manager::SSTablesToRemove;

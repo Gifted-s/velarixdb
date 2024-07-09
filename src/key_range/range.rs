@@ -18,7 +18,7 @@ pub type SmallestKey = types::Key;
 #[derive(Clone, Debug)]
 pub struct KeyRange {
     /// HashMap to map SSTable directory path to its key range
-    pub key_ranges: HashMap<PathBuf, Range>,
+    pub key_ranges: Arc<RwLock<HashMap<PathBuf, Range>>>,
 
     /// Maps SSTable path to its key range (for sstables
     /// whose filters are just restored yet to be move to
@@ -43,23 +43,30 @@ impl Range {
         }
     }
 }
+impl Default for KeyRange {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 impl KeyRange {
     // Creates new `KeyRange``
     pub fn new() -> Self {
         Self {
-            key_ranges: HashMap::new(),
+            key_ranges: Arc::new(RwLock::new(HashMap::new())),
             restored_ranges: Arc::new(RwLock::new(HashMap::new())),
         }
     }
     /// Maps SSTable path to its key range
-    pub fn set<P: AsRef<Path> + Send + Sync, T: AsRef<[u8]>>(
-        &mut self,
+    pub async fn set<P: AsRef<Path> + Send + Sync, T: AsRef<[u8]>>(
+        &self,
         sst_dir: P,
         smallest_key: T,
         biggest_key: T,
         table: Table,
     ) -> bool {
         self.key_ranges
+            .write()
+            .await
             .insert(
                 sst_dir.as_ref().to_path_buf(),
                 Range::new(smallest_key.as_ref(), biggest_key.as_ref(), table),
@@ -68,8 +75,8 @@ impl KeyRange {
     }
 
     /// Removes an entry from the `key_ranges` hash map
-    pub fn remove<P: AsRef<Path> + Send + Sync>(&mut self, sst_path: P) -> bool {
-        self.key_ranges.remove(sst_path.as_ref()).is_some()
+    pub async fn remove<P: AsRef<Path> + Send + Sync>(&self, sst_path: P) -> bool {
+        self.key_ranges.write().await.remove(sst_path.as_ref()).is_some()
     }
 
     /// Returns `Table`  vector whose last key is greater than the
@@ -86,7 +93,7 @@ impl KeyRange {
         }
 
         let mut restored_range_map: HashMap<PathBuf, Range> = HashMap::new();
-        for (_, range) in self.key_ranges.iter() {
+        for (_, range) in self.key_ranges.read().await.iter() {
             if has_restored_ranges && self.restored_ranges.read().await.contains_key(range.sst.dir.as_path()) {
                 continue;
             }
@@ -99,6 +106,7 @@ impl KeyRange {
                 if range.sst.filter.as_ref().unwrap().sst_dir.is_none() {
                     let mut mut_range = range.to_owned();
                     let mut filter = mut_range.sst.filter.as_ref().unwrap().to_owned();
+
                     filter.recover_meta().await?;
                     filter.sst_dir = Some(mut_range.sst.dir.to_owned());
 
@@ -120,8 +128,9 @@ impl KeyRange {
         }
         if !restored_range_map.is_empty() {
             // store the key ranges with sstables that contains
-            // bloom filters just restored to disk in the restored_ranges map we are not
-            // updating key_ranges immediatlely to prevent a mutable reference on get operations
+            // bloom filters just restored to disk in the restored_ranges map. We are not
+            // updating key_ranges immediatlely to prevent write locks on key_ranges for 
+            // get operations
             let restored_ranges = self.restored_ranges.clone();
             tokio::spawn(async move {
                 *(restored_ranges.write().await) = restored_range_map;
@@ -142,7 +151,10 @@ impl KeyRange {
         let mut filtered_ssts: Vec<Table> = Vec::new();
         let key_ranges = self.restored_ranges.read().await;
         for (_, range) in key_ranges.iter() {
-            if (range.biggest_key.as_slice().cmp(key.as_ref()) == Ordering::Greater || range.biggest_key.as_slice().cmp(key.as_ref()) == Ordering::Equal) && range.sst.filter.as_ref().unwrap().contains(key.as_ref()) {
+            if (range.biggest_key.as_slice().cmp(key.as_ref()) == Ordering::Greater
+                || range.biggest_key.as_slice().cmp(key.as_ref()) == Ordering::Equal)
+                && range.sst.filter.as_ref().unwrap().contains(key.as_ref())
+            {
                 filtered_ssts.push(range.sst.to_owned())
             }
         }
@@ -151,11 +163,11 @@ impl KeyRange {
 
     /// Moves entries in `restored_ranges` with sstables whose filters are just restored
     /// to `key_ranges`
-    pub async fn update_key_range(&mut self) {
+    pub async fn update_key_range(&self) {
         let restored_ranges = self.restored_ranges.read().await;
         if !restored_ranges.is_empty() {
             for (path, range) in restored_ranges.iter() {
-                self.key_ranges.insert(path.to_owned(), range.to_owned());
+                self.key_ranges.write().await.insert(path.to_owned(), range.to_owned());
             }
             drop(restored_ranges);
             self.restored_ranges.write().await.clear();
@@ -163,8 +175,10 @@ impl KeyRange {
     }
 
     /// Returns SSTables whose keys overlap with the key range supplied
-    pub fn range_scan<T: AsRef<[u8]>>(&self, start_key: T, end_key: T) -> Vec<&Range> {
+    pub async fn range_scan<T: AsRef<[u8]>>(&self, start_key: T, end_key: T) -> Vec<Range> {
         self.key_ranges
+            .read()
+            .await
             .iter()
             .filter(|(_, range)| {
                 // Check minimum range
@@ -175,7 +189,7 @@ impl KeyRange {
                     || (range.biggest_key.as_slice().cmp(end_key.as_ref()) == Ordering::Greater
                         || range.biggest_key.as_slice().cmp(end_key.as_ref()) == Ordering::Equal)
             })
-            .map(|(_, path)| path)
+            .map(|(_, path)| path.to_owned())
             .collect()
     }
 }
