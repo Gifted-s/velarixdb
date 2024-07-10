@@ -1,5 +1,5 @@
-#[cfg(test)]
-mod workload;
+mod bucket_test;
 mod gc_test;
 mod store_test;
-mod bucket_test;
+#[cfg(test)]
+mod workload;

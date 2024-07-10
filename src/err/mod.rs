@@ -41,10 +41,10 @@ pub enum Error {
     FileRead { path: PathBuf, error: io::Error },
 
     #[error("Failed to write to file `{path}`: {error}")]
-    FileWrite{ path: PathBuf, error: io::Error },
+    FileWrite { path: PathBuf, error: io::Error },
 
     #[error("Failed to open directory `{path}`: {error}")]
-    DirOpen{ path: PathBuf, error: io::Error },
+    DirOpen { path: PathBuf, error: io::Error },
 
     #[error("File read ended unexpectedly")]
     UnexpectedEOF(#[source] io::Error),
@@ -56,7 +56,7 @@ pub enum Error {
     ConditionsToInsertToBucketNotMet,
 
     #[error("Error occured while flushing to disk")]
-    FlushToDisk{
+    FlushToDisk {
         #[source]
         error: Box<Self>, // Flush to disk can be caused by any of the errors above
     },

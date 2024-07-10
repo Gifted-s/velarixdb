@@ -126,9 +126,7 @@ mod tests {
                             node: FileNode {
                                 file_path: sst_contructor[idx].data_path.to_owned(),
                                 file: Arc::new(RwLock::new(
-                                    File::open(sst_contructor[idx].data_path.to_owned())
-                                        .await
-                                        .unwrap(),
+                                    File::open(sst_contructor[idx].data_path.to_owned()).await.unwrap(),
                                 )),
                                 file_type: FileType::Data,
                             },
@@ -140,9 +138,7 @@ mod tests {
                             node: FileNode {
                                 file_path: sst_contructor[idx].index_path.to_owned(),
                                 file: Arc::new(RwLock::new(
-                                    File::open(sst_contructor[idx].index_path.to_owned())
-                                        .await
-                                        .unwrap(),
+                                    File::open(sst_contructor[idx].index_path.to_owned()).await.unwrap(),
                                 )),
                                 file_type: FileType::Index,
                             },
@@ -287,7 +283,7 @@ mod tests {
     #[tokio::test]
     async fn table_fits_into_bucket() {
         let root = tempdir().unwrap();
-        let path =root.path().join(".");
+        let path = root.path().join(".");
         let mut new_bucket = Bucket::new(path.to_owned()).await.unwrap();
         let sst_sample = SSTContructor::generate_ssts(2).await;
         for s in sst_sample {
@@ -438,13 +434,13 @@ mod tests {
         new_bucket1.sstables.write().await.push(sst_samples[0].to_owned());
         bucket_map.buckets.insert(new_bucket1.id, new_bucket1);
         let is_balanced = bucket_map.is_balanced().await;
-        assert!(is_balanced); 
+        assert!(is_balanced);
     }
 
     #[tokio::test]
     async fn table_insert_to_appropriate_bucket() {
         let root = tempdir().unwrap();
-        let path =root.path().join(".");
+        let path = root.path().join(".");
         let mut bucket_map = BucketMap::new(path.to_owned()).await.unwrap();
         let false_pos = 0.1;
         let mut sst_within_size_range = SSTContructor::generate_ssts(1).await[0].to_owned();
@@ -477,7 +473,7 @@ mod tests {
     #[tokio::test]
     async fn test_delete_sstables() {
         let root = tempdir().unwrap();
-        let path =root.path().join(".");
+        let path = root.path().join(".");
         let new_bucket1 = Bucket::new(path.to_owned()).await.unwrap();
         let sst_count = 6;
         let sst_samples = SSTContructor::generate_ssts(sst_count).await;

@@ -5,7 +5,6 @@ extern crate libc;
 extern crate nix;
 use crate::consts::{TAIL_ENTRY_KEY, TOMB_STONE_MARKER};
 use crate::err::Error;
-use crate::fs::{FileAsync, FileNode};
 use crate::index::Index;
 use crate::memtable::{Entry, MemTable, SkipMapValue, K};
 use crate::sst::Table;
@@ -361,24 +360,35 @@ impl GC {
     ///
     /// Returns error in case punch failed
     #[allow(dead_code)] // will show unused on non-linux environment
-    pub(crate) async fn punch_holes<P: AsRef<Path>>(
+    pub(crate) async fn punch_holes<P: AsRef<Path> + std::marker::Send + 'static>(
         file_path: P,
         offset: off_t,
         length: off_t,
     ) -> std::result::Result<(), Error> {
-        let file = FileNode::open(file_path.as_ref()).await?;
-        let fd = file.as_raw_fd();
-        unsafe {
-            let result = fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, offset, length);
-            // 0 return means the punch was successful
-            if result == 0 {
-                Ok(())
-            } else {
-                Err(Error::GCErrorFailedToPunchHoleInVlogFile(
-                    std::io::Error::last_os_error(),
-                ))
+        let punch_handle = tokio::task::spawn_blocking(move || {
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&file_path)
+                .map_err(|err| Error::FileOpen {
+                    path: file_path.as_ref().to_path_buf(),
+                    error: err,
+                })?;
+
+            let fd = file.as_raw_fd();
+            unsafe {
+                let result = fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, offset, length);
+                // 0 return means the punch was successful
+                if result == 0 {
+                    Ok(())
+                } else {
+                    Err(Error::GCErrorFailedToPunchHoleInVlogFile(
+                        std::io::Error::last_os_error(),
+                    ))
+                }
             }
-        }
+        });
+        punch_handle.await.unwrap()
     }
 
     /// Inserts valid entries to GC table
@@ -509,6 +519,7 @@ impl GC {
         offset: ValOffset,
         creation_at: CreatedAt,
     ) -> Result<(Value, CreatedAt), Error> {
+        println!("Here we are");
         let res = val_log.read().await.get(offset).await?;
         if let Some((value, is_tombstone)) = res {
             if is_tombstone {

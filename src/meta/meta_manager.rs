@@ -65,13 +65,17 @@ impl Meta {
     pub fn set_head(&mut self, head: usize) {
         self.v_log_head = head;
     }
+    /// Sets `Meta` `v_log_tail` field
+    pub fn set_tail(&mut self, tail: usize) {
+        self.v_log_tail = tail;
+    }
     /// Updates `last_modified` field
     pub fn update_last_modified(&mut self) {
         self.last_modified = Utc::now();
     }
 
     /// Recovers `Meta` from disk
-    /// 
+    ///
     /// # Errors
     ///
     /// Returns IO error in case it occurs

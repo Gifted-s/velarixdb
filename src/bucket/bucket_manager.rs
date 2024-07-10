@@ -28,7 +28,7 @@ pub type BucketID = Uuid;
 /// Alias for bucket average size
 pub type AvgSize = usize;
 
-/// Handle Buckets 
+/// Handle Buckets
 #[derive(Debug, Clone)]
 pub struct BucketMap {
     pub dir: PathBuf,
@@ -76,8 +76,8 @@ impl Bucket {
 
     /// Creates `Bucket` from the passed in variables
     ///
-    /// Returns Ok(Bucket) 
-    /// 
+    /// Returns Ok(Bucket)
+    ///
     /// # Errors
     ///
     /// Returns error, if an IO error occured.
@@ -114,10 +114,7 @@ impl Bucket {
         let sst = sstables;
         let fetch_files_meta = sst.iter().map(|s| tokio::spawn(fs::metadata(s.data_file.path.clone())));
         for meta_task in fetch_files_meta {
-            let meta_data = meta_task
-                .await
-                .map_err(|err| GetFileMetaData(err.into()))?
-                .unwrap();
+            let meta_data = meta_task.await.map_err(|err| GetFileMetaData(err.into()))?.unwrap();
             all_sstable_size += meta_data.len() as usize;
         }
         Ok(all_sstable_size / sst.len() as u64 as usize)

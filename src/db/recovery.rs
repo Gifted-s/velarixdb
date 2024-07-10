@@ -121,10 +121,15 @@ impl DataStore<'static, Key> {
                 table.summary = Some(summary.to_owned());
 
                 // store bloomfilter metadata in table
-                let new_filter = BloomFilter { file_path: Some(filter_file_path), ..Default::default() };
+                let new_filter = BloomFilter {
+                    file_path: Some(filter_file_path),
+                    ..Default::default()
+                };
                 table.filter = Some(new_filter);
 
-                key_range.set(sst_dir.path(), summary.smallest_key, summary.biggest_key, table).await;
+                key_range
+                    .set(sst_dir.path(), summary.smallest_key, summary.biggest_key, table)
+                    .await;
             }
         }
         let mut buckets_map = BucketMap::new(buckets_path.clone()).await?;
@@ -165,11 +170,7 @@ impl DataStore<'static, Key> {
                 let read_only_memtables = Arc::new(read_only_memtables);
                 let gc_table = Arc::new(RwLock::new(active_memtable.to_owned()));
                 let gc_log = Arc::new(RwLock::new(vlog.to_owned()));
-                let flusher = Flusher::new(
-                    read_only_memtables.clone(),
-                    buckets.clone(),
-                    key_range.clone(),
-                );
+                let flusher = Flusher::new(read_only_memtables.clone(), buckets.clone(), key_range.clone());
                 let gc_updated_entries = Arc::new(RwLock::new(SkipMap::new()));
                 Ok(DataStore {
                     keyspace: DEFAULT_DB_NAME,
@@ -240,10 +241,7 @@ impl DataStore<'static, Key> {
                 if active_memtable.is_full(e.key.len()) {
                     // Make memtable read only
                     active_memtable.read_only = true;
-                    read_only_memtables.insert(
-                        MemTable::generate_table_id(),
-                        Arc::new(active_memtable.to_owned()),
-                    );
+                    read_only_memtables.insert(MemTable::generate_table_id(), Arc::new(active_memtable.to_owned()));
                     active_memtable =
                         MemTable::with_specified_capacity_and_rate(size_unit, capacity, false_positive_rate);
                 }
@@ -297,11 +295,7 @@ impl DataStore<'static, Key> {
         let read_only_memtables = Arc::new(read_only_memtables);
         let gc_table = Arc::new(RwLock::new(active_memtable.to_owned()));
         let gc_log = Arc::new(RwLock::new(vlog.to_owned()));
-        let flusher = Flusher::new(
-            read_only_memtables.clone(),
-            buckets.clone(),
-            key_range.clone(),
-        );
+        let flusher = Flusher::new(read_only_memtables.clone(), buckets.clone(), key_range.clone());
         let gc_updated_entries = Arc::new(RwLock::new(SkipMap::new()));
         Ok(DataStore {
             keyspace: DEFAULT_DB_NAME,

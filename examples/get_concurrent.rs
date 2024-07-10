@@ -34,8 +34,6 @@ async fn main() {
         assert!(tokio_res.as_ref().unwrap().is_ok());
     }
 
-
-
     // Read entries concurently
     let reads = entries.keys().map(|k| {
         let store_inner = Arc::clone(&store_ref);

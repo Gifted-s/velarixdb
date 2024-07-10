@@ -436,38 +436,30 @@ impl DataStore<'static, Key> {
 
     pub async fn get<T: AsRef<[u8]>>(&self, key: T) -> Result<Option<UserEntry>, crate::err::Error> {
         self.validate_size(key.as_ref(), None::<T>)?;
-        let gc_entries_reader = self.gc_updated_entries.read().await;
-        if !gc_entries_reader.is_empty() {
-            let res = gc_entries_reader.get(key.as_ref());
-            if res.is_some() {
-                let value = res.to_owned().unwrap().value().to_owned();
-                if value.is_tombstone {
-                    return Ok(None);
-                }
-                return self.get_value_from_vlog(value.val_offset, value.created_at).await;
-            }
+
+        if let Some(val) = self.search_gc_entries(key.as_ref()).await? {
+            return Ok(Some(val));
         }
-        drop(gc_entries_reader);
+
         let mut offset = VLOG_START_OFFSET;
         let mut insert_time = util::default_datetime();
         let lowest_insert_time = util::default_datetime();
-        if let Some(value) = self.active_memtable.get(key.as_ref()) {
-            if value.is_tombstone {
+        if let Some(val) = self.active_memtable.get(key.as_ref()) {
+            if val.is_tombstone {
                 return Ok(None);
             }
-            self.get_value_from_vlog(value.val_offset, value.created_at).await
+            self.get_value_from_vlog(val.val_offset, val.created_at).await
         } else {
             let mut is_deleted = false;
             for table in self.read_only_memtables.iter() {
-                if let Some(value) = table.value().get(key.as_ref()) {
-                    if value.created_at > insert_time {
-                        offset = value.val_offset;
-                        insert_time = value.created_at;
-                        is_deleted = value.is_tombstone
+                if let Some(val) = table.value().get(key.as_ref()) {
+                    if val.created_at > insert_time {
+                        offset = val.val_offset;
+                        insert_time = val.created_at;
+                        is_deleted = val.is_tombstone
                     }
                 }
             }
-
             if self.found_in_table(insert_time, lowest_insert_time) {
                 if is_deleted {
                     return Ok(None);
@@ -483,10 +475,30 @@ impl DataStore<'static, Key> {
         }
     }
 
+    /// Searches for entries from gc yet be synced to active memtable
+    ///
+    ///
+    /// # Errors
+    ///
+    /// Returns error, if IO error occurs
+    async fn search_gc_entries(&self, key: &[u8]) -> Result<Option<UserEntry>, crate::err::Error> {
+        let gc_entries = self.gc_updated_entries.read().await;
+        if !gc_entries.is_empty() {
+            if let Some(e) = gc_entries.get(key) {
+                let val = e.value();
+                if val.is_tombstone {
+                    return Ok(None);
+                }
+                return self.get_value_from_vlog(val.val_offset, val.created_at).await;
+            }
+        }
+        Ok(None)
+    }
+
     /// Removes an entry from the store
     ///
     /// # Examples
-    /// 
+    ///
     /// ```
     /// # use tempfile::tempdir;
     /// use velarixdb::db::DataStore;
@@ -495,13 +507,13 @@ impl DataStore<'static, Key> {
     ///     let root = tempdir().unwrap();
     ///     let path = root.path().join("velarixdb");
     ///     let mut store = DataStore::open("big_tech", path).await.unwrap(); // handle IO error
-    
+
     ///     store.put("apple", "tim cook").await.unwrap(); // handle error
-    
+
     ///     // Update entry
     ///     let success = store.update("apple", "elon musk").await;
     ///     assert!(success.is_ok());
-    
+
     ///     // Entry should now be updated
     ///     let entry = store.get("apple").await.unwrap(); // handle error
     ///     assert!(entry.is_some());
@@ -514,7 +526,6 @@ impl DataStore<'static, Key> {
         self.get(key.as_ref()).await?;
         self.put(key, value).await
     }
-
 
     /// Validate key and value sizes.
     ///

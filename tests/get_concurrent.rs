@@ -5,7 +5,6 @@ use tempfile::tempdir;
 use tokio::sync::RwLock;
 use velarixdb::db::DataStore;
 
-
 #[tokio::test]
 async fn test_get_concurrent() {
     let root = tempdir().unwrap();
@@ -34,8 +33,6 @@ async fn test_get_concurrent() {
         assert!(tokio_res.is_ok());
         assert!(tokio_res.as_ref().unwrap().is_ok());
     }
-
-
 
     // Read entries concurently
     let reads = entries.keys().map(|k| {
