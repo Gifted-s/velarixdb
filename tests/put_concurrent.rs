@@ -5,7 +5,6 @@ use tempfile::tempdir;
 use tokio::sync::RwLock;
 use velarixdb::db::DataStore;
 
-
 #[tokio::test]
 async fn test_put_concurrent() {
     let root = tempdir().unwrap();

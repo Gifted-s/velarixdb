@@ -129,7 +129,7 @@ impl KeyRange {
         if !restored_range_map.is_empty() {
             // store the key ranges with sstables that contains
             // bloom filters just restored to disk in the restored_ranges map. We are not
-            // updating key_ranges immediatlely to prevent write locks on key_ranges for 
+            // updating key_ranges immediatlely to prevent write locks on key_ranges for
             // get operations
             let restored_ranges = self.restored_ranges.clone();
             tokio::spawn(async move {

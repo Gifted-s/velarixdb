@@ -58,7 +58,7 @@
 //! ```rust
 //!   use velarixdb::db::DataStore;
 //! # use tempfile::tempdir;
-//! 
+//!
 //! #[tokio::main]
 //! async fn main() {
 //!     let root = tempdir().unwrap();
@@ -72,7 +72,7 @@
 //!     store.put("meta", "mark zuckerberg").await;
 //!     store.put("openai", "sam altman").await;
 //!
-//! 
+//!
 //!     let entry1 = store.get("apple").await.unwrap(); // Handle error
 //!     let entry2 = store.get("google").await.unwrap();
 //!     let entry3 = store.get("nvidia").await.unwrap();
@@ -98,7 +98,7 @@
 //! }
 //! ```
 //!
-//! 
+//!
 //! ## Store JSON
 //!
 //! ```rust
@@ -106,7 +106,7 @@
 //! use serde_json;
 //! use velarixdb::db::DataStore;
 //! # use tempfile::tempdir;
-//! 
+//!
 //! #[tokio::main]
 //! async fn main() {
 //!     let root = tempdir().unwrap();

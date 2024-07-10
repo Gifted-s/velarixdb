@@ -11,7 +11,7 @@ use crate::{
     err::Error,
     filter::BloomFilter,
     memtable::Entry,
-    types::{ Bool, BucketMapHandle, CreatedAt, Key, KeyRangeHandle, ValOffset},
+    types::{Bool, BucketMapHandle, CreatedAt, Key, KeyRangeHandle, ValOffset},
 };
 use crate::{err::Error::*, memtable::SkipMapValue};
 
@@ -38,11 +38,7 @@ pub struct SizedTierRunner<'a> {
 
 impl<'a> SizedTierRunner<'a> {
     /// creates new instance of `SizedTierRunner`
-    pub fn new(
-        bucket_map: BucketMapHandle,
-        key_range: KeyRangeHandle,
-        config: &'a Config,
-    ) -> SizedTierRunner<'a> {
+    pub fn new(bucket_map: BucketMapHandle, key_range: KeyRangeHandle, config: &'a Config) -> SizedTierRunner<'a> {
         Self {
             tombstones: HashMap::new(),
             bucket_map,
@@ -115,9 +111,7 @@ impl<'a> SizedTierRunner<'a> {
                             .await;
                         match filters_updated {
                             Ok(None) => {
-                                return Err(Error::CompactionPartiallyFailed(Box::new(
-                                    CompactionCleanupPartial,
-                                )));
+                                return Err(Error::CompactionPartiallyFailed(Box::new(CompactionCleanupPartial)));
                             }
                             Err(err) => {
                                 return Err(Error::CompactionCleanup(Box::new(err)));

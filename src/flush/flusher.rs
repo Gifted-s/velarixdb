@@ -56,7 +56,8 @@ impl Flusher {
         let summary = sst.summary.clone().unwrap();
         flush_data
             .key_range
-            .set(sst.dir.to_owned(), summary.smallest_key, summary.biggest_key, sst).await;
+            .set(sst.dir.to_owned(), summary.smallest_key, summary.biggest_key, sst)
+            .await;
         Ok(())
     }
 

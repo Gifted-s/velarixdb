@@ -1,7 +1,6 @@
 use tempfile::tempdir;
 use velarixdb::db::DataStore;
 
-
 #[tokio::test]
 async fn test_get() {
     let root = tempdir().unwrap();

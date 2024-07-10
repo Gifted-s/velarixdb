@@ -161,8 +161,7 @@ impl BloomFilter {
 
         serialized_data.extend_from_slice(&(self.no_of_hash_func as u32).to_le_bytes());
 
-        serialized_data
-            .extend_from_slice(&AtomicU32::load(&self.no_of_elements, Ordering::Relaxed).to_le_bytes());
+        serialized_data.extend_from_slice(&AtomicU32::load(&self.no_of_elements, Ordering::Relaxed).to_le_bytes());
 
         serialized_data.extend_from_slice(&util::float_to_le_bytes(self.false_positive_rate));
 

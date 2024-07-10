@@ -235,13 +235,7 @@ mod tests {
         let creation_date = Utc::now();
         let is_tombstone: bool = false;
 
-        let res = block.set_entry(
-            key.len() as u32,
-            &key,
-            value_offset,
-            creation_date,
-            is_tombstone,
-        );
+        let res = block.set_entry(key.len() as u32, &key, value_offset, creation_date, is_tombstone);
         // check if we have Error.
         assert!(res.is_ok());
 
@@ -286,13 +280,7 @@ mod tests {
         let creation_date = Utc::now();
         let is_tombstone: bool = false;
 
-        let res = block.set_entry(
-            key.len() as u32,
-            &key,
-            value_offset,
-            creation_date,
-            is_tombstone,
-        );
+        let res = block.set_entry(key.len() as u32, &key, value_offset, creation_date, is_tombstone);
         // check if we have Error.
         assert!(res.is_ok());
         assert_eq!(block.entries.len(), 1);
@@ -325,13 +313,7 @@ mod tests {
         let creation_date = Utc::now();
         let is_tombstone: bool = false;
 
-        let res = block.set_entry(
-            key.len() as u32,
-            &key,
-            value_offset,
-            creation_date,
-            is_tombstone,
-        );
+        let res = block.set_entry(key.len() as u32, &key, value_offset, creation_date, is_tombstone);
         assert!(res.is_ok());
         let entry = block.get_entry(&key);
         assert!(entry.is_some());
@@ -359,24 +341,12 @@ mod tests {
         // Fill the block to its maximum capacity
         while !block.is_full(key.len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8) {
             block
-                .set_entry(
-                    key.len() as u32,
-                    &key,
-                    value_offset,
-                    creation_date,
-                    is_tombstone,
-                )
+                .set_entry(key.len() as u32, &key, value_offset, creation_date, is_tombstone)
                 .unwrap();
         }
 
         // Attempt to set a new entry, which should result in an error
-        let res = block.set_entry(
-            key.len() as u32,
-            &key,
-            value_offset,
-            creation_date,
-            is_tombstone,
-        );
+        let res = block.set_entry(key.len() as u32, &key, value_offset, creation_date, is_tombstone);
         assert!(res.is_err());
         assert_eq!(
             block.get_entry_count(),

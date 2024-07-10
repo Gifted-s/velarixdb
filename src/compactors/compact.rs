@@ -284,8 +284,7 @@ impl Compactor {
             Strategy::STCS => {
                 let mut runner = super::sized::SizedTierRunner::new(Arc::clone(&buckets), Arc::clone(&key_range), cfg);
                 runner.run_compaction().await
-            }
-            // LCS, UCS and TWS will be added later
+            } // LCS, UCS and TWS will be added later
         }
     }
 
