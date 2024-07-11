@@ -1,4 +1,3 @@
-# VelarixDB
 
 <p align="center">
 <img src="/logo.png" height="170">
