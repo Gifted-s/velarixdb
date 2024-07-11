@@ -598,7 +598,7 @@ impl DataStore<'static, Key> {
             }
             return self.get_value_from_vlog(offset, insert_time).await;
         }
-        Err(crate::err::Error::NotFoundInDB)
+        Ok(None)
     }
 
     /// Checks if insert time is greater than the least

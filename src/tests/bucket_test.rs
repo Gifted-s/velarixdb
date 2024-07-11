@@ -157,7 +157,7 @@ mod tests {
     #[tokio::test]
     async fn test_bucket_new() {
         let root = tempdir().unwrap();
-        let path = root.path().join(".");
+        let path = root.path().join("bucket_new");
         let new_bucket = Bucket::new(path.to_owned()).await;
         assert!(new_bucket.is_ok());
         let new_bucket = new_bucket.unwrap();
@@ -172,7 +172,7 @@ mod tests {
     #[tokio::test]
     async fn test_bucket_from_with_empty() {
         let root = tempdir().unwrap();
-        let path = root.path().join(".");
+        let path = root.path().join("bucket_empty");
         let id = Uuid::new_v4();
         let average_size = 0;
         let sstables = Vec::new();
@@ -188,7 +188,7 @@ mod tests {
     #[tokio::test]
     async fn test_bucket_from_with_sstables() {
         let root = tempdir().unwrap();
-        let path = root.path().join(".");
+        let path = root.path().join("bucket_with_sstables");
         let id = Uuid::new_v4();
         let sst_count = 3;
         let sst_samples = SSTContructor::generate_ssts(sst_count).await;
@@ -237,7 +237,7 @@ mod tests {
     #[tokio::test]
     async fn test_sstcount_exceed_threshold() {
         let root = tempdir().unwrap();
-        let path = root.path().join(".");
+        let path = root.path().join("bucket_exceed_threshold");
         let new_bucket = Bucket::new(path.to_owned()).await.unwrap();
         let sst_count = 5;
         let sst_samples = SSTContructor::generate_ssts(sst_count).await;
@@ -254,7 +254,7 @@ mod tests {
     #[tokio::test]
     async fn test_extract_sstable_to_compact() {
         let root = tempdir().unwrap();
-        let path = root.path().join(".");
+        let path = root.path().join("bucket_extract_sstable");
         let new_bucket = Bucket::new(path.to_owned()).await.unwrap();
         let sst_count = 5;
         let sst_samples = SSTContructor::generate_ssts(sst_count).await;
@@ -283,7 +283,7 @@ mod tests {
     #[tokio::test]
     async fn table_fits_into_bucket() {
         let root = tempdir().unwrap();
-        let path = root.path().join(".");
+        let path = root.path().join("bucket_fits");
         let mut new_bucket = Bucket::new(path.to_owned()).await.unwrap();
         let sst_sample = SSTContructor::generate_ssts(2).await;
         for s in sst_sample {
@@ -309,7 +309,7 @@ mod tests {
     #[tokio::test]
     async fn test_bucket_map_new() {
         let root = tempdir().unwrap();
-        let path = root.path().join(".");
+        let path = root.path().join("bucket_map_new");
         let bucket_map = BucketMap::new(path.to_owned()).await;
         assert!(bucket_map.is_ok());
         let bucket_map = bucket_map.unwrap();
@@ -320,7 +320,7 @@ mod tests {
     #[tokio::test]
     async fn test_bucket_map_extract_imbalanced_buckets() {
         let root = tempdir().unwrap();
-        let path = root.path().join(".");
+        let path = root.path().join("imbalanced_bucket");
         let new_bucket1 = Bucket::new(path.to_owned()).await.unwrap();
         let sst_count = 6;
         let sst_samples = SSTContructor::generate_ssts(sst_count).await;
@@ -344,7 +344,7 @@ mod tests {
         }
 
         let root = tempdir().unwrap();
-        let path = root.path().join(".");
+        let path = root.path().join("buket_map_extract");
         let mut bucket_map = BucketMap::new(path.to_owned()).await.unwrap();
         bucket_map.buckets.insert(new_bucket1.id, new_bucket1.to_owned());
         bucket_map.buckets.insert(new_bucket2.id, new_bucket2);
@@ -390,7 +390,7 @@ mod tests {
     #[tokio::test]
     async fn test_bucket_map_is_balanced() {
         let root = tempdir().unwrap();
-        let path = root.path().join(".");
+        let path = root.path().join("bucket_map_is_balanced");
         let new_bucket1 = Bucket::new(path.to_owned()).await.unwrap();
         let sst_count = 6;
         let sst_samples = SSTContructor::generate_ssts(sst_count).await;
@@ -414,7 +414,7 @@ mod tests {
         }
 
         let root = tempdir().unwrap();
-        let path = root.path().join(".");
+        let path = root.path().join("bucket_map_is_balanced");
         let mut bucket_map = BucketMap::new(path.to_owned()).await.unwrap();
         bucket_map.buckets.insert(new_bucket1.id, new_bucket1.to_owned());
         bucket_map.buckets.insert(new_bucket2.id, new_bucket2);
@@ -440,7 +440,7 @@ mod tests {
     #[tokio::test]
     async fn table_insert_to_appropriate_bucket() {
         let root = tempdir().unwrap();
-        let path = root.path().join(".");
+        let path = root.path().join("bucket_map_appropriate_bucket");
         let mut bucket_map = BucketMap::new(path.to_owned()).await.unwrap();
         let false_pos = 0.1;
         let mut sst_within_size_range = SSTContructor::generate_ssts(1).await[0].to_owned();
@@ -473,7 +473,7 @@ mod tests {
     #[tokio::test]
     async fn test_delete_sstables() {
         let root = tempdir().unwrap();
-        let path = root.path().join(".");
+        let path = root.path().join("bucket_map_delete_sstables");
         let new_bucket1 = Bucket::new(path.to_owned()).await.unwrap();
         let sst_count = 6;
         let sst_samples = SSTContructor::generate_ssts(sst_count).await;

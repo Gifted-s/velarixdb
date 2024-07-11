@@ -14,7 +14,7 @@ pub const DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE: usize = 1;
 
 pub const DEFAULT_MAX_WRITE_BUFFER_NUMBER: usize = 2;
 
-pub const DEFAULT_FALSE_POSITIVE_RATE: f64 = 1e-10;
+pub const DEFAULT_FALSE_POSITIVE_RATE: f64 = 1e-200;
 
 pub const VALUE_LOG_DIRECTORY_NAME: &str = "v_log";
 
@@ -51,7 +51,7 @@ pub const WRITE_BUFFER_SIZE: usize = SizeUnit::Kilobytes.as_bytes(50);
 /// 5 days
 pub const DEFAULT_TOMBSTONE_COMPACTION_INTERVAL: Duration = Duration::from_millis(5 * 86400000);
 
-// 1 Hour
+/// 1 Hour
 pub const DEFAULT_COMPACTION_INTERVAL: Duration = Duration::from_millis(1000 * 60 * 60);
 
 /// 5 Min

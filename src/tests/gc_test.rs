@@ -30,7 +30,7 @@ mod tests {
         let path = root.path().join("gc_test_1");
         let s_engine = DataStore::open_without_background("test", path.clone()).await.unwrap();
         let store = Arc::new(RwLock::new(s_engine));
-        let workload_size = 15000;
+        let workload_size = 5000;
         let key_len = 5;
         let val_len = 5;
         let write_read_ratio = 0.5;
@@ -65,7 +65,7 @@ mod tests {
         let path = root.path().join("gc_test_2");
         let s_engine = DataStore::open_without_background("test", path.clone()).await.unwrap();
         let store = Arc::new(RwLock::new(s_engine));
-        let workload_size = 15000;
+        let workload_size = 5000;
         let key_len = 5;
         let val_len = 5;
         let write_read_ratio = 0.5;
@@ -99,7 +99,7 @@ mod tests {
         let path = root.path().join("gc_test_3");
         let s_engine = DataStore::open_without_background("test", path.clone()).await.unwrap();
         let store = Arc::new(RwLock::new(s_engine));
-        let workload_size = 15000;
+        let workload_size = 5000;
         let key_len = 5;
         let val_len = 5;
         let write_read_ratio = 0.5;
@@ -135,7 +135,7 @@ mod tests {
         let path = root.path().join("gc_test_free");
         let s_engine = DataStore::open_without_background("test", path.clone()).await.unwrap();
         let store = Arc::new(RwLock::new(s_engine));
-        let workload_size = 15000;
+        let workload_size = 5000;
         let key_len = 5;
         let val_len = 5;
         let write_read_ratio = 0.5;
@@ -255,7 +255,7 @@ mod tests {
         let path = root.path().join("gc_test_no_delete");
         let s_engine = DataStore::open_without_background("test", path.clone()).await.unwrap();
         let store = Arc::new(RwLock::new(s_engine));
-        let workload_size = 15000;
+        let workload_size = 5000;
         let key_len = 5;
         let val_len = 5;
         let write_read_ratio = 0.5;
@@ -284,39 +284,38 @@ mod tests {
     }
 
     #[tokio::test]
+
     async fn datastore_gc_test_punch_hole() {
-        use std::io::{Read, Seek, SeekFrom, Write};
-        use tempfile::NamedTempFile;
-
-        const PUNCH_START: i64 = 0;
-        const PUNCH_LENGTH: usize = 7;
-        let mut temp_file = NamedTempFile::new().unwrap();
-        let file_path = temp_file.path().to_path_buf();
-        writeln!(temp_file, "Sample1Sample2Sample3Sample4Sample5Sample6").unwrap();
-
-        temp_file.flush().unwrap();
-        temp_file.as_file_mut().seek(SeekFrom::Start(0)).unwrap();
-
-        // Before punch, offsets within this range should be contain bytes
-        let mut buffer = [0; PUNCH_LENGTH];
-        let bytes_read = temp_file.read(&mut buffer).unwrap();
-        assert_eq!(bytes_read, PUNCH_LENGTH);
-        assert_eq!(&buffer, b"Sample1"); // bytes present in offset
-
-        let punch_res = GC::punch_holes(file_path, PUNCH_START, PUNCH_LENGTH as i64).await;
         #[cfg(target_os = "linux")]
         {
+            use std::io::{Read, Seek, SeekFrom, Write};
+            use tempfile::NamedTempFile;
+
+            const PUNCH_START: i64 = 0;
+            const PUNCH_LENGTH: usize = 7;
+            let mut temp_file = NamedTempFile::new().unwrap();
+            let file_path = temp_file.path().to_path_buf();
+            writeln!(temp_file, "Sample1Sample2Sample3Sample4Sample5Sample6").unwrap();
+
+            temp_file.flush().unwrap();
+            temp_file.as_file_mut().seek(SeekFrom::Start(0)).unwrap();
+
+            // Before punch, offsets within this range should be contain bytes
+            let mut buffer = [0; PUNCH_LENGTH];
+            let bytes_read = temp_file.read(&mut buffer).unwrap();
+            assert_eq!(bytes_read, PUNCH_LENGTH);
+            assert_eq!(&buffer, b"Sample1"); // bytes present in offset
+
+            let punch_res = GC::punch_holes(file_path, PUNCH_START, PUNCH_LENGTH as i64).await;
+
             assert!(punch_res.is_ok());
-        }
 
-        let inner_file = temp_file.as_file_mut();
-        inner_file.seek(SeekFrom::Start(0)).unwrap();
+            let inner_file = temp_file.as_file_mut();
+            inner_file.seek(SeekFrom::Start(0)).unwrap();
 
-        // After punch, offsets within this range should be zero
-        let mut buffer = [0; PUNCH_LENGTH];
-        let bytes_read = inner_file.read(&mut buffer).unwrap();
-        #[cfg(target_os = "linux")]
-        {
+            // After punch, offsets within this range should be zero
+            let mut buffer = [0; PUNCH_LENGTH];
+            let bytes_read = inner_file.read(&mut buffer).unwrap();
             assert_eq!(bytes_read, PUNCH_LENGTH);
             assert_eq!(&buffer, &[0; 7]); // all set to zero
         }

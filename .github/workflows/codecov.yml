@@ -1,0 +1,22 @@
+name: Codecov
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+      - name: Install Dependencies
+        run: cargo install cargo-tarpaulin
+      - name: Run Tests with Coverage
+        run: cargo tarpaulin --out Xml
+      - name: Upload Coverage to Codecov
+        uses: codecov/codecov-action@v4.0.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
