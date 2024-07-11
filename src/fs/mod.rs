@@ -452,6 +452,7 @@ impl VLogFs for VLogFileNode {
     }
     async fn get(&self, start_offset: usize) -> Result<Option<(Value, bool)>, Error> {
         let path = &self.node.file_path;
+
         let mut file = self.node.file.write().await;
         file.seek(std::io::SeekFrom::Start((start_offset) as u64))
             .await
@@ -495,6 +496,7 @@ impl VLogFs for VLogFileNode {
         if bytes_read == 0 {
             return Err(FileNode::unexpected_eof());
         }
+
         Ok(Some((value, is_tombstone)))
     }
 

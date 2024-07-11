@@ -519,7 +519,6 @@ impl GC {
         offset: ValOffset,
         creation_at: CreatedAt,
     ) -> Result<(Value, CreatedAt), Error> {
-        
         let res = val_log.read().await.get(offset).await?;
         if let Some((value, is_tombstone)) = res {
             if is_tombstone {

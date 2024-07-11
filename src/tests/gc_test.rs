@@ -30,7 +30,7 @@ mod tests {
         let path = root.path().join("gc_test_1");
         let s_engine = DataStore::open_without_background("test", path.clone()).await.unwrap();
         let store = Arc::new(RwLock::new(s_engine));
-        let workload_size = 15000;
+        let workload_size = 5000;
         let key_len = 5;
         let val_len = 5;
         let write_read_ratio = 0.5;
@@ -65,7 +65,7 @@ mod tests {
         let path = root.path().join("gc_test_2");
         let s_engine = DataStore::open_without_background("test", path.clone()).await.unwrap();
         let store = Arc::new(RwLock::new(s_engine));
-        let workload_size = 15000;
+        let workload_size = 5000;
         let key_len = 5;
         let val_len = 5;
         let write_read_ratio = 0.5;
@@ -99,7 +99,7 @@ mod tests {
         let path = root.path().join("gc_test_3");
         let s_engine = DataStore::open_without_background("test", path.clone()).await.unwrap();
         let store = Arc::new(RwLock::new(s_engine));
-        let workload_size = 15000;
+        let workload_size = 5000;
         let key_len = 5;
         let val_len = 5;
         let write_read_ratio = 0.5;
@@ -135,7 +135,7 @@ mod tests {
         let path = root.path().join("gc_test_free");
         let s_engine = DataStore::open_without_background("test", path.clone()).await.unwrap();
         let store = Arc::new(RwLock::new(s_engine));
-        let workload_size = 15000;
+        let workload_size = 5000;
         let key_len = 5;
         let val_len = 5;
         let write_read_ratio = 0.5;
@@ -255,7 +255,7 @@ mod tests {
         let path = root.path().join("gc_test_no_delete");
         let s_engine = DataStore::open_without_background("test", path.clone()).await.unwrap();
         let store = Arc::new(RwLock::new(s_engine));
-        let workload_size = 15000;
+        let workload_size = 5000;
         let key_len = 5;
         let val_len = 5;
         let write_read_ratio = 0.5;

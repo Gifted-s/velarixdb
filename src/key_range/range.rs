@@ -85,25 +85,28 @@ impl KeyRange {
     /// # Errors
     ///
     /// Returns error in case failure occured
-    pub async fn filter_sstables_by_biggest_key<K: AsRef<[u8]>>(&self, key: K) -> Result<Vec<Table>, Error> {
+    pub async fn filter_sstables_by_biggest_key<K: AsRef<[u8]> + std::fmt::Debug>(
+        &self,
+        key: K,
+    ) -> Result<Vec<Table>, Error> {
         let mut filtered_ssts: Vec<Table> = Vec::new();
         let has_restored_ranges = !self.restored_ranges.read().await.is_empty();
         if has_restored_ranges {
             filtered_ssts = self.check_restored_key_ranges(key.as_ref()).await?;
         }
-
         let mut restored_range_map: HashMap<PathBuf, Range> = HashMap::new();
-        for (_, range) in self.key_ranges.read().await.iter() {
+        let ranger = self.key_ranges.read().await.clone();
+        for (_, range) in ranger.iter() {
             if has_restored_ranges && self.restored_ranges.read().await.contains_key(range.sst.dir.as_path()) {
                 continue;
             }
-            if range.biggest_key.as_slice().cmp(key.as_ref()) == Ordering::Greater
-                || range.biggest_key.as_slice().cmp(key.as_ref()) == Ordering::Equal
-            {
+            let searched_key = key.as_ref().to_vec();
+            if searched_key >= range.smallest_key && searched_key <= range.biggest_key {
                 //  If an sstable does not have a bloom filter then
                 //  it means there has been a crash and we need to restore
                 //  filter from disk using filter metadata stored on sstable
                 if range.sst.filter.as_ref().unwrap().sst_dir.is_none() {
+                    println!("Here we are");
                     let mut mut_range = range.to_owned();
                     let mut filter = mut_range.sst.filter.as_ref().unwrap().to_owned();
 
@@ -121,6 +124,7 @@ impl KeyRange {
                         filtered_ssts.push(mut_range.sst)
                     }
                 }
+
                 if range.sst.filter.as_ref().unwrap().contains(key.as_ref()) {
                     filtered_ssts.push(range.sst.to_owned())
                 }
