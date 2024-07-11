@@ -71,7 +71,7 @@ mod tests {
             let val = e.1.to_owned();
             tokio::spawn(async move {
                 let mut value = store_inner.write().await;
-                return value.put(key, val).await;
+                value.put(key, val).await
             })
         });
 
@@ -82,22 +82,19 @@ mod tests {
             assert!(tokio_res.unwrap().unwrap());
         }
 
-        let reader_str = Arc::clone(&store_ref);
-        let read_tasks = read_workload.keys().map(|e| {
-            let store_inner = Arc::clone(&reader_str);
-            let key = e.to_owned();
-
+        let read_tasks = read_workload.iter().map(|e| {
+            let store_inner = Arc::clone(&store_ref);
+            let key = e.0.to_owned();
             tokio::spawn(async move {
-                let reader = store_inner.read().await;
-                let res = reader.get(key.to_owned()).await;
-                match res {
-                    Ok(entry) => return Ok((key, entry)),
-                    Err(err) => return Err(err),
-                };
+                match store_inner.read().await.get(key.to_owned()).await {
+                    Ok(entry) => Ok((key, entry)),
+                    Err(err) => Err(err),
+                }
             })
         });
 
         let all_results = join_all(read_tasks).await;
+
         for tokio_res in all_results {
             assert!(tokio_res.is_ok());
             assert!(tokio_res.as_ref().unwrap().is_ok());
