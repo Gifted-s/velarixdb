@@ -47,7 +47,6 @@ impl DataStore<'static, Key> {
         mut meta: Meta,
     ) -> Result<DataStore<'static, Key>, Error> {
         let mut recovered_buckets: IndexMap<BucketID, Bucket> = IndexMap::new();
-
         // Get bucket diretories streams
         let mut buckets_stream = open_dir_stream!(buckets_path.as_ref().to_path_buf());
         // for each bucket directory
