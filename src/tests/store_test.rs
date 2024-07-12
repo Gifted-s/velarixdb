@@ -82,9 +82,9 @@ mod tests {
             assert!(tokio_res.unwrap().unwrap());
         }
 
-        let read_tasks = read_workload.iter().map(|e| {
+        let read_tasks = read_workload.keys().map(|e| {
             let store_inner = Arc::clone(&store_ref);
-            let key = e.0.to_owned();
+            let key = e.to_owned();
             tokio::spawn(async move {
                 match store_inner.read().await.get(key.to_owned()).await {
                     Ok(entry) => Ok((key, entry)),

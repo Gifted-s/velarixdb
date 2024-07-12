@@ -412,7 +412,7 @@ impl Summary {
     }
 
     /// Serializes `Summary` to byte vector
-    fn serialize(&self) -> ByteSerializedEntry {
+    pub(crate) fn serialize(&self) -> ByteSerializedEntry {
         let entry_len = SIZE_OF_U32 + SIZE_OF_U32 + self.biggest_key.len() + self.smallest_key.len();
         let mut serialized_data = Vec::with_capacity(entry_len);
 

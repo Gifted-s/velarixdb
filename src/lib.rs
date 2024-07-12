@@ -73,7 +73,7 @@
 //!     store.put("openai", "sam altman").await;
 //!
 //!
-//!     let entry1 = store.get("apple").await.unwrap(); // Handle error
+//!     let entry1 = store.get("apple").await.unwrap(); // handle error
 //!     let entry2 = store.get("google").await.unwrap();
 //!     let entry3 = store.get("nvidia").await.unwrap();
 //!     let entry4 = store.get("microsoft").await.unwrap();
@@ -99,7 +99,7 @@
 //! ```
 //!
 //!
-//! ## Store JSON
+//! ### Store JSON
 //!
 //! ```rust
 //! use serde::{Deserialize, Serialize};

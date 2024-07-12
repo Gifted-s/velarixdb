@@ -225,7 +225,7 @@ impl GC {
                     return Ok(());
                 }
                 let new_tail_offset = vlog.read().await.tail_offset + total_bytes_read;
-                let v_offset = GC::write_tail_to_disk(Arc::clone(&vlog), new_tail_offset).await;
+                let v_offset = GC::write_tail_to_disk(Arc::clone(&vlog), new_tail_offset).await?;
 
                 synced_entries.write().await.push((
                     TAIL_ENTRY_KEY.to_vec(),
@@ -257,7 +257,7 @@ impl GC {
     }
 
     /// Inserts tail entry to value log
-    pub(crate) async fn write_tail_to_disk(vlog: GCLog, new_tail_offset: usize) -> ValOffset {
+    pub(crate) async fn write_tail_to_disk(vlog: GCLog, new_tail_offset: usize) -> Result<ValOffset, Error> {
         vlog.write()
             .await
             .append(
@@ -302,7 +302,7 @@ impl GC {
         vlog: GCLog,
     ) -> Result<(), Error> {
         for (key, value) in valid_entries.to_owned().read().await.iter() {
-            let v_offset = vlog.write().await.append(&key, &value, Utc::now(), false).await;
+            let v_offset = vlog.write().await.append(&key, &value, Utc::now(), false).await?;
             synced_entries
                 .write()
                 .await
@@ -457,7 +457,7 @@ impl GC {
                 GC::get_value_from_vlog(&vlog, offset, insert_time).await
             } else {
                 // Step 3: Check sstables
-                let ssts = &key_range.filter_sstables_by_biggest_key(&key).await?;
+                let ssts = &key_range.filter_sstables_by_key_range(&key).await?;
                 GC::search_key_in_sstables(key, ssts.to_vec(), &vlog).await
             }
         }

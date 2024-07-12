@@ -394,7 +394,7 @@ mod tests {
         let expected_len = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
 
         memtable.insert(&entry);
-        println!("{}", memtable.size);
+       
         assert_eq!(memtable.size, expected_len);
 
         memtable.insert(&entry);
