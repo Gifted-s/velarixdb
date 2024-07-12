@@ -5,7 +5,7 @@
 
 
 [![Tests](https://github.com/Gifted-s/velarixdb/actions/workflows/rust.yml/badge.svg)](https://github.com/Gifted-s/velarixdb/actions/workflows/rust.yml)
-[![codecov](https://codecov.io/gh/Gifted-s/velarixdb/graph/badge.svg?token=01K79PJWQA)](https://codecov.io/gh/Gifted-s/velarixdb)
+[![codecov](https://codecov.io/gh/Gifted-s/velarixdb/branch/ft%2Fcoverage/graph/badge.svg?token=01K79PJWQA)](https://codecov.io/gh/Gifted-s/velarixdb)
 [![Clippy Tests](https://github.com/Gifted-s/bd/actions/workflows/clippy.yml/badge.svg)](https://github.com/Gifted-s/bd/actions/workflows/clippy.yml)
 [![Codecov](https://github.com/Gifted-s/velarixdb/actions/workflows/codecov.yml/badge.svg)](https://github.com/Gifted-s/velarixdb/actions/workflows/codecov.yml)
 [![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](code_of_conduct.md)
