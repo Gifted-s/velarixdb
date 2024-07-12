@@ -208,8 +208,7 @@ mod tests {
         for e in read_workload.iter() {
             let res = store.get(&e.key).await;
             assert!(res.is_ok());
-            let w = write_workload.iter().find(|e1| e1.key == e.key).unwrap();
-            assert_eq!(res.unwrap().unwrap().val, w.val);
+            assert_eq!(res.unwrap().unwrap().val, e.val);
         }
     }
 
