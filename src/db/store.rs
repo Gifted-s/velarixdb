@@ -228,7 +228,7 @@ impl DataStore<'static, Key> {
         let v_offset = self
             .val_log
             .append(key.as_ref(), val.as_ref(), created_at, is_tombstone)
-            .await;
+            .await?;
         let entry = Entry::new(key.as_ref().to_vec(), v_offset, created_at, is_tombstone);
 
         if self.active_memtable.is_full(HEAD_ENTRY_KEY.len()) {
@@ -466,7 +466,7 @@ impl DataStore<'static, Key> {
                 }
                 self.get_value_from_vlog(offset, insert_time).await
             } else {
-                let ssts = &self.key_range.filter_sstables_by_biggest_key(key.as_ref()).await?;
+                let ssts = &self.key_range.filter_sstables_by_key_range(key.as_ref()).await?;
                 if ssts.is_empty() {
                     return Ok(None);
                 }

@@ -275,11 +275,11 @@ impl DataStore<'static, Key> {
         let created_at = Utc::now();
         let tail_offset = vlog
             .append(&TAIL_ENTRY_KEY.to_vec(), &TAIL_ENTRY_VALUE.to_vec(), created_at, false)
-            .await;
+            .await?;
         let tail_entry = Entry::new(TAIL_ENTRY_KEY.to_vec(), tail_offset, created_at, false);
         let head_offset = vlog
             .append(&HEAD_ENTRY_KEY.to_vec(), &HEAD_ENTRY_VALUE.to_vec(), created_at, false)
-            .await;
+            .await?;
         let head_entry = Entry::new(HEAD_ENTRY_KEY.to_vec(), head_offset, created_at, false);
         vlog.set_head(head_offset);
         vlog.set_tail(tail_offset);

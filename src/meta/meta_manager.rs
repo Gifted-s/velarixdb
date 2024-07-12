@@ -89,7 +89,7 @@ impl Meta {
     }
 
     /// Serializes `Meta` into byte vector
-    fn serialize(&self) -> ByteSerializedEntry {
+    pub(crate) fn serialize(&self) -> ByteSerializedEntry {
         // head offset + tail offset + created_at + last_modified
         let entry_len = SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U64;
 

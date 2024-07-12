@@ -12,7 +12,10 @@ use std::{
     sync::Arc,
 };
 
+/// Biggest key in the SSTable
 pub type BiggestKey = types::Key;
+
+/// Smallest key in the SSTable
 pub type SmallestKey = types::Key;
 
 #[derive(Clone, Debug)]
@@ -85,7 +88,7 @@ impl KeyRange {
     /// # Errors
     ///
     /// Returns error in case failure occured
-    pub async fn filter_sstables_by_biggest_key<K: AsRef<[u8]> + std::fmt::Debug>(
+    pub async fn filter_sstables_by_key_range<K: AsRef<[u8]> + std::fmt::Debug>(
         &self,
         key: K,
     ) -> Result<Vec<Table>, Error> {
@@ -95,24 +98,22 @@ impl KeyRange {
             filtered_ssts = self.check_restored_key_ranges(key.as_ref()).await?;
         }
         let mut restored_range_map: HashMap<PathBuf, Range> = HashMap::new();
-        let ranger = self.key_ranges.read().await.clone();
-        for (_, range) in ranger.iter() {
+        for (_, range) in self.key_ranges.read().await.iter() {
             if has_restored_ranges && self.restored_ranges.read().await.contains_key(range.sst.dir.as_path()) {
                 continue;
             }
+
             let searched_key = key.as_ref().to_vec();
             if searched_key >= range.smallest_key && searched_key <= range.biggest_key {
                 //  If an sstable does not have a bloom filter then
                 //  it means there has been a crash and we need to restore
                 //  filter from disk using filter metadata stored on sstable
                 if range.sst.filter.as_ref().unwrap().sst_dir.is_none() {
-                    println!("Here we are");
                     let mut mut_range = range.to_owned();
                     let mut filter = mut_range.sst.filter.as_ref().unwrap().to_owned();
 
                     filter.recover_meta().await?;
                     filter.sst_dir = Some(mut_range.sst.dir.to_owned());
-
                     mut_range.sst.load_entries_from_file().await?;
                     filter.build_filter_from_entries(&mut_range.sst.entries);
                     // Don't keep sst entries in memory
@@ -121,7 +122,8 @@ impl KeyRange {
                     restored_range_map.insert(mut_range.sst.dir.to_owned(), mut_range.to_owned());
 
                     if filter.contains(key.as_ref()) {
-                        filtered_ssts.push(mut_range.sst)
+                        filtered_ssts.push(mut_range.sst);
+                        continue;
                     }
                 }
 
@@ -136,8 +138,10 @@ impl KeyRange {
             // updating key_ranges immediatlely to prevent write locks on key_ranges for
             // get operations
             let restored_ranges = self.restored_ranges.clone();
+
             tokio::spawn(async move {
-                *(restored_ranges.write().await) = restored_range_map;
+                restored_range_map.clone_into(&mut (*restored_ranges.write().await));
+                drop(restored_ranges);
             });
         }
         Ok(filtered_ssts)
@@ -179,7 +183,7 @@ impl KeyRange {
     }
 
     /// Returns SSTables whose keys overlap with the key range supplied
-    pub async fn range_scan<T: AsRef<[u8]>>(&self, start_key: T, end_key: T) -> Vec<Range> {
+    pub async fn range_query_scan<T: AsRef<[u8]>>(&self, start_key: T, end_key: T) -> Vec<Range> {
         self.key_ranges
             .read()
             .await

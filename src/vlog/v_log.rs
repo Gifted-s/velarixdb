@@ -176,7 +176,7 @@ impl ValueLog {
         value: T,
         created_at: CreatedAt,
         is_tombstone: bool,
-    ) -> ValOffset {
+    ) -> Result<ValOffset, Error> {
         let v_log_entry = ValueLogEntry::new(
             key.as_ref().len(),
             value.as_ref().len(),
@@ -190,9 +190,9 @@ impl ValueLog {
         // Get the current offset before writing(this will be the offset of the value stored in the memtable)
         let last_offset = self.size;
         let data_file = &self.content;
-        let _ = data_file.file.node.write_all(&serialized_data).await;
+        data_file.file.node.write_all(&serialized_data).await?;
         self.size += serialized_data.len();
-        last_offset
+        Ok(last_offset)
     }
 
     /// Fetches value from value log
@@ -217,6 +217,14 @@ impl ValueLog {
     }
 
     /// Fetches an entry from value log using the `start_offset`
+    /// 
+    /// 
+    /// This is used to fetch all entries that is yet to be flushed
+    /// before crash happened
+    /// 
+    /// # Error
+    ///
+    /// Returns error in case there is an IO error
     pub async fn recover(&mut self, start_offset: usize) -> Result<Vec<ValueLogEntry>, Error> {
         self.content.file.recover(start_offset).await
     }
@@ -240,9 +248,10 @@ impl ValueLog {
     pub async fn clear_all(&mut self) {
         if self.content.file.node.metadata().await.is_ok() {
             if let Err(err) = self.content.file.node.remove_dir_all().await {
-                log::error!("{}", err);
+                log::info!("{}", err);
             }
         }
+        self.size=0;
         self.tail_offset = 0;
         self.head_offset = 0;
     }
@@ -279,7 +288,7 @@ impl ValueLogEntry {
     }
 
     /// Converts value log entry to a byte vector
-    fn serialize(&self) -> ByteSerializedEntry {
+    pub(crate) fn serialize(&self) -> ByteSerializedEntry {
         let entry_len = SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + self.key.len() + self.value.len() + SIZE_OF_U8;
         let mut serialized_data = Vec::with_capacity(entry_len);
 
@@ -299,9 +308,3 @@ impl ValueLogEntry {
     }
 }
 
-#[cfg(test)]
-mod tests {
-
-    #[test]
-    fn test_serialized() {}
-}
