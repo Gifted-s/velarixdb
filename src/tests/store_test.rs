@@ -3,6 +3,7 @@ mod tests {
     use crate::db::DataStore;
     use crate::tests::*;
     use futures::future::join_all;
+    use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::tempdir;
     use tokio::sync::RwLock;
@@ -18,6 +19,18 @@ mod tests {
         let path = root.path().join("store_test_1");
         let store = DataStore::open_without_background("test", path.clone()).await;
         assert!(store.is_ok())
+    }
+
+    #[tokio::test]
+    async fn datastore_recover() {
+        setup();
+        let path = PathBuf::new().join("src/tests/fixtures/data");
+
+        let store = DataStore::open_without_background("test", path.clone()).await.unwrap();
+    
+        assert!(!store.buckets.read().await.buckets.is_empty());
+        assert!(!store.key_range.key_ranges.read().await.is_empty());
+        assert!(!store.active_memtable.entries.is_empty());
     }
 
     #[tokio::test]
@@ -378,4 +391,7 @@ mod tests {
         assert!(res.is_ok());
         assert!(res.unwrap().is_none());
     }
+
+
+
 }

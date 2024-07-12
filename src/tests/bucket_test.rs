@@ -11,8 +11,6 @@ mod tests {
     use tokio::fs;
     use uuid::Uuid;
 
-
-  
     #[tokio::test]
     async fn test_bucket_new() {
         let root = tempdir().unwrap();
@@ -336,27 +334,40 @@ mod tests {
         let new_bucket1 = Bucket::new(path.to_owned()).await.unwrap();
         let sst_count = 6;
         let sst_samples = SSTContructor::generate_ssts(sst_count).await;
-        for s in sst_samples.iter().cloned() {
+        let sst1 = tempdir().unwrap().path().to_owned();
+        let sst2 = tempdir().unwrap().path().to_owned();
+        let sst3 = tempdir().unwrap().path().to_owned();
+        let sst4 = tempdir().unwrap().path().to_owned();
+        let sst5 = tempdir().unwrap().path().to_owned();
+        let sst6 = tempdir().unwrap().path().to_owned();
+        let ssts = [sst1, sst2, sst3, sst4, sst5,sst6];
+
+        for (idx, mut s) in sst_samples.iter().cloned().enumerate() {
+            s.dir = ssts[idx].to_owned().to_path_buf();
             new_bucket1.sstables.write().await.push(s)
         }
 
         let new_bucket2 = Bucket::new(path.to_owned()).await.unwrap();
-        for s in sst_samples.iter().cloned() {
+        for (idx, mut s) in sst_samples.iter().cloned().enumerate() {
+            s.dir = ssts[idx].to_owned().to_path_buf();
             new_bucket2.sstables.write().await.push(s)
         }
 
         let new_bucket3 = Bucket::new(path.to_owned()).await.unwrap();
-        for s in sst_samples.iter().cloned() {
+        for (idx, mut s) in sst_samples.iter().cloned().enumerate() {
+            s.dir = ssts[idx].to_owned().to_path_buf();
             new_bucket3.sstables.write().await.push(s)
         }
 
         let new_bucket4 = Bucket::new(path.to_owned()).await.unwrap();
-        for s in sst_samples.iter().cloned() {
+        for (idx, mut s) in sst_samples.iter().cloned().enumerate() {
+            s.dir = ssts[idx].to_owned().to_path_buf();
             new_bucket4.sstables.write().await.push(s)
         }
 
         let new_bucket5 = Bucket::new(path.to_owned()).await.unwrap();
-        for s in sst_samples.iter().cloned() {
+        for (idx, mut s) in sst_samples.iter().cloned().enumerate() {
+            s.dir = ssts[idx].to_owned().to_path_buf();
             new_bucket5.sstables.write().await.push(s)
         }
 
@@ -371,11 +382,11 @@ mod tests {
 
         let imbalanced_buckets = bucket_map.extract_imbalanced_buckets().await;
         assert!(imbalanced_buckets.is_ok());
-        let (buckets, _) = imbalanced_buckets.unwrap();
+        let (buckets, ssts_to_remove) = imbalanced_buckets.unwrap();
         assert_eq!(buckets.len(), 5);
 
-        // let delete_res = bucket_map.delete_ssts(&ssts_to_remove).await;
-        // assert!(delete_res.is_ok());
-        // assert_eq!(bucket_map.buckets.len(), 0);
+        let delete_res = bucket_map.delete_ssts(&ssts_to_remove).await;
+        assert!(delete_res.is_ok());
+        assert_eq!(bucket_map.buckets.len(), 0);
     }
 }
