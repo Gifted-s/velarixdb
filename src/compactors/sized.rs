@@ -170,7 +170,7 @@ impl<'a> SizedTierRunner<'a> {
     async fn merge_ssts_in_buckets(&mut self, buckets: &[Bucket]) -> Result<Vec<MergedSSTable>, Error> {
         let mut merged_ssts = Vec::new();
         for bucket in buckets.iter() {
-            let mut hotness = 0;
+            let mut hotness: u64 = Default::default();
             let tables = &bucket.sstables.read().await;
 
             let mut merged_sst: Box<dyn InsertableToBucket> = Box::new(tables.first().unwrap().to_owned());
@@ -181,9 +181,13 @@ impl<'a> SizedTierRunner<'a> {
                     .load_entries_from_file()
                     .await
                     .map_err(|err| CompactionFailed(Box::new(err)))?;
+
+                // TODO: merge_sstables() can be CPU intensive so we should use spawn blocking here
+                // tokio::task::spawn_blocking(||{
+                       // merge sstable here
+                // });
                 merged_sst = self
                     .merge_sstables(merged_sst, Box::new(insertable_sst))
-                    .await
                     .map_err(|err| CompactionFailed(Box::new(err)))?;
             }
 
@@ -203,7 +207,7 @@ impl<'a> SizedTierRunner<'a> {
     /// Errors
     ///
     /// Returns error if an error occured during merge
-    async fn merge_sstables(
+    fn merge_sstables(
         &mut self,
         sst1: Box<dyn InsertableToBucket>,
         sst2: Box<dyn InsertableToBucket>,

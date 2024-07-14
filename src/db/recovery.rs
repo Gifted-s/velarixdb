@@ -5,7 +5,7 @@ use super::{store::DirPath, DataStore, SizeUnit};
 
 use crate::bucket::{Bucket, BucketID, BucketMap};
 use crate::cfg::Config;
-use crate::compactors::{self, Compactor};
+use crate::compactors::{self, Compactor, IntervalParams, TtlParams};
 use crate::consts::{
     DEFAULT_DB_NAME, DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE, HEAD_ENTRY_KEY, HEAD_ENTRY_VALUE, SIZE_OF_U32, SIZE_OF_U64,
     SIZE_OF_U8, TAIL_ENTRY_KEY, TAIL_ENTRY_VALUE,
@@ -182,11 +182,15 @@ impl DataStore<'static, Key> {
                     flusher,
                     compactor: Compactor::new(
                         config.enable_ttl,
-                        config.entry_ttl,
-                        config.tombstone_ttl,
-                        config.background_compaction_interval,
-                        config.compactor_flush_listener_interval,
-                        config.tombstone_compaction_interval,
+                        TtlParams {
+                            entry_ttl: config.entry_ttl,
+                            tombstone_ttl: config.tombstone_ttl,
+                        },
+                        IntervalParams {
+                            background_interval: config.background_compaction_interval,
+                            flush_listener_interval: config.compactor_flush_listener_interval,
+                            tombstone_compaction_interval: config.tombstone_compaction_interval,
+                        },
                         config.compaction_strategy,
                         compactors::CompactionReason::MaxSize,
                         config.false_positive_rate,
@@ -305,11 +309,15 @@ impl DataStore<'static, Key> {
             key_range,
             compactor: Compactor::new(
                 config.enable_ttl,
-                config.entry_ttl,
-                config.tombstone_ttl,
-                config.background_compaction_interval,
-                config.compactor_flush_listener_interval,
-                config.tombstone_compaction_interval,
+                TtlParams {
+                    entry_ttl: config.entry_ttl,
+                    tombstone_ttl: config.tombstone_ttl,
+                },
+                IntervalParams {
+                    background_interval: config.background_compaction_interval,
+                    flush_listener_interval: config.compactor_flush_listener_interval,
+                    tombstone_compaction_interval: config.tombstone_compaction_interval,
+                },
                 config.compaction_strategy,
                 compactors::CompactionReason::MaxSize,
                 config.false_positive_rate,

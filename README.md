@@ -10,17 +10,24 @@
 [![Codecov](https://github.com/Gifted-s/velarixdb/actions/workflows/codecov.yml/badge.svg)](https://github.com/Gifted-s/velarixdb/actions/workflows/codecov.yml)
 [![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](code_of_conduct.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-
 
 VelarixDB is an LSM-based storage engine designed to significantly reduce IO amplification, resulting in better performance and durability for storage devices.
 
 
 ## Introduction
 
-**VelarixDB: Efficient Data Management for High Performance**
+**VelarixDB: Designed to reduce IO amplification**
 
-VelarixDB is an ongoing project (*not production ready*) designed to optimize data movement during load times, random access, and compaction. Inspired by the WiscKey paper, [WiscKey: Separating Keys from Values in SSD-conscious Storage](https://usenix.org/system/files/conference/fast16/fast16-papers-lu.pdf), velarixdb aims to significantly enhance performance over traditional key-value stores.
+VelarixDB is an ongoing project (*not production ready*) designed to optimize data movement during load times and compaction. Inspired by the WiscKey paper, [WiscKey: Separating Keys from Values in SSD-conscious Storage](https://usenix.org/system/files/conference/fast16/fast16-papers-lu.pdf), velarixdb aims to significantly enhance performance over traditional key-value stores.
+
+## Problem
+
+During compaction in LevelDB or RocksDB, [thesame key-value pair can be re-read and re-written from Level 1 to Level 6 in the worst case](https://github.com/facebook/rocksdb/wiki/Leveled-Compaction), the goal is to reduce size of data moved around during this process.
+
+## Solution
+
+We mostly care if the key has been deleted or updated therefore including values in the compaction process (which is often larger than the key) can unneccssarily amplify the data read and written during compaction. We therefore store keys and values separately (we map value offset to the key represented as 32 bit integer),
+This reduces the amount of data read, written, and moved during compaction, leading to improved performance and reduced wear on storage devices, particularly SSDs.
 
 ## Performance Benefits
 
@@ -30,13 +37,16 @@ According to the benchmarks presented in the WiscKey paper, implementations can 
 
 ## Concurrency with Tokio
 
-To achieve high concurrency without the overhead of spawning new threads every time, velarixdb utilizes the Tokio runtime. This allows for efficient and scalable asynchronous operations, making the most of modern multi-core processors.
+To achieve high concurrency without the overhead of spawning new threads every time, velarixdb utilizes the Tokio runtime. This allows for efficient and scalable asynchronous operations, making the most of modern multi-core processors. Frankly,
+most Operating System File System does not provide async API but Tokio uses a thread pool to offload blocking file system operations. When you perform an asynchronous file operation in Tokio, the operation is executed on a dedicated thread from this pool.
+This means that even though the file system operations themselves are blocking at the OS level, Tokio can handle them without blocking the main async task executor.  
+Tokio might also use [io_uring](https://docs.rs/tokio/latest/tokio/fs/index.html#:~:text=Currently%2C%20Tokio%20will%20always%20use%20spawn_blocking%20on%20all%20platforms%2C%20but%20it%20may%20be%20changed%20to%20use%20asynchronous%20file%20system%20APIs%20such%20as%20io_uring%20in%20the%20future.) in the future
 
 ## Disclaimer
 
 Please note that velarixdb is still under development and is not yet production-ready.
 
-### Features
+### Basic Features
 - [x] Atomic `Put()`, `Get()`, `Delete()`, and `Update()` operations
 - [x] 100% safe & stable Rust
 - [x] Separation of keys from values, reducing the amount of data moved during compaction (i.e., reduced IO amplification)
@@ -48,8 +58,12 @@ Please note that velarixdb is still under development and is not yet production-
 - [x] Index to improve searches on Sorted String Tables (SSTs)
 - [x] Key Range to store the largest and smallest keys in an SST
 - [x] Sized Tier Compaction Strategy (STCS)
+
+### TODO
+- [ ] Block Cache
 - [ ] Batched Writes
-- [ ] Snappy Compression Algorithm
+- [ ] Range Query
+- [ ] Snappy Compression
 - [ ] Value Buffer to keep values in memory and only flush in batches to reduce IO (under investigation)
 - [ ] Checksum to detect data corruption
 - [ ] Leveled Compaction (LCS), Time-Window Compaction (TCS), and Unified Compaction (UCS)
@@ -113,7 +127,7 @@ async fn main() {
 }
 ```
 
-# Store JSON
+### Store JSON
 
 ```rust
 use serde::{Deserialize, Serialize};
