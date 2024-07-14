@@ -74,43 +74,6 @@ fn get_open_file_limit() -> usize {
     return 150;
 }
 
-impl Config {
-    #![allow(clippy::too_many_arguments)]
-    pub fn new(
-        false_positive_rate: f64,
-        enable_ttl: bool,
-        entry_ttl: std::time::Duration,
-        allow_prefetch: bool,
-        prefetch_size: usize,
-        write_buffer_size: usize,
-        max_buffer_write_number: usize,
-        compactor_flush_listener_interval: std::time::Duration,
-        background_compaction_interval: std::time::Duration,
-        tombstone_ttl: std::time::Duration,
-        tombstone_compaction_interval: std::time::Duration,
-        compaction_strategy: compactors::Strategy,
-        online_gc_interval: std::time::Duration,
-        gc_chunk_size: usize,
-    ) -> Self {
-        Self {
-            false_positive_rate,
-            enable_ttl,
-            entry_ttl,
-            allow_prefetch,
-            prefetch_size,
-            max_buffer_write_number,
-            write_buffer_size,
-            compactor_flush_listener_interval,
-            background_compaction_interval,
-            tombstone_ttl,
-            tombstone_compaction_interval,
-            compaction_strategy,
-            online_gc_interval,
-            gc_chunk_size,
-            open_files_limit: get_open_file_limit(),
-        }
-    }
-}
 
 impl Default for Config {
     fn default() -> Self {

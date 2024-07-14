@@ -48,7 +48,7 @@ pub struct Bucket {
     pub(crate) id: BucketID,
     pub(crate) dir: PathBuf,
     pub(crate) size: usize,
-    pub(crate) avarage_size: usize,
+    pub(crate) avarage_size: AvgSize,
     pub(crate) sstables: Arc<RwLock<Vec<Table>>>,
 }
 

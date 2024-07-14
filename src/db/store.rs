@@ -40,7 +40,7 @@ where
     /// Active memtable that accepts read and writes using a lock free skipmap
     pub(crate) active_memtable: MemTable<Key>,
 
-    /// Value log to perisist entries and for crash recovery
+    /// Value log to persist entries and for crash recovery
     pub(crate) val_log: ValueLog,
 
     /// Bucket Map that groups sstables by size
@@ -237,7 +237,6 @@ impl DataStore<'static, Key> {
         self.active_memtable.insert(&entry);
         let gc_table = Arc::clone(&self.gc_table);
         tokio::spawn(async move { gc_table.write().await.insert(&entry) });
-        // TODO: Figure out the best way to empty flush stream
         Ok(true)
     }
 
@@ -294,11 +293,11 @@ impl DataStore<'static, Key> {
         }
         gc_entries_reader.clear();
         let (updated_head, updated_tail) = self.gc.free_unused_space().await?;
-        self.meta.v_log_head = updated_head;
-        self.meta.v_log_tail = updated_tail;
-        self.meta.last_modified = Utc::now();
-        self.val_log.head_offset = updated_head;
-        self.val_log.tail_offset = updated_tail;
+        self.meta.set_head(updated_head);
+        self.meta.set_tail(updated_tail);
+        self.meta.update_last_modified();
+        self.val_log.set_head(updated_head);
+        self.val_log.set_tail(updated_tail);
         Ok(())
     }
 
@@ -575,15 +574,17 @@ impl DataStore<'static, Key> {
     ) -> Result<Option<UserEntry>, crate::err::Error> {
         let mut insert_time = util::default_datetime();
         let lowest_insert_date = util::default_datetime();
-        let mut offset = 0;
+        let mut offset = VLOG_START_OFFSET;
         let mut is_deleted = false;
         for sst in ssts.iter() {
             let index = Index::new(sst.index_file.path.to_owned(), sst.index_file.file.to_owned());
             let block_handle = index.get(&key).await?;
             if block_handle.is_some() {
                 let sst_res = sst.get(block_handle.unwrap(), &key).await?;
+
                 if sst_res.as_ref().is_some() {
                     let (val_offset, created_at, is_tombstone) = sst_res.unwrap();
+
                     if created_at > insert_time {
                         offset = val_offset;
                         insert_time = created_at;
@@ -641,7 +642,7 @@ impl DataStore<'static, Key> {
     pub(crate) async fn force_flush(&mut self) -> Result<(), crate::err::Error> {
         use crossbeam_skiplist::SkipMap;
 
-        self.active_memtable.read_only = true;
+        self.active_memtable.mark_readonly();
 
         self.read_only_memtables
             .insert(MemTable::generate_table_id(), Arc::new(self.active_memtable.to_owned()));

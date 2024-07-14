@@ -157,7 +157,7 @@ impl GC {
 
     /// Handles online garbage collection
     ///
-    /// Fetche `gc_chunk_size` from value log, checks valid
+    /// Fetch `gc_chunk_size` from value log, checks valid
     /// and invalid entries. Re-inserts valid entries while
     /// it filters out invalid entries
     ///
@@ -482,8 +482,10 @@ impl GC {
         for sst in ssts.iter() {
             let index = Index::new(sst.index_file.path.to_owned(), sst.index_file.file.to_owned());
             let block_handle = index.get(&key).await?;
+
             if block_handle.is_some() {
                 let sst_res = sst.get(block_handle.unwrap(), &key).await?;
+
                 if sst_res.as_ref().is_some() {
                     let (val_offset, created_at, is_tombstone) = sst_res.unwrap();
                     if created_at > insert_time {

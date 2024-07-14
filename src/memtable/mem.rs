@@ -282,7 +282,7 @@ impl MemTable<Key> {
         self.size + key_len + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8 >= self.capacity()
     }
 
-    /// Seals an Memtable
+    /// Seals  Memtable as read-only
     pub fn mark_readonly(&mut self) {
         self.read_only = true;
     }

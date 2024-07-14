@@ -55,31 +55,23 @@ pub struct Config {
 
     pub(crate) filter_false_positive: f64,
 }
-impl Config {
-    #![allow(clippy::too_many_arguments)]
-    pub fn new(
-        use_ttl: Bool,
-        entry_ttl: std::time::Duration,
-        tombstone_ttl: std::time::Duration,
-        flush_listener_interval: std::time::Duration,
-        background_interval: std::time::Duration,
-        tombstone_compaction_interval: std::time::Duration,
-        strategy: Strategy,
-        filter_false_positive: f64,
-    ) -> Self {
-        Config {
-            use_ttl,
-            entry_ttl,
-            tombstone_ttl,
-            flush_listener_interval,
-            background_interval,
-            tombstone_compaction_interval,
-            strategy,
-            filter_false_positive,
-        }
-    }
+
+/// Groups TTL params
+#[derive(Debug, Clone)]
+pub struct TtlParams {
+    pub entry_ttl: time::Duration,
+    pub tombstone_ttl: time::Duration,
 }
 
+/// Groups Interval params
+#[derive(Debug, Clone)]
+pub struct IntervalParams {
+    pub background_interval: time::Duration,
+    pub flush_listener_interval: time::Duration,
+    pub tombstone_compaction_interval: time::Duration,
+}
+
+/// Supported Compaction strategies
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Strategy {
     STCS,
@@ -88,13 +80,17 @@ pub enum Strategy {
     // UCS,  TODO
 }
 
-#[derive(Debug, Clone)]
+/// Compaction states
+/// `Sleep`` means nothing is happening
+/// `Active`` means the compaction is running
+#[derive(Debug, Clone, PartialEq)]
 pub enum CompState {
     Sleep,
     Active,
 }
 
-#[derive(Debug, Clone)]
+/// Reasons for compaction 
+#[derive(Debug, Clone, PartialEq)]
 pub enum CompactionReason {
     MaxSize,
     Manual,
@@ -108,7 +104,10 @@ pub(crate) struct WriteTracker {
 }
 impl WriteTracker {
     pub fn new(expected: usize) -> Self {
-        Self { actual: 0, expected }
+        Self {
+            actual: Default::default(),
+            expected,
+        }
     }
 }
 
@@ -120,7 +119,10 @@ pub(crate) struct MergePointer {
 }
 impl MergePointer {
     pub fn new() -> Self {
-        Self { ptr1: 0, ptr2: 0 }
+        Self {
+            ptr1: Default::default(),
+            ptr2: Default::default(),
+        }
     }
     pub fn increment_ptr1(&mut self) {
         self.ptr1 += 1;
@@ -160,16 +162,34 @@ impl MergedSSTable {
     }
 }
 
-impl Compactor {
-    #![allow(clippy::too_many_arguments)]
-    // Creates new `Compactor`
+impl Config {
     pub fn new(
-        use_ttl: Bool,
-        entry_ttl: time::Duration,
-        tombstone_ttl: time::Duration,
-        background_interval: time::Duration,
-        flush_listener_interval: time::Duration,
-        tombstone_compaction_interval: time::Duration,
+        use_ttl: bool,
+        ttl: TtlParams,
+        intervals: IntervalParams,
+        strategy: Strategy,
+        filter_false_positive: f64,
+    ) -> Self {
+        Config {
+            use_ttl,
+            entry_ttl: ttl.entry_ttl,
+            tombstone_ttl: ttl.tombstone_ttl,
+            flush_listener_interval: intervals.flush_listener_interval,
+            background_interval: intervals.background_interval,
+            tombstone_compaction_interval: intervals.tombstone_compaction_interval,
+            strategy,
+            filter_false_positive,
+        }
+    }
+}
+
+impl Compactor {
+    // Creates new `Compactor`
+    // intoduce struct
+    pub fn new(
+        use_ttl: bool,
+        ttl: TtlParams,
+        intervals: IntervalParams,
         strategy: Strategy,
         reason: CompactionReason,
         filter_false_positive: f64,
@@ -177,19 +197,10 @@ impl Compactor {
         Self {
             is_active: Arc::new(Mutex::new(CompState::Sleep)),
             reason,
-            config: Config::new(
-                use_ttl,
-                entry_ttl,
-                tombstone_ttl,
-                flush_listener_interval,
-                background_interval,
-                tombstone_compaction_interval,
-                strategy,
-                filter_false_positive,
-            ),
+            config: Config::new(use_ttl, ttl, intervals, strategy, filter_false_positive),
         }
     }
-    /// FUTURE: Maybe trigger tombstone compaction to remove expires also, although this is handled during
+    /// FUTURE: Explicitly trigger tombstone compaction to remove expired tombstones, although this is handled during
     /// normal compaction
     #[allow(unused_variables, dead_code)]
     pub fn tombstone_compaction_condition_background_checker(
@@ -290,5 +301,53 @@ impl Compactor {
 
     async fn sleep_compaction(duration: std::time::Duration) {
         sleep(duration).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn test_comp_params_new() {
+        let use_ttl = true;
+        let ttl = TtlParams {
+            entry_ttl: Duration::new(60, 0),
+            tombstone_ttl: Duration::new(120, 0),
+        };
+        let intervals = IntervalParams {
+            background_interval: Duration::new(30, 0),
+            flush_listener_interval: Duration::new(10, 0),
+            tombstone_compaction_interval: Duration::new(45, 0),
+        };
+        let strategy = Strategy::STCS;
+        let reason = CompactionReason::MaxSize;
+        let filter_false_positive = 0.01;
+
+        let compactor = Compactor::new(
+            use_ttl,
+            ttl.to_owned(),
+            intervals.to_owned(),
+            strategy,
+            reason.to_owned(),
+            filter_false_positive,
+        );
+
+        assert_eq!(compactor.config.use_ttl, use_ttl);
+        assert_eq!(compactor.config.entry_ttl, ttl.entry_ttl);
+        assert_eq!(compactor.config.tombstone_ttl, ttl.tombstone_ttl);
+        assert_eq!(compactor.config.background_interval, intervals.background_interval);
+        assert_eq!(
+            compactor.config.flush_listener_interval,
+            intervals.flush_listener_interval
+        );
+        assert_eq!(
+            compactor.config.tombstone_compaction_interval,
+            intervals.tombstone_compaction_interval
+        );
+        assert_eq!(compactor.config.strategy, strategy);
+        assert_eq!(compactor.reason, reason);
+        assert_eq!(compactor.config.filter_false_positive, filter_false_positive);
     }
 }
