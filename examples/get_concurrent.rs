@@ -12,10 +12,10 @@ async fn main() {
     let store = DataStore::open("big_tech", path).await.unwrap(); // handle IO error
     let mut entries = HashMap::new();
     entries.insert("apple", "tim cook");
-    entries.insert("google", "tim cook");
-    entries.insert("nvidia", "tim cook");
-    entries.insert("microsoft", "tim cook");
-    entries.insert("meta", "tim cook");
+    entries.insert("google", "sundar pichai");
+    entries.insert("nvidia", "jensen huang");
+    entries.insert("microsoft", "satya nadella");
+    entries.insert("meta", "mark zuckerberg");
     entries.insert("openai", "sam altman");
 
     let store_ref = Arc::new(RwLock::new(store));
@@ -34,7 +34,7 @@ async fn main() {
         assert!(tokio_res.as_ref().unwrap().is_ok());
     }
 
-    // Read entries concurently
+    // Read entries concurrently
     let reads = entries.keys().map(|k| {
         let store_inner = Arc::clone(&store_ref);
         let key = k.to_owned();

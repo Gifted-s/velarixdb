@@ -25,7 +25,7 @@ pub struct Compactor {
     /// Compaction reason (manual or automated)
     pub reason: CompactionReason,
 
-    ///  is compaction active or sleeping
+    /// Is compaction active or sleeping
     pub is_active: Arc<Mutex<CompState>>,
 }
 
@@ -185,7 +185,6 @@ impl Config {
 
 impl Compactor {
     // Creates new `Compactor`
-    // intoduce struct
     pub fn new(
         use_ttl: bool,
         ttl: TtlParams,

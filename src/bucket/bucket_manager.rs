@@ -106,18 +106,19 @@ impl Bucket {
     /// # Errors
     ///
     /// Returns error, if an IO error occured.
-    pub(crate) async fn cal_average_size(sstables: Vec<Table>) -> Result<AvgSize, Error> {
-        if sstables.is_empty() {
+    pub(crate) async fn cal_average_size(ssts: Vec<Table>) -> Result<AvgSize, Error> {
+        if ssts.is_empty() {
             return Ok(0);
         }
-        let mut all_sstable_size = 0;
-        let sst = sstables;
-        let fetch_files_meta = sst.iter().map(|s| tokio::spawn(fs::metadata(s.data_file.path.clone())));
+        let mut size = 0;
+        let fetch_files_meta = ssts
+            .iter()
+            .map(|s| tokio::spawn(fs::metadata(s.data_file.path.clone())));
         for meta_task in fetch_files_meta {
             let meta_data = meta_task.await.map_err(|err| GetFileMetaData(err.into()))?.unwrap();
-            all_sstable_size += meta_data.len() as usize;
+            size += meta_data.len() as usize;
         }
-        Ok(all_sstable_size / sst.len() as u64 as usize)
+        Ok(size / ssts.len() as u64 as usize)
     }
 
     /// Checks if a table will fit into a `Bucket`
@@ -190,7 +191,7 @@ impl BucketMap {
     ///
     /// # Errors
     ///
-    /// Returns error in case there in IO error or any kind of Error
+    /// Returns error in case there was an IO error or any kind of Error
     pub async fn insert_to_appropriate_bucket<T: InsertableToBucket + ?Sized>(
         &mut self,
         table: Arc<Box<T>>,
@@ -225,10 +226,12 @@ impl BucketMap {
             .dir
             .join(format!("{}_{}", SST_PREFIX, created_at.timestamp_millis()));
         let mut sst = Table::new(sst_dir).await?;
+
         sst.set_entries(table.get_entries());
         sst.filter = Some(table.get_filter());
         sst.write_to_file().await?;
         bucket.sstables.write().await.push(sst.to_owned());
+
         match insert_type {
             InsertionType::New => {
                 bucket.avarage_size = fs::metadata(sst.clone().data_file.path)
@@ -262,8 +265,10 @@ impl BucketMap {
     pub(crate) async fn extract_imbalanced_buckets(&self) -> ImbalancedBuckets {
         let mut ssts_to_delete: SSTablesToRemove = Vec::new();
         let mut imbalanced_buckets: Vec<Bucket> = Vec::new();
+
         for (bucket_id, bucket) in self.buckets.iter() {
             let (ssts, avg) = Bucket::extract_sstables(bucket).await?;
+
             if !ssts.is_empty() {
                 ssts_to_delete.push((*bucket_id, ssts.clone()));
                 imbalanced_buckets.push(Bucket {

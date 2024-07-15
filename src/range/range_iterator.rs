@@ -46,7 +46,7 @@ impl<'a> RangeIterator<'a> {
 }
 
 impl<'a> DataStore<'a, Key> {
-    // Start if the range query
+    // TODO: range query
     pub async fn seek(&self, _: &'a [u8], _: &'a [u8]) -> Result<RangeIterator, Error> {
       
         let range_iterator = RangeIterator::<'a>::new(

@@ -37,7 +37,7 @@ where
     /// Directory to be used by store
     pub(crate) dir: DirPath,
 
-    /// Active memtable that accepts read and writes using a lock free skipmap
+    /// Active memtable that accepts reads and writes using a lock free skipmap
     pub(crate) active_memtable: MemTable<Key>,
 
     /// Value log to persist entries and for crash recovery
@@ -49,7 +49,7 @@ where
     /// Stores largest and smallest key of each sstable for fast retrieval
     pub(crate) key_range: KeyRangeHandle,
 
-    /// handles compaction of sstables
+    /// Handles compaction of sstables
     pub(crate) compactor: Compactor,
 
     /// Keeps track of store metadata
@@ -73,7 +73,7 @@ where
     /// Sends singnal to subscribers whenever a flush happens
     pub(crate) flush_signal_tx: async_broadcast::Sender<FlushSignal>,
 
-    /// Flush listeners receives signals from this channel
+    /// Flush listeners receiver
     pub(crate) flush_signal_rx: async_broadcast::Receiver<FlushSignal>,
 
     /// Stores valid entries gotten from garbage collection but yet to be synced with
@@ -84,7 +84,7 @@ where
     /// active memtable as this can impact performance
     pub(crate) gc_table: Arc<RwLock<MemTable<Key>>>,
 
-    /// GC Log is similar to value log but opeations are tailored to GC
+    /// GC Log is similar to value log but with lock
     pub(crate) gc_log: Arc<RwLock<ValueLog>>,
 
     /// keeps track of memtable going through flush
@@ -232,7 +232,7 @@ impl DataStore<'static, Key> {
         let entry = Entry::new(key.as_ref().to_vec(), v_offset, created_at, is_tombstone);
 
         if self.active_memtable.is_full(HEAD_ENTRY_KEY.len()) {
-            self.migrate_memtable_to_read_only().await;
+            self.migrate_memtable_to_read_only();
         }
         self.active_memtable.insert(&entry);
         let gc_table = Arc::clone(&self.gc_table);
@@ -245,7 +245,7 @@ impl DataStore<'static, Key> {
     /// Marks the active memtable as read only,
     /// updates store metadata and moves the memtable
     /// to read-only memtables
-    pub(crate) async fn migrate_memtable_to_read_only(&mut self) {
+    pub(crate) fn migrate_memtable_to_read_only(&mut self) {
         let head_offset = self.active_memtable.get_most_recent_offset();
 
         self.val_log.set_head(head_offset);
@@ -256,16 +256,19 @@ impl DataStore<'static, Key> {
         tokio::spawn(async move {
             (gc_log.write().await).head_offset = head_offset;
         });
-
-        let head_entry = Entry::new(HEAD_ENTRY_KEY.to_vec(), head_offset, Utc::now(), false);
+        let is_tombstone = false;
+        let head_entry = Entry::new(HEAD_ENTRY_KEY.to_vec(), head_offset, Utc::now(), is_tombstone);
         self.active_memtable.insert(&head_entry);
         self.active_memtable.mark_readonly();
         self.update_meta_background();
+
+        if self.read_only_memtables.is_empty() {
+            self.flush_stream.clear();
+        }
         self.read_only_memtables
             .insert(MemTable::generate_table_id(), Arc::new(self.active_memtable.to_owned()));
 
         if self.read_only_memtables.len() >= self.config.max_buffer_write_number {
-            // Background
             self.flush_read_only_memtables();
         }
         self.reset_memtables();
@@ -353,7 +356,7 @@ impl DataStore<'static, Key> {
     pub(crate) fn flush_read_only_memtables(&mut self) {
         for table in self.read_only_memtables.iter() {
             let key = table.key().to_owned();
-            let value = table.value().clone();
+            let value = table.value().to_owned();
             if self.flush_stream.contains(&key) {
                 continue;
             }
@@ -506,13 +509,13 @@ impl DataStore<'static, Key> {
     ///     let root = tempdir().unwrap();
     ///     let path = root.path().join("velarixdb");
     ///     let mut store = DataStore::open("big_tech", path).await.unwrap(); // handle IO error
-
+    ///
     ///     store.put("apple", "tim cook").await.unwrap(); // handle error
-
+    ///
     ///     // Update entry
     ///     let success = store.update("apple", "elon musk").await;
     ///     assert!(success.is_ok());
-
+    ///
     ///     // Entry should now be updated
     ///     let entry = store.get("apple").await.unwrap(); // handle error
     ///     assert!(entry.is_some());
@@ -692,7 +695,7 @@ impl DataStore<'static, Key> {
         DataStore::recover(dir, buckets_path, vlog, key_range, &config, size_unit, meta).await
     }
 
-    /// Strigger compaction mannually
+    /// Trigger compaction mannually
     ///
     /// # Errors
     ///

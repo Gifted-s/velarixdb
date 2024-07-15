@@ -1,6 +1,6 @@
 //! # SSTable Data Block
 //!
-//! The `Data Block` manages multiple `Block` instancesand each block stores entries
+//! The `Data Block` manages multiple `Block` instances and each block stores entries
 //! A block size is 4KB on disk but as the project evolve, we will introduce
 //! Snappy Compression, Checksum and also have block cache for fast recovery
 //!
@@ -225,7 +225,7 @@ impl Table {
                     .unwrap(),
                 path: index_file_path.as_ref().to_path_buf(),
             },
-            size: 0,
+            size: Default::default(),
             entries: Arc::new(SkipMap::new()),
             filter: None,
             summary: None,
@@ -257,12 +257,12 @@ impl Table {
         let mut blocks: Vec<Block> = Vec::new();
         let mut index = Index::new(self.index_file.path.clone(), index_file.file.clone());
         let mut summary = Summary::new(self.dir.to_owned());
-
-        let biggest_key = self.entries.back();
-        let smallest_key = self.entries.front();
-
-        summary.smallest_key = smallest_key.unwrap().key().to_vec();
-        summary.biggest_key = biggest_key.unwrap().key().to_vec();
+        
+        let smallest_entry = self.entries.front();
+        let biggest_entry = self.entries.back();
+    
+        summary.smallest_key = smallest_entry.unwrap().key().to_vec();
+        summary.biggest_key = biggest_entry.unwrap().key().to_vec();
 
         // write summary to disk
         summary.write_to_file().await?;
@@ -285,7 +285,7 @@ impl Table {
                 e.value().is_tombstone,
             );
 
-            // key len(variable) +  key length(used during fetch) + value length(4 bytes) + date in milliseconds(8 bytes)
+            // key len(variable) +  key prefix + value offset length(4 bytes) + insertion time (8 bytes) + tombstone (1 byte)
             let entry_size = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
             if current_block.is_full(entry_size) {
                 blocks.push(current_block);

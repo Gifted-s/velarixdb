@@ -1,15 +1,18 @@
 
 <p align="center">
-<img src="/logo.png" height="170">
+<img src="/logo.png" height="120">
 </p>
 
 
 [![Tests](https://github.com/Gifted-s/velarixdb/actions/workflows/rust.yml/badge.svg)](https://github.com/Gifted-s/velarixdb/actions/workflows/rust.yml)
 [![codecov](https://codecov.io/gh/Gifted-s/velarixdb/branch/ft%2Fcoverage/graph/badge.svg?token=01K79PJWQA)](https://codecov.io/gh/Gifted-s/velarixdb)
+[![Crates.io](https://img.shields.io/crates/v/velarixdb.svg)](https://crates.io/crates/velarixdb)
+[![Documentation](https://docs.rs/velarixdb/badge.svg)](https://docs.rs/velarixdb)
 [![Clippy Tests](https://github.com/Gifted-s/bd/actions/workflows/clippy.yml/badge.svg)](https://github.com/Gifted-s/bd/actions/workflows/clippy.yml)
 [![Codecov](https://github.com/Gifted-s/velarixdb/actions/workflows/codecov.yml/badge.svg)](https://github.com/Gifted-s/velarixdb/actions/workflows/codecov.yml)
 [![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](code_of_conduct.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 
 VelarixDB is an LSM-based storage engine designed to significantly reduce IO amplification, resulting in better performance and durability for storage devices.
 
@@ -51,7 +54,7 @@ Please note that velarixdb is still under development and is not yet production-
 - [x] 100% safe & stable Rust
 - [x] Separation of keys from values, reducing the amount of data moved during compaction (i.e., reduced IO amplification)
 - [x] Garbage Collector
-- [x] Lock-free memtable (no `Mutex`)
+- [x] Lock-free memtable with Crossbeam SkipMap (no `Mutex`)
 - [x] Tokio Runtime for efficient thread management
 - [x] Bloom Filters for fast in-memory key searches
 - [x] Crash recovery using the Value Log
@@ -60,6 +63,7 @@ Please note that velarixdb is still under development and is not yet production-
 - [x] Sized Tier Compaction Strategy (STCS)
 
 ### TODO
+- [ ] Snapshot Isolation
 - [ ] Block Cache
 - [ ] Batched Writes
 - [ ] Range Query
@@ -165,4 +169,4 @@ async fn main() {
 ```
 
 ## Examples
-[See here](https://usenix.org/system/files/conference/fast16/fast16-papers-lu.pdf) for practical examples
+[See here](https://github.com/Gifted-s/velarixdb/tree/main/examples) for practical examples

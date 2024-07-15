@@ -34,7 +34,7 @@ pub struct Entry<Key: K, V: Ord> {
     pub is_tombstone: bool,
 }
 
-/// Entry returned to user upon  retreival
+/// Entry returned to user upon retreival
 #[derive(Debug)]
 pub struct UserEntry {
     pub val: Value,
