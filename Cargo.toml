@@ -9,7 +9,7 @@ documentation = "https://docs.rs/velarixdb"
 homepage = "https://github.com/Gifted-s/velarixdb/blob/main/README.md"
 readme = "README.md"
 description = "An LSM Storage Engine focused on reduced IO amplification"
-keywords = ["velarixdb","database", "lsmt", "lsm", "rocksdb", "leveldb", "key-value-store"]
+keywords = ["velarixdb", "database", "lsm", "rocksdb", "leveldb"]
 categories = ["data-structures", "database-implementations", "algorithms"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

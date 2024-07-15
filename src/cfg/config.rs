@@ -50,7 +50,7 @@ pub struct Config {
     /// Interval at which tombstone compaction is triggered
     pub tombstone_compaction_interval: std::time::Duration,
 
-    /// Which compaction strategy is used STCS, LCS, ICS, TCS or UCS
+    /// Which compaction strategy is used STCS, LCS, TCS or UCS
     pub compaction_strategy: compactors::Strategy,
 
     /// Interval at which tombstone compaction is triggered

@@ -21,7 +21,7 @@ async fn main() {
     assert!(res5.is_ok());
     assert!(res6.is_ok());
 
-    let entry1 = store.get("apple").await.unwrap(); // Handle error
+    let entry1 = store.get("apple").await.unwrap(); // handle error
     let entry2 = store.get("google").await.unwrap();
     let entry3 = store.get("nvidia").await.unwrap();
     let entry4 = store.get("microsoft").await.unwrap();

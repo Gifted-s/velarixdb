@@ -105,7 +105,7 @@ impl<'a> SizedTierRunner<'a> {
                     }
 
                     if tracker.expected == tracker.actual {
-                        // Step 6:  Delete the sstables that we already merged from their previous buckets and update bloom filters
+                        // Step 6:  Delete the sstables that we already merged from their previous buckets
                         let filters_updated = self
                             .clean_up_after_compaction(buckets, &ssts_to_remove.clone(), key_range)
                             .await;
@@ -141,9 +141,7 @@ impl<'a> SizedTierRunner<'a> {
         ssts_to_delete: &SSTablesToRemove,
         key_range: KeyRangeHandle,
     ) -> Result<Option<()>, Error> {
-        // if all obsolete sstables were not deleted then don't remove the associated filters
-        // although this can lead to redundancy but bloom filters are in-memory and its also less costly
-        // in terms of memory
+        // if all obsolete sstables were not deleted then don't remove the associated key range
         if buckets.write().await.delete_ssts(ssts_to_delete).await? {
             // Step 7: Remove obsolete keys from keys range
             ssts_to_delete.iter().for_each(|(_, sstables)| {
@@ -187,8 +185,7 @@ impl<'a> SizedTierRunner<'a> {
                        // merge sstable here
                 // });
                 merged_sst = self
-                    .merge_sstables(merged_sst, Box::new(insertable_sst))
-                    .map_err(|err| CompactionFailed(Box::new(err)))?;
+                    .merge_sstables(merged_sst, Box::new(insertable_sst));
             }
 
             let entries = &merged_sst.get_entries();
@@ -211,7 +208,7 @@ impl<'a> SizedTierRunner<'a> {
         &mut self,
         sst1: Box<dyn InsertableToBucket>,
         sst2: Box<dyn InsertableToBucket>,
-    ) -> Result<Box<dyn InsertableToBucket>, Error> {
+    ) -> Box<dyn InsertableToBucket> {
         let mut new_sst = TableInsertor::default();
         let new_sst_map = Arc::new(SkipMap::new());
         let mut merged_entries = Vec::new();
@@ -281,7 +278,7 @@ impl<'a> SizedTierRunner<'a> {
             );
         });
         new_sst.set_entries(new_sst_map);
-        Ok(Box::new(new_sst))
+        Box::new(new_sst)
     }
 
     /// Checks if an entry has been deleted or not

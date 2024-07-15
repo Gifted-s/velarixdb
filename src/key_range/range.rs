@@ -159,8 +159,9 @@ impl KeyRange {
         let mut filtered_ssts: Vec<Table> = Vec::new();
         let key_ranges = self.restored_ranges.read().await;
         for (_, range) in key_ranges.iter() {
-            if (range.biggest_key.as_slice().cmp(key.as_ref()) == Ordering::Greater
-                || range.biggest_key.as_slice().cmp(key.as_ref()) == Ordering::Equal)
+            let searched_key = key.as_ref().to_vec();
+            if searched_key >= range.smallest_key
+                && searched_key <= range.biggest_key
                 && range.sst.filter.as_ref().unwrap().contains(key.as_ref())
             {
                 filtered_ssts.push(range.sst.to_owned())

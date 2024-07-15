@@ -18,6 +18,7 @@ use std::{
         Arc, Mutex,
     },
 };
+
 /// Alias for false positive rate
 pub type FalsePositive = f64;
 
@@ -254,10 +255,10 @@ impl Default for BloomFilter {
     fn default() -> Self {
         Self {
             sst_dir: None,
-            no_of_hash_func: 0,
+            no_of_hash_func: Default::default(),
             no_of_elements: AtomicU32::new(0),
             bit_vec: Arc::new(Mutex::new(BitVec::new())),
-            false_positive_rate: 0.0,
+            false_positive_rate: Default::default(),
             file_path: None,
         }
     }

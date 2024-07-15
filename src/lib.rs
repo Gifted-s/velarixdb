@@ -45,6 +45,7 @@
 //! - [x] Index to improve searches on Sorted String Tables (SSTs)
 //! - [x] Key Range to store the largest and smallest keys in an SST
 //! - [x] Sized Tier Compaction Strategy (STCS)
+//! - [ ] Lock-free memtable with Crossbeam SkipMap (no `Mutex`)
 //! - [ ] Block Cache
 //! - [ ] Batched Writes
 //! - [ ] Range Query

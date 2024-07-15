@@ -49,7 +49,7 @@ pub enum Error {
     #[error("File read ended unexpectedly")]
     UnexpectedEOF(#[source] io::Error),
 
-    #[error("GC error attempting to remove unsynced entries from disk")]
+    #[error("GC error: attempting to remove unsynced entries from disk")]
     GCErrorAttemptToRemoveUnsyncedEntries,
 
     #[error("Failed to insert sstable to bucket because no insertion condition was met")]
@@ -67,7 +67,7 @@ pub enum Error {
     #[error("Error while recovering memtable from value log")]
     MemTableRecovery(#[source] Box<Self>),
 
-    #[error("Invalid string provided to be parsed to UUID input `{input_string}`: {error}")]
+    #[error("Invalid string provided to be parsed to UUID `{input_string}`: {error}")]
     InvaidUUIDParseString { input_string: String, error: uuid::Error },
 
     #[error("Invalid sstable directory error: `{input_string}`")]
