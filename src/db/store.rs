@@ -2,7 +2,7 @@ use crate::cfg::Config;
 use crate::compactors::{CompactionReason, Compactor};
 use crate::consts::{
     BUCKETS_DIRECTORY_NAME, HEAD_ENTRY_KEY, KB, MAX_KEY_SIZE, MAX_VALUE_SIZE, META_DIRECTORY_NAME, TOMB_STONE_MARKER,
-    VALUE_LOG_DIRECTORY_NAME, VLOG_START_OFFSET,
+    VALUE_LOG_DIRECTORY_NAME, VLOG_START_OFFSET,HEAD_KEY_SIZE
 };
 use crate::db::keyspace::is_valid_keyspace_name;
 use crate::flush::Flusher;
@@ -231,7 +231,7 @@ impl DataStore<'static, Key> {
             .await?;
         let entry = Entry::new(key.as_ref().to_vec(), v_offset, created_at, is_tombstone);
 
-        if self.active_memtable.is_full(HEAD_ENTRY_KEY.len()) {
+        if self.active_memtable.is_full(HEAD_KEY_SIZE) {
             self.migrate_memtable_to_read_only();
         }
         self.active_memtable.insert(&entry);
