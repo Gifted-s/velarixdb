@@ -20,10 +20,10 @@ pub struct Config {
     /// but it incurs extra cost on the CPU for more accuracy.
     pub false_positive_rate: f64,
 
-    /// Should we prefetch upcoming values in case of range queries?
+    /// Should we prefetch values in case of range queries?
     pub allow_prefetch: bool,
 
-    /// How many keys should we prefetch in case of range queries?
+    /// How many values should we prefetch in case of range queries?
     pub prefetch_size: usize,
 
     /// The size of each memtable in bytes

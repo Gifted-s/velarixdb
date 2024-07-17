@@ -253,7 +253,7 @@ impl DataStore<'static, Key> {
             most_recent_offset += SIZE_OF_U32   // Key Size(for fetching key length)
                         +SIZE_OF_U32            // Value Length(for fetching value length)
                         + SIZE_OF_U64           // Date Length
-                        + SIZE_OF_U8            // tombstone marker
+                        + SIZE_OF_U8            // Tombstone marker
                         + e.key.len()           // Key Length
                         + e.value.len(); // Value Length
         }
