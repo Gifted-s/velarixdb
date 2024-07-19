@@ -9,4 +9,6 @@ pub use compact::MergedSSTable;
 pub use compact::Strategy;
 pub use compact::IntervalParams;
 pub use compact::TtlParams;
+pub use sized::SizedTierRunner;
+pub use compact::Config;
 pub use insertor::TableInsertor;

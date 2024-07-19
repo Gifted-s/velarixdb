@@ -7,3 +7,4 @@ mod key_range_test;
 mod vlog;
 mod meta_test;
 mod summary_test;
+mod sized_tier_test;

@@ -11,7 +11,7 @@ use crate::{
     err::Error,
     filter::BloomFilter,
     memtable::Entry,
-    types::{Bool, BucketMapHandle, CreatedAt, Key, KeyRangeHandle, ValOffset},
+    types::{BucketMapHandle, CreatedAt, Key, KeyRangeHandle, ValOffset},
 };
 use crate::{err::Error::*, memtable::SkipMapValue};
 
@@ -23,17 +23,17 @@ use crate::{err::Error::*, memtable::SkipMapValue};
 #[derive(Debug, Clone)]
 pub struct SizedTierRunner<'a> {
     /// A thread-safe BucketMap with each bucket mapped to its id
-    bucket_map: BucketMapHandle,
+    pub(crate) bucket_map: BucketMapHandle,
 
     /// A thread-safe hashmap of sstables each mapped to its key range
-    key_range: KeyRangeHandle,
+    pub(crate) key_range: KeyRangeHandle,
 
     /// Compaction configuration
-    config: &'a Config,
+    pub(crate) config: &'a Config,
 
     /// Keeps track of tombstones encountered during compaction
     /// to predict validity of subseqeunt entries
-    tombstones: HashMap<Key, CreatedAt>,
+    pub(crate) tombstones: HashMap<Key, CreatedAt>,
 }
 
 impl<'a> SizedTierRunner<'a> {
@@ -106,10 +106,10 @@ impl<'a> SizedTierRunner<'a> {
 
                     if tracker.expected == tracker.actual {
                         // Step 6:  Delete the sstables that we already merged from their previous buckets
-                        let filters_updated = self
+                        let clean_up_successful = self
                             .clean_up_after_compaction(buckets, &ssts_to_remove.clone(), key_range)
                             .await;
-                        match filters_updated {
+                        match clean_up_successful {
                             Ok(None) => {
                                 return Err(Error::CompactionPartiallyFailed(Box::new(CompactionCleanupPartial)));
                             }
@@ -144,15 +144,11 @@ impl<'a> SizedTierRunner<'a> {
         // if all obsolete sstables were not deleted then don't remove the associated key range
         if buckets.write().await.delete_ssts(ssts_to_delete).await? {
             // Step 7: Remove obsolete keys from keys range
-            ssts_to_delete.iter().for_each(|(_, sstables)| {
-                sstables.iter().for_each(|s| {
-                    let range = Arc::clone(&key_range);
-                    let path = s.get_data_file_path();
-                    tokio::spawn(async move {
-                        range.remove(path).await;
-                    });
-                })
-            });
+            for (_, sstables) in ssts_to_delete {
+                for s in sstables {
+                    key_range.remove(s.dir.to_owned()).await;
+                }
+            }
             return Ok(Some(()));
         }
         Ok(None)
@@ -165,7 +161,7 @@ impl<'a> SizedTierRunner<'a> {
     /// # Errors
     ///
     /// Returns error incase an error occured during merge
-    async fn merge_ssts_in_buckets(&mut self, buckets: &[Bucket]) -> Result<Vec<MergedSSTable>, Error> {
+    pub async fn merge_ssts_in_buckets(&mut self, buckets: &[Bucket]) -> Result<Vec<MergedSSTable>, Error> {
         let mut merged_ssts = Vec::new();
         for bucket in buckets.iter() {
             let mut hotness: u64 = Default::default();
@@ -182,12 +178,10 @@ impl<'a> SizedTierRunner<'a> {
 
                 // TODO: merge_sstables() can be CPU intensive so we should use spawn blocking here
                 // tokio::task::spawn_blocking(||{
-                       // merge sstable here
+                // merge sstable here
                 // });
-                merged_sst = self
-                    .merge_sstables(merged_sst, Box::new(insertable_sst));
+                merged_sst = self.merge_sstables(merged_sst, Box::new(insertable_sst));
             }
-
             let entries = &merged_sst.get_entries();
             let mut filter = BloomFilter::new(self.config.filter_false_positive, entries.len());
             filter.build_filter_from_entries(entries);
@@ -287,7 +281,7 @@ impl<'a> SizedTierRunner<'a> {
     /// and prevented from being inserted
     ///
     /// Returns true if entry should be inserted or false otherwise
-    fn tombstone_check(&mut self, entry: &Entry<Key, usize>, merged_entries: &mut Vec<Entry<Key, usize>>) -> Bool {
+   pub(crate)  fn tombstone_check(&mut self, entry: &Entry<Key, usize>, merged_entries: &mut Vec<Entry<Key, usize>>) {
         let mut should_insert = false;
         if self.tombstones.contains_key(&entry.key) {
             let tomb_insert_time = *self.tombstones.get(&entry.key).unwrap();
@@ -312,6 +306,5 @@ impl<'a> SizedTierRunner<'a> {
         if should_insert {
             merged_entries.push(entry.clone())
         }
-        true
     }
 }
