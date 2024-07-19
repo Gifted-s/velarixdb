@@ -89,7 +89,7 @@ pub enum CompState {
     Active,
 }
 
-/// Reasons for compaction 
+/// Reasons for compaction
 #[derive(Debug, Clone, PartialEq)]
 pub enum CompactionReason {
     MaxSize,
