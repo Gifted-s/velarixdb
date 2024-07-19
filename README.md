@@ -1,15 +1,14 @@
 
 <p align="center">
-<img src="/logo.png" height="120">
+<img src="/logo.png" height="145">
 </p>
 
-
+[![codecov](https://codecov.io/gh/Gifted-s/velarixdb/graph/badge.svg?token=01K79PJWQA)](https://codecov.io/gh/Gifted-s/velarixdb)
 [![Tests](https://github.com/Gifted-s/velarixdb/actions/workflows/rust.yml/badge.svg)](https://github.com/Gifted-s/velarixdb/actions/workflows/rust.yml)
 [![codecov](https://codecov.io/gh/Gifted-s/velarixdb/branch/ft%2Fcoverage/graph/badge.svg?token=01K79PJWQA)](https://codecov.io/gh/Gifted-s/velarixdb)
 [![Crates.io](https://img.shields.io/crates/v/velarixdb.svg)](https://crates.io/crates/velarixdb)
 [![Documentation](https://docs.rs/velarixdb/badge.svg)](https://docs.rs/velarixdb)
 [![Clippy Tests](https://github.com/Gifted-s/bd/actions/workflows/clippy.yml/badge.svg)](https://github.com/Gifted-s/bd/actions/workflows/clippy.yml)
-[![Codecov](https://github.com/Gifted-s/velarixdb/actions/workflows/codecov.yml/badge.svg)](https://github.com/Gifted-s/velarixdb/actions/workflows/codecov.yml)
 [![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](code_of_conduct.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
