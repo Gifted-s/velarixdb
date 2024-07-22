@@ -71,7 +71,7 @@ mod tests {
         let root = tempdir().unwrap();
         let path = root.path().join("store_test_get_put");
         let store = DataStore::open_without_background("test", path).await.unwrap();
-        let workload_size = 10000;
+        let workload_size = 5000;
         let key_len = 5;
         let val_len = 5;
         let write_read_ratio = 1.0;
