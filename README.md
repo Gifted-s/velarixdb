@@ -1,7 +1,8 @@
 
 <p align="center">
-<img src="/logo.png" height="145">
+<img src="/logo.png" height="120">
 </p>
+
 
 [![codecov](https://codecov.io/gh/Gifted-s/velarixdb/branch/ft%2Ffinal/graph/badge.svg?token=01K79PJWQA)](https://codecov.io/gh/Gifted-s/velarixdb)
 [![Tests](https://github.com/Gifted-s/velarixdb/actions/workflows/rust.yml/badge.svg)](https://github.com/Gifted-s/velarixdb/actions/workflows/rust.yml)
@@ -10,7 +11,6 @@
 [![Clippy Tests](https://github.com/Gifted-s/bd/actions/workflows/clippy.yml/badge.svg)](https://github.com/Gifted-s/bd/actions/workflows/clippy.yml)
 [![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](code_of_conduct.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
 
 VelarixDB is an LSM-based storage engine designed to significantly reduce IO amplification, resulting in better performance and durability for storage devices.
 
@@ -23,12 +23,15 @@ VelarixDB is an ongoing project (*not production ready*) designed to optimize da
 
 ## Problem
 
-During compaction in LevelDB or RocksDB, [thesame key-value pair can be re-read and re-written from Level 1 to Level 6 in the worst case](https://github.com/facebook/rocksdb/wiki/Leveled-Compaction), the goal is to reduce size of data moved around during this process.
+During compaction in LevelDB or RocksDB, in the worst case, up to 10 SSTable files needs to be read, sorted and re-written since keys are not allowed to overlapp across all the sstables from Level 1 downwards. Suppose after merging SSTables in one level, the next level exceeds its threshold, compaction can cascade from Level 0 all the way to Level 6 meaning the overall write amplification can be up to 50 (ignoring the first compaction level).[ Reference -> [Official LevelDB Compaction Process Docs](https://github.com/facebook/rocksdb/wiki/Leveled-Compaction) ]. 
+This repetitive data movement can cause significant wear on SSDs, reducing their lifespan due to the high number of write cycles. The goal is to minimize the amount of data moved during compaction, thereby reducing the amount of data re-written and extending the device's lifetime.
 
 ## Solution
 
-We mostly care if the key has been deleted or updated therefore including values in the compaction process (which is often larger than the key) can unneccssarily amplify the data read and written during compaction. We therefore store keys and values separately (we map value offset to the key represented as 32 bit integer),
-This reduces the amount of data read, written, and moved during compaction, leading to improved performance and reduced wear on storage devices, particularly SSDs.
+To address this, we focus on whether a key has been deleted or updated. Including values in the compaction process (which are often larger than keys) unnecessarily amplifies the amount of data read and written. Therefore, we store keys and values separately. Specifically, we map value offsets to the keys, represented as 32-bit integers.
+
+This approach reduces the amount of data read, written, and moved during compaction, leading to improved performance and less wear on storage devices, particularly SSDs. By minimizing the data movement, we not only enhance the efficiency of the database but also significantly extend the lifespan of the underlying storage hardware.
+
 
 ## Performance Benefits
 
@@ -36,12 +39,12 @@ According to the benchmarks presented in the WiscKey paper, implementations can 
 - **2.5x to 111x** for database loading
 - **1.6x to 14x** for random lookups
 
-## Concurrency with Tokio
-
-To achieve high concurrency without the overhead of spawning new threads every time, velarixdb utilizes the Tokio runtime. This allows for efficient and scalable asynchronous operations, making the most of modern multi-core processors. Frankly,
-most Operating System File System does not provide async API but Tokio uses a thread pool to offload blocking file system operations. When you perform an asynchronous file operation in Tokio, the operation is executed on a dedicated thread from this pool.
+## Designed for asynchronous runtime
+Based on the introduction and efficiency of async IO at the OS kernel level e.g **io_uring** for the Linux kernel, VelarixDB is designed for asynchronous runtime. In this case Tokio runtime.
+Tokio allows for efficient and scalable asynchronous operations, making the most of modern multi-core processors. Frankly, most OS File System does not provide async API currently but Tokio uses a thread pool to offload blocking file system operations.
 This means that even though the file system operations themselves are blocking at the OS level, Tokio can handle them without blocking the main async task executor.  
-Tokio might also use [io_uring](https://docs.rs/tokio/latest/tokio/fs/index.html#:~:text=Currently%2C%20Tokio%20will%20always%20use%20spawn_blocking%20on%20all%20platforms%2C%20but%20it%20may%20be%20changed%20to%20use%20asynchronous%20file%20system%20APIs%20such%20as%20io_uring%20in%20the%20future.) in the future
+Tokio might adopt [io_uring](https://docs.rs/tokio/latest/tokio/fs/index.html#:~:text=Currently%2C%20Tokio%20will%20always%20use%20spawn_blocking%20on%20all%20platforms%2C%20but%20it%20may%20be%20changed%20to%20use%20asynchronous%20file%20system%20APIs%20such%20as%20io_uring%20in%20the%20future.) in the future
+
 
 ## Disclaimer
 
