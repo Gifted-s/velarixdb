@@ -32,8 +32,7 @@
 //!
 //! In the diagram:
 //! - The `Block` stores entries until it is 4KB in size and then writes to data file
-//! - TODO: In the future we will introduce Snappy Compression to reduce the size on the disk and also
-//! introduce checksum to ensure the data has not been corrupted
+//! - TODO: In the future we will introduce Snappy Compression to reduce the size on the disk and also introduce checksum to ensure the data has not been corrupted
 
 use crate::{
     block::Block,
