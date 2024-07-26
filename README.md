@@ -138,7 +138,7 @@ async fn main() {
 use serde::{Deserialize, Serialize};
 use serde_json;
 use velarixdb::db::DataStore;
-# use tempfile::tempdir;
+use tempfile::tempdir;
 
 #[tokio::main]
 async fn main() {

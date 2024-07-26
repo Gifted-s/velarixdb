@@ -138,9 +138,7 @@ impl DataStore<'static, Key> {
         dir: P,
     ) -> Result<DataStore<'static, Key>, crate::err::Error> {
         assert!(is_valid_keyspace_name(keyspace));
-        let dir = DirPath::build(dir);
-        let default_config = Config::default();
-        let mut store = Self::create_or_recover(dir.to_owned(), SizeUnit::Bytes, default_config).await?;
+        let mut store = Self::create_or_recover(DirPath::build(dir), SizeUnit::Bytes, Config::default()).await?;
         store.keyspace = keyspace;
         store.start_background_tasks();
         Ok(store)
@@ -158,10 +156,7 @@ impl DataStore<'static, Key> {
     ) -> Result<DataStore<'static, Key>, crate::err::Error> {
         assert!(is_valid_keyspace_name(keyspace));
         log::info!("Opening keyspace at {:?}", dir.as_ref());
-
-        let dir = DirPath::build(dir);
-        let default_config = Config::default();
-        let mut store = Self::create_or_recover(dir.to_owned(), SizeUnit::Bytes, default_config).await?;
+        let mut store = Self::create_or_recover(DirPath::build(dir), SizeUnit::Bytes, Config::default()).await?;
         store.keyspace = keyspace;
         Ok(store)
     }
