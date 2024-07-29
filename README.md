@@ -39,7 +39,7 @@ According to the benchmarks presented in the WiscKey paper, implementations can 
 - **2.5x to 111x** for database loading
 - **1.6x to 14x** for random lookups
 
-## Designed for asynchronous runtime
+## Designed for asynchronous runtime (unstable)
 Based on the introduction and efficiency of async IO at the OS kernel level e.g **io_uring** for the Linux kernel, VelarixDB is designed for asynchronous runtime. In this case Tokio runtime.
 Tokio allows for efficient and scalable asynchronous operations, making the most of modern multi-core processors. Frankly, most OS File System does not provide async API currently but Tokio uses a thread pool to offload blocking file system operations.
 This means that even though the file system operations themselves are blocking at the OS level, Tokio can handle them without blocking the main async task executor.  
