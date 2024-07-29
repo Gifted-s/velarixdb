@@ -1,6 +1,6 @@
 name: Codecov
-
-on: [pull_request]
+# Don't generage coverage for v2 for now
+# on: [pull_request]
 
 jobs:
   test:
