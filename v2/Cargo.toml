@@ -1,0 +1,15 @@
+[package]
+name = "v2"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+byteorder = "1.5.0"
+lz4_flex = "0.11.3"
+nanoid = "0.4.0"
+seahash = "4.1.0"
+tempfile = "3.10.1"
+test-log = "0.2.16"
+thiserror = "1.0.63"
