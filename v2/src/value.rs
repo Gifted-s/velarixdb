@@ -94,7 +94,7 @@ impl PartialOrd for ParsedInternalKey {
 }
 
 // Order by user key, THEN by sequencce number
-// This is important to ensure most resent keys are
+// This is important to ensure most recent keys are
 // use, otherwise queries will bnehave unexpectedly
 impl Ord for ParsedInternalKey {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
