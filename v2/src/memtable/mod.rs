@@ -1,16 +1,17 @@
 use crate::range::prefix_to_range;
-use crate::value::{ParsedInternalKey, SeqNo, UserValue, ValueType};
+use crate::value::{ParsedInternalKey, SeqNo, UserKey, ValueOffset, ValueType};
 use crate::Value;
 use crossbeam_skiplist::SkipMap;
 use std::ops::Bound::{Excluded, Included, Unbounded};
 use std::ops::RangeBounds;
 use std::sync::atomic::AtomicU32;
+use std::sync::Arc;
 
 /// The memtable stores entries in memory before flushing to disk
 #[derive(Default)]
 pub struct MemTable {
     #[doc(hidden)]
-    items: SkipMap<ParsedInternalKey, UserValue>,
+    items: SkipMap<ParsedInternalKey, ValueOffset>,
 
     /// Approximate active memtable size
     ///
@@ -19,10 +20,10 @@ pub struct MemTable {
 }
 
 impl MemTable {
-    pub fn iter(&self) -> impl DoubleIterator<Iter = Value> + '_ {
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = Value> + '_ {
         self.items
             .iter()
-            .map(|entry| Value::from(entry.key().clone(), entry.value().clone()))
+            .map(|entry| Value::from((entry.key().clone(), entry.value().clone())))
     }
 
     pub fn range<'a, R: RangeBounds<ParsedInternalKey> + 'a>(
@@ -31,7 +32,7 @@ impl MemTable {
     ) -> impl DoubleEndedIterator<Item = Value> + 'a {
         self.items
             .range(range)
-            .map(|entry| Value::from(entry.key().clone(), entry.value().clone()))
+            .map(|entry| Value::from((entry.key().clone(), entry.value().clone())))
     }
 
     /// Returns the by key if it exists
@@ -59,13 +60,13 @@ impl MemTable {
         let (lower_bound, upper_bound) = prefix_to_range(prefix);
 
         let lower_bound = match lower_bound {
-            Included(key) => Included(ParsedInternalKey::new(key, SeqNo::Max, ValueType::Value)),
+            Included(key) => Included(ParsedInternalKey::new(key, SeqNo::MAX, ValueType::Value)),
             Unbounded => Unbounded,
             _ => panic!("lower bound cannot be excluded"),
         };
 
         let upper_bound = match upper_bound {
-            Excluded(key) => Excluded(ParsedInternalKey::new(key, SeqNo::Max, ValueType::Value)),
+            Excluded(key) => Excluded(ParsedInternalKey::new(key, SeqNo::MAX, ValueType::Value)),
             Unbounded => Unbounded,
             _ => panic!("upper bound cannot be included"),
         };
@@ -82,10 +83,10 @@ impl MemTable {
 
             if let Some(seqno) = seqno {
                 if key.seqno < seqno {
-                    return Some(Value::from(entry.key().clone(), entry.value().clone()));
+                    return Some(Value::from((entry.key().clone(), entry.value().clone())));
                 }
             } else {
-                return Some(Value::from(entry.key().clone(), entry.value().clone()));
+                return Some(Value::from((entry.key().clone(), entry.value().clone())));
             }
         }
         None
@@ -117,8 +118,120 @@ impl MemTable {
             .fetch_add(item_size, std::sync::atomic::Ordering::AcqRel);
 
         let key = ParsedInternalKey::new(item.key, item.seqno, item.value_type);
-        self.items.insert(key, item.value);
+        self.items.insert(key, item.value_offset);
 
         (item_size, size_before + item_size)
     }
+
+    /// Returns the highest sequence number in the memtable.
+    pub fn get_lsn(&self) -> Option<SeqNo> {
+        self.items
+            .iter()
+            .map(|x| {
+                let key = x.key();
+                key.seqno
+            })
+            .max()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{value::ValueType, UserKey};
+    use test_log::test;
+
+    fn memtable_mvcc_point_read() {
+        let memtable = MemTable::default();
+
+        memtable.insert(Value::new(*b"hello-key-999991", 100, 0, ValueType::Value));
+
+        let item = memtable.get("hello-key-99999", None);
+        assert_eq!(None, item);
+
+        let item = memtable.get("hello-key-999991", None);
+        assert_eq!(100, item.unwrap().value_offset);
+
+        memtable.insert(Value::new(*b"hello-key-999991", 200, 1, ValueType::Value));
+        let item = memtable.get("hello-key-99999", None);
+        assert_eq!(None, item);
+
+        let item = memtable.get("hello-key-999991", None);
+        assert_eq!(200, item.unwrap().value_offset);
+
+        let item = memtable.get("hello-key-99999", Some(1));
+        assert_eq!(None, item);
+
+        let item = memtable.get("hello-key-999991", Some(1));
+        assert_eq!(100, item.unwrap().value_offset);
+
+        let item = memtable.get("hello-key-99999", Some(2));
+        assert_eq!(None, item);
+
+        let item = memtable.get("hello-key-999991", Some(2));
+        assert_eq!(200, item.unwrap().value_offset);
+    }
+
+    #[test]
+    fn memtable_get() {
+        let memtable = MemTable::default();
+
+        let value = Value::new(b"abc".to_vec(), 100, 0, ValueType::Value);
+
+        memtable.insert(value.clone());
+
+        assert_eq!(Some(value), memtable.get("abc", None));
+    }
+
+    #[test]
+    fn memtable_get_highest_seqno() {
+        let memtable = MemTable::default();
+
+        memtable.insert(Value::new(b"abc".to_vec(), 100, 0, ValueType::Value));
+        memtable.insert(Value::new(b"abc".to_vec(), 100, 1, ValueType::Value));
+        memtable.insert(Value::new(b"abc".to_vec(), 100, 2, ValueType::Value));
+        memtable.insert(Value::new(b"abc".to_vec(), 100, 3, ValueType::Value));
+        memtable.insert(Value::new(b"abc".to_vec(), 100, 4, ValueType::Value));
+
+        assert_eq!(
+            Some(Value::new(b"abc".to_vec(), 100, 4, ValueType::Value,)),
+            memtable.get("abc", None)
+        );
+    }
+
+    #[test]
+    fn memtable_get_prefix() {
+        let memtable = MemTable::default();
+
+        memtable.insert(Value::new(b"abc0".to_vec(), 200, 0, ValueType::Value));
+        memtable.insert(Value::new(b"abc".to_vec(), 200, 255, ValueType::Value));
+
+        assert_eq!(
+            Some(Value::new(b"abc".to_vec(), 200, 255, ValueType::Value,)),
+            memtable.get("abc", None)
+        );
+
+        assert_eq!(
+            Some(Value::new(b"abc0".to_vec(), 200, 0, ValueType::Value,)),
+            memtable.get("abc0", None)
+        );
+    }
+}
+
+#[test]
+fn memtable_range() {
+    let memtable = MemTable::default();
+    memtable.insert(Value::new(b"a".to_vec(), 100, 0, ValueType::Value));
+    memtable.insert(Value::new(b"abc".to_vec(), 100, 0, ValueType::Value));
+    memtable.insert(Value::new(b"b".to_vec(), 100, 0, ValueType::Value));
+    memtable.insert(Value::new(b"abcdef".to_vec(), 100, 0, ValueType::Value));
+
+    let key: UserKey = Arc::new(*b"abcdef");
+
+    assert_eq!(
+        2,
+        memtable
+            .range(ParsedInternalKey::new(key, SeqNo::MAX, ValueType::Value)..)
+            .count()
+    );
 }
