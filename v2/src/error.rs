@@ -19,6 +19,11 @@ pub enum Error {
     Decompress(DecompressError),
 }
 
+impl From<DecompressError> for Error {
+    fn from(value: DecompressError) -> Self {
+        Self::Decompress(value)
+    }
+}
 
 /// Tree result
 pub type Result<T> = std::result::Result<T, Error>;

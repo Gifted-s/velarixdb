@@ -1,4 +1,4 @@
-use crate::value::UserKey;
+use crate::lsm_entry::UserKey;
 use std::ops::Bound;
 
 #[must_use]

@@ -107,7 +107,7 @@ impl Ord for ParsedInternalKey {
 /// NOTE:  This represents values stored in
 /// LSM-tree not in Value log
 #[derive(Clone, PartialEq, Eq)]
-pub struct Value {
+pub struct LSMEntry {
     /// User-define3d key - an arbitrary byte array
     ///
     /// Supports up to 2^16 bytes for perfmance considerations
@@ -123,7 +123,7 @@ pub struct Value {
     pub value_type: ValueType,
 }
 
-impl std::fmt::Debug for Value {
+impl std::fmt::Debug for LSMEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -139,8 +139,8 @@ impl std::fmt::Debug for Value {
     }
 }
 
-impl From<(ParsedInternalKey, ValueOffset)> for Value {
-    fn from(val: (ParsedInternalKey, ValueOffset)) -> Value {
+impl From<(ParsedInternalKey, ValueOffset)> for LSMEntry {
+    fn from(val: (ParsedInternalKey, ValueOffset)) -> LSMEntry {
         let key = val.0;
 
         Self {
@@ -152,7 +152,7 @@ impl From<(ParsedInternalKey, ValueOffset)> for Value {
     }
 }
 
-impl PartialOrd for Value {
+impl PartialOrd for LSMEntry {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
@@ -161,13 +161,13 @@ impl PartialOrd for Value {
 // Order by user key, THEN by sequencce number
 // This is important to ensure most resent keys are
 // use, otherwise queries will bnehave unexpectedly
-impl Ord for Value {
+impl Ord for LSMEntry {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         (&self.key, Reverse(self.seqno)).cmp(&(&other.key, Reverse(other.seqno)))
     }
 }
 
-impl Value {
+impl LSMEntry {
     /// Creates a new [`Value`].
     ///
     /// # Panics
@@ -217,8 +217,8 @@ impl Value {
     }
 }
 
-impl From<Value> for ParsedInternalKey {
-    fn from(val: Value) -> Self {
+impl From<LSMEntry> for ParsedInternalKey {
+    fn from(val: LSMEntry) -> Self {
         Self {
             user_key: val.key,
             seqno: val.seqno,
@@ -228,7 +228,7 @@ impl From<Value> for ParsedInternalKey {
 }
 
 
-impl Serializable for Value {
+impl Serializable for LSMEntry {
     fn serialize<W: Write>(&self, writer: &mut W) -> Result<(), SerializeError> {
         writer.write_u64::<BigEndian>(self.seqno)?;
         writer.write_u8(u8::from(self.value_type))?;
@@ -246,7 +246,7 @@ impl Serializable for Value {
     }
 }
 
-impl Deserializable for Value {
+impl Deserializable for LSMEntry {
     fn deserialize<R: Read>(reader: &mut R) -> Result<Self, DeserializeError> {
         let seqno = reader.read_u64::<BigEndian>()?;
         let value_type = reader.read_u8()?.into();
@@ -272,7 +272,7 @@ mod tests {
     #[test]
     fn value_raw() -> crate::Result<()> {
         // Create an empty Value instance
-        let value = Value::new(vec![1, 2, 3], 10, 1, ValueType::Value);
+        let value = LSMEntry::new(vec![1, 2, 3], 10, 1, ValueType::Value);
 
         #[rustfmt::skip]
         let  bytes = &[
@@ -290,7 +290,7 @@ mod tests {
         ];
 
         // Deserialize the empty Value
-        let deserialized = Value::deserialize(&mut Cursor::new(bytes))?;
+        let deserialized = LSMEntry::deserialize(&mut Cursor::new(bytes))?;
 
         // Check if deserialized Value is equivalent to the original empty Value
         assert_eq!(value, deserialized);
@@ -301,14 +301,14 @@ mod tests {
     #[test]
     fn value_zero_value_offset() -> crate::Result<()> {
         // Create an empty Value instance
-        let value = Value::new(vec![1, 2, 3], 0, 42, ValueType::Value);
+        let value = LSMEntry::new(vec![1, 2, 3], 0, 42, ValueType::Value);
 
         // Serialize the empty Value
         let mut serialized = Vec::new();
         value.serialize(&mut serialized)?;
 
         // Deserialize the empty Value
-        let deserialized = Value::deserialize(&mut &serialized[..])?;
+        let deserialized = LSMEntry::deserialize(&mut &serialized[..])?;
 
         // Check if deserialized Value is equivalent to the original empty Value
         assert_eq!(value, deserialized);
@@ -319,7 +319,7 @@ mod tests {
     #[test]
     fn value_with_value() -> crate::Result<()> {
         // Create an empty Value instance
-        let value = Value::new(
+        let value = LSMEntry::new(
             vec![1, 2, 3],
             10,
             42,
@@ -331,7 +331,7 @@ mod tests {
         value.serialize(&mut serialized)?;
 
         // Deserialize the empty Value
-        let deserialized = Value::deserialize(&mut &serialized[..])?;
+        let deserialized = LSMEntry::deserialize(&mut &serialized[..])?;
 
         // Check if deserialized Value is equivalent to the original empty Value
         assert_eq!(value, deserialized);

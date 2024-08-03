@@ -15,9 +15,9 @@ impl From<std::io::Error> for SerializeError {
 
 
 #[derive(Debug)]
-pub struct InvalidTypeTuple(String, u8);
+pub struct Tag(pub String, pub u8);
 
-impl std::fmt::Display for InvalidTypeTuple {
+impl std::fmt::Display for Tag {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "({}, {})", self.0, self.1)
     }
@@ -33,7 +33,7 @@ pub enum DeserializeError {
     Utf8(std::str::Utf8Error),
 
     #[error("Invalid Tag: {0}")]
-    InvalidTag(InvalidTypeTuple),
+    InvalidTag(Tag),
 
     #[error("InvalidTrailer")]
     InvalidTrailer,
