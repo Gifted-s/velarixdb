@@ -1,6 +1,6 @@
 use crate::range::prefix_to_range;
-use crate::value::{ParsedInternalKey, SeqNo, UserKey, ValueOffset, ValueType};
-use crate::Value;
+use crate::lsm_entry::{ParsedInternalKey, SeqNo, UserKey, ValueOffset, ValueType};
+use crate::LSMEntry;
 use crossbeam_skiplist::SkipMap;
 use std::ops::Bound::{Excluded, Included, Unbounded};
 use std::ops::RangeBounds;
@@ -19,25 +19,25 @@ pub struct MemTable {
 }
 
 impl MemTable {
-    pub fn iter(&self) -> impl DoubleEndedIterator<Item = Value> + '_ {
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = LSMEntry> + '_ {
         self.items
             .iter()
-            .map(|entry| Value::from((entry.key().clone(), entry.value().clone())))
+            .map(|entry| LSMEntry::from((entry.key().clone(), entry.value().clone())))
     }
 
     pub fn range<'a, R: RangeBounds<ParsedInternalKey> + 'a>(
         &'a self,
         range: R,
-    ) -> impl DoubleEndedIterator<Item = Value> + 'a {
+    ) -> impl DoubleEndedIterator<Item = LSMEntry> + 'a {
         self.items
             .range(range)
-            .map(|entry| Value::from((entry.key().clone(), entry.value().clone())))
+            .map(|entry| LSMEntry::from((entry.key().clone(), entry.value().clone())))
     }
 
     /// Returns the by key if it exists
     ///
     /// The item with the highest seqno will be returned, if `seqno` is None
-    pub fn get<K: AsRef<[u8]>>(&self, key: K, seqno: Option<SeqNo>) -> Option<Value> {
+    pub fn get<K: AsRef<[u8]>>(&self, key: K, seqno: Option<SeqNo>) -> Option<LSMEntry> {
         let prefix = key.as_ref();
 
         // NOTE: This range start deserves some explanation...
@@ -82,10 +82,10 @@ impl MemTable {
 
             if let Some(seqno) = seqno {
                 if key.seqno < seqno {
-                    return Some(Value::from((entry.key().clone(), entry.value().clone())));
+                    return Some(LSMEntry::from((entry.key().clone(), entry.value().clone())));
                 }
             } else {
-                return Some(Value::from((entry.key().clone(), entry.value().clone())));
+                return Some(LSMEntry::from((entry.key().clone(), entry.value().clone())));
             }
         }
         None
@@ -108,7 +108,7 @@ impl MemTable {
     }
 
     /// Inserts an item into the memtable
-    pub fn insert(&self, item: Value) -> (u32, u32) {
+    pub fn insert(&self, item: LSMEntry) -> (u32, u32) {
         #[allow(clippy::cast_possible_truncation)]
         let item_size = item.size() as u32;
 
@@ -137,14 +137,14 @@ impl MemTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{value::ValueType, UserKey};
+    use crate::{lsm_entry::ValueType, UserKey};
     use std::sync::Arc;
     use test_log::test;
 
     fn memtable_mvcc_point_read() {
         let memtable = MemTable::default();
 
-        memtable.insert(Value::new(*b"hello-key-999991", 100, 0, ValueType::Value));
+        memtable.insert(LSMEntry::new(*b"hello-key-999991", 100, 0, ValueType::Value));
 
         let item = memtable.get("hello-key-99999", None);
         assert_eq!(None, item);
@@ -152,7 +152,7 @@ mod tests {
         let item = memtable.get("hello-key-999991", None);
         assert_eq!(100, item.unwrap().value_offset);
 
-        memtable.insert(Value::new(*b"hello-key-999991", 200, 1, ValueType::Value));
+        memtable.insert(LSMEntry::new(*b"hello-key-999991", 200, 1, ValueType::Value));
         let item = memtable.get("hello-key-99999", None);
         assert_eq!(None, item);
 
@@ -176,7 +176,7 @@ mod tests {
     fn memtable_get() {
         let memtable = MemTable::default();
 
-        let value = Value::new(b"abc".to_vec(), 100, 0, ValueType::Value);
+        let value = LSMEntry::new(b"abc".to_vec(), 100, 0, ValueType::Value);
 
         memtable.insert(value.clone());
 
@@ -187,14 +187,14 @@ mod tests {
     fn memtable_get_highest_seqno() {
         let memtable = MemTable::default();
 
-        memtable.insert(Value::new(b"abc".to_vec(), 100, 0, ValueType::Value));
-        memtable.insert(Value::new(b"abc".to_vec(), 100, 1, ValueType::Value));
-        memtable.insert(Value::new(b"abc".to_vec(), 100, 2, ValueType::Value));
-        memtable.insert(Value::new(b"abc".to_vec(), 100, 3, ValueType::Value));
-        memtable.insert(Value::new(b"abc".to_vec(), 100, 4, ValueType::Value));
+        memtable.insert(LSMEntry::new(b"abc".to_vec(), 100, 0, ValueType::Value));
+        memtable.insert(LSMEntry::new(b"abc".to_vec(), 100, 1, ValueType::Value));
+        memtable.insert(LSMEntry::new(b"abc".to_vec(), 100, 2, ValueType::Value));
+        memtable.insert(LSMEntry::new(b"abc".to_vec(), 100, 3, ValueType::Value));
+        memtable.insert(LSMEntry::new(b"abc".to_vec(), 100, 4, ValueType::Value));
 
         assert_eq!(
-            Some(Value::new(b"abc".to_vec(), 100, 4, ValueType::Value,)),
+            Some(LSMEntry::new(b"abc".to_vec(), 100, 4, ValueType::Value,)),
             memtable.get("abc", None)
         );
     }
@@ -203,16 +203,16 @@ mod tests {
     fn memtable_get_prefix() {
         let memtable = MemTable::default();
 
-        memtable.insert(Value::new(b"abc0".to_vec(), 200, 0, ValueType::Value));
-        memtable.insert(Value::new(b"abc".to_vec(), 200, 255, ValueType::Value));
+        memtable.insert(LSMEntry::new(b"abc0".to_vec(), 200, 0, ValueType::Value));
+        memtable.insert(LSMEntry::new(b"abc".to_vec(), 200, 255, ValueType::Value));
 
         assert_eq!(
-            Some(Value::new(b"abc".to_vec(), 200, 255, ValueType::Value,)),
+            Some(LSMEntry::new(b"abc".to_vec(), 200, 255, ValueType::Value,)),
             memtable.get("abc", None)
         );
 
         assert_eq!(
-            Some(Value::new(b"abc0".to_vec(), 200, 0, ValueType::Value,)),
+            Some(LSMEntry::new(b"abc0".to_vec(), 200, 0, ValueType::Value,)),
             memtable.get("abc0", None)
         );
     }
@@ -220,10 +220,10 @@ mod tests {
     #[test]
     fn memtable_range() {
         let memtable = MemTable::default();
-        memtable.insert(Value::new(b"a".to_vec(), 100, 0, ValueType::Value));
-        memtable.insert(Value::new(b"abc".to_vec(), 100, 0, ValueType::Value));
-        memtable.insert(Value::new(b"b".to_vec(), 100, 0, ValueType::Value));
-        memtable.insert(Value::new(b"abcdef".to_vec(), 100, 0, ValueType::Value));
+        memtable.insert(LSMEntry::new(b"a".to_vec(), 100, 0, ValueType::Value));
+        memtable.insert(LSMEntry::new(b"abc".to_vec(), 100, 0, ValueType::Value));
+        memtable.insert(LSMEntry::new(b"b".to_vec(), 100, 0, ValueType::Value));
+        memtable.insert(LSMEntry::new(b"abcdef".to_vec(), 100, 0, ValueType::Value));
 
         let key: UserKey = Arc::new(*b"abcdef");
 
@@ -241,22 +241,22 @@ mod tests {
     fn memtable_get_old_version() {
         let memtable = MemTable::default();
 
-        memtable.insert(Value::new(b"abc".to_vec(), 200, 0, ValueType::Value));
-        memtable.insert(Value::new(b"abc".to_vec(), 200, 99, ValueType::Value));
-        memtable.insert(Value::new(b"abc".to_vec(), 200, 255, ValueType::Value));
+        memtable.insert(LSMEntry::new(b"abc".to_vec(), 200, 0, ValueType::Value));
+        memtable.insert(LSMEntry::new(b"abc".to_vec(), 200, 99, ValueType::Value));
+        memtable.insert(LSMEntry::new(b"abc".to_vec(), 200, 255, ValueType::Value));
 
         assert_eq!(
-            Some(Value::new(b"abc".to_vec(), 200, 255, ValueType::Value,)),
+            Some(LSMEntry::new(b"abc".to_vec(), 200, 255, ValueType::Value,)),
             memtable.get("abc", None)
         );
 
         assert_eq!(
-            Some(Value::new(b"abc".to_vec(), 200, 99, ValueType::Value,)),
+            Some(LSMEntry::new(b"abc".to_vec(), 200, 99, ValueType::Value,)),
             memtable.get("abc", Some(100))
         );
 
         assert_eq!(
-            Some(Value::new(b"abc".to_vec(), 200, 0, ValueType::Value,)),
+            Some(LSMEntry::new(b"abc".to_vec(), 200, 0, ValueType::Value,)),
             memtable.get("abc", Some(50))
         );
     }
