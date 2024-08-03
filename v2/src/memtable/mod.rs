@@ -5,7 +5,6 @@ use crossbeam_skiplist::SkipMap;
 use std::ops::Bound::{Excluded, Included, Unbounded};
 use std::ops::RangeBounds;
 use std::sync::atomic::AtomicU32;
-use std::sync::Arc;
 
 /// The memtable stores entries in memory before flushing to disk
 #[derive(Default)]
@@ -139,6 +138,7 @@ impl MemTable {
 mod tests {
     use super::*;
     use crate::{value::ValueType, UserKey};
+    use std::sync::Arc;
     use test_log::test;
 
     fn memtable_mvcc_point_read() {
@@ -216,22 +216,48 @@ mod tests {
             memtable.get("abc0", None)
         );
     }
-}
 
-#[test]
-fn memtable_range() {
-    let memtable = MemTable::default();
-    memtable.insert(Value::new(b"a".to_vec(), 100, 0, ValueType::Value));
-    memtable.insert(Value::new(b"abc".to_vec(), 100, 0, ValueType::Value));
-    memtable.insert(Value::new(b"b".to_vec(), 100, 0, ValueType::Value));
-    memtable.insert(Value::new(b"abcdef".to_vec(), 100, 0, ValueType::Value));
+    #[test]
+    fn memtable_range() {
+        let memtable = MemTable::default();
+        memtable.insert(Value::new(b"a".to_vec(), 100, 0, ValueType::Value));
+        memtable.insert(Value::new(b"abc".to_vec(), 100, 0, ValueType::Value));
+        memtable.insert(Value::new(b"b".to_vec(), 100, 0, ValueType::Value));
+        memtable.insert(Value::new(b"abcdef".to_vec(), 100, 0, ValueType::Value));
 
-    let key: UserKey = Arc::new(*b"abcdef");
+        let key: UserKey = Arc::new(*b"abcdef");
 
-    assert_eq!(
-        2,
-        memtable
-            .range(ParsedInternalKey::new(key, SeqNo::MAX, ValueType::Value)..)
-            .count()
-    );
+        let items = memtable.range(ParsedInternalKey::new(key.clone(), SeqNo::MAX, ValueType::Value)..);
+
+        assert_eq!(
+            2,
+            memtable
+                .range(ParsedInternalKey::new(key, SeqNo::MAX, ValueType::Value)..)
+                .count()
+        );
+    }
+
+    #[test]
+    fn memtable_get_old_version() {
+        let memtable = MemTable::default();
+
+        memtable.insert(Value::new(b"abc".to_vec(), 200, 0, ValueType::Value));
+        memtable.insert(Value::new(b"abc".to_vec(), 200, 99, ValueType::Value));
+        memtable.insert(Value::new(b"abc".to_vec(), 200, 255, ValueType::Value));
+
+        assert_eq!(
+            Some(Value::new(b"abc".to_vec(), 200, 255, ValueType::Value,)),
+            memtable.get("abc", None)
+        );
+
+        assert_eq!(
+            Some(Value::new(b"abc".to_vec(), 200, 99, ValueType::Value,)),
+            memtable.get("abc", Some(100))
+        );
+
+        assert_eq!(
+            Some(Value::new(b"abc".to_vec(), 200, 0, ValueType::Value,)),
+            memtable.get("abc", Some(50))
+        );
+    }
 }

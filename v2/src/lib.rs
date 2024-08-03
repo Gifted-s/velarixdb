@@ -4,6 +4,9 @@ mod serde;
 mod value;
 mod range;
 mod memtable;
+mod stop_signal;
+mod time;
+mod version;
 
 pub use {
     error::{Error, Result},
