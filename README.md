@@ -50,6 +50,9 @@ Tokio might adopt [io_uring](https://docs.rs/tokio/latest/tokio/fs/index.html#:~
 
 Please note that velarixdb is still under development and is not yet production-ready.
 
+### NOTE
+v2 is the most recent version (not experimental) and under active development, the src modules are for the experimental version
+
 ### Basic Features
 - [x] Atomic `Put()`, `Get()`, `Delete()`, and `Update()` operations
 - [x] 100% safe & stable Rust

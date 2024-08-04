@@ -10,6 +10,8 @@ Thank you for your contribution!
 
 https://github.com/Gifted-s/bd/issues
 
+### NOTE
+Please note that the code in v2 is the most recent (not experimental) and under active development, the src modules are for the experimental version
 
 ### How do I contribute
 
