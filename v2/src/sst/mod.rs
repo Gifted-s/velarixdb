@@ -1,4 +1,6 @@
 pub mod block;
-mod value_offset_block;
-mod block_index;
+pub mod value_offset_block;
+pub mod block_index;
+mod meta;
+pub mod id;
 

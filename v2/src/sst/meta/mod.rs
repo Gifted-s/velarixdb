@@ -1,0 +1,1 @@
+pub type SegmentId = u64;
