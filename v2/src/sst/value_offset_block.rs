@@ -23,3 +23,12 @@ pub enum CachePolicy{
 #[allow(clippy::module_name_repetitions)]
 pub type ValueOffsetBlock = Block<LSMEntry>;
 
+impl ValueOffsetBlock {
+    #[must_use]
+    pub fn size(&self) -> usize{
+        std::mem::size_of::<Self>() + self.items.iter().map(LSMEntry::size).sum::<usize>()
+    }
+
+    
+}  
+

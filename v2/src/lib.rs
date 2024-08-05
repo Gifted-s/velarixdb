@@ -11,9 +11,12 @@ mod file;
 mod either;
 mod sst;
 mod compression;
+mod tree;
+mod block_cache;
+mod descriptor_table;
 
 pub use {
     error::{Error, Result},
     serde::{DeserializeError, SerializeError},
-    lsm_entry::{SeqNo, UserKey, UserValue, LSMEntry, ValueType},
+    lsm_entry::{SeqNo, UserKey, UserValue, LSMEntry, ValueType}
 };
