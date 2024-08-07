@@ -3,40 +3,12 @@ use crate::SeqNo;
 use std::sync::{
     atomic::{
         AtomicU64,
-        Ordering::{Acquire, Release},
+        Ordering::Release,
     },
     Arc,
 };
 
-/// Thread-safe sequence number generator
-///
-/// # Examples
-///
-/// ```
-/// # use lsm_tree::{Config, SequenceNumberCounter};
-/// #
-/// # let path = tempfile::tempdir()?;
-/// let tree = Config::new(path).open()?;
-///
-/// let seqno = SequenceNumberCounter::default();
-///
-/// // Do some inserts...
-/// tree.insert("a".as_bytes(), "abc", seqno.next());
-/// tree.insert("b".as_bytes(), "abc", seqno.next());
-/// tree.insert("c".as_bytes(), "abc", seqno.next());
-///
-/// // Maybe create a snapshot
-/// let snapshot = tree.snapshot(seqno.get());
-///
-/// // Create a batch
-/// let batch_seqno = seqno.next();
-/// tree.remove("a".as_bytes(), batch_seqno);
-/// tree.remove("b".as_bytes(), batch_seqno);
-/// tree.remove("c".as_bytes(), batch_seqno);
-/// #
-/// # assert!(tree.is_empty()?);
-/// # Ok::<(), lsm_tree::Error>(())
-/// ```
+
 #[derive(Clone, Default, Debug)]
 pub struct SequenceNumberCounter(Arc<AtomicU64>);
 

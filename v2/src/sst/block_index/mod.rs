@@ -1,6 +1,6 @@
 pub mod block_handle;
 mod top_level;
-mod writer;
+pub mod writer;
 
 use self::block_handle::KeyedBlockHandle;
 use super::block::Block;

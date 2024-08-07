@@ -14,6 +14,8 @@ mod compression;
 mod tree;
 mod block_cache;
 mod descriptor_table;
+mod key_range;
+mod seqno;
 
 pub use {
     error::{Error, Result},

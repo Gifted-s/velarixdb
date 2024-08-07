@@ -8,7 +8,7 @@
 [![Tests](https://github.com/Gifted-s/velarixdb/actions/workflows/rust.yml/badge.svg)](https://github.com/Gifted-s/velarixdb/actions/workflows/rust.yml)
 [![Crates.io](https://img.shields.io/crates/v/velarixdb.svg)](https://crates.io/crates/velarixdb)
 [![Documentation](https://docs.rs/velarixdb/badge.svg)](https://docs.rs/velarixdb)
-[![Clippy](https://github.com/Gifted-s/velarixdb/actions/workflows/clippy.yml/badge.svg)](https://github.com/Gifted-s/velarixdb/actions/workflows/clippy.yml)
+<!-- [![Clippy](https://github.com/Gifted-s/velarixdb/actions/workflows/clippy.yml/badge.svg)](https://github.com/Gifted-s/velarixdb/actions/workflows/clippy.yml) -->
 [![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](code_of_conduct.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -40,7 +40,7 @@ According to the benchmarks presented in the WiscKey paper, implementations can 
 - **1.6x to 14x** for random lookups
 
 ## Addressing major concerns
-- **Range Query**: Since keys are separate from values, won't that affect range queries performance. Well, we now how have internal parallelism in SSDs, as we fetch the keys from  the LSM tree we can fetch the values in parallel from the vlog file. This [benchmark](https://github.com/Gifted-s/velarixdb/blob/main/bench.png) from the Wisckey Paper shows how for request size ≥ 64KB, the aggregate throughput of random reads with 32 threads matches the sequential read throughput.
+- **Range Query**: Since keys are separate from values, won't that affect range queries performance. Well, we now have internal parallelism in SSDs, as we fetch the keys from  the LSM tree we can fetch the values in parallel from the vlog file. This [benchmark](https://github.com/Gifted-s/velarixdb/blob/main/bench.png) from the Wisckey Paper shows how for request size ≥ 64KB, the aggregate throughput of random reads with 32 threads matches the sequential read throughput.
 - **More Disk IO for Reads**: Since keys are now seperate from values, we have to make extra disk IO to fetch values? Yes, but since the key density now increases for each level (since we are only storing keys and value offsets in the sstable), we will most likely search fewer levels compared to LevelDB or RocksDB for thesame query. A significant portion of the LSM tree can also be cached in memory.
 
 ## Designed for asynchronous runtime (unstable)
