@@ -16,6 +16,8 @@ mod block_cache;
 mod descriptor_table;
 mod key_range;
 mod seqno;
+mod file_offsets;
+mod footer;
 
 pub use {
     error::{Error, Result},
