@@ -1,4 +1,4 @@
-//! Velarixdb is an LSM-based storage engine designed to significantly reduce IO amplification, resulting in better performance and durability for storage devices.
+//! Velarixdb is an LSM-based storage engine designed to significantly reduce I/O amplification, resulting in better performance and durability for storage devices.
 //!
 //![![codecov](https://codecov.io/gh/Gifted-s/velarixdb/branch/ft%2Ffinal/graph/badge.svg?token=01K79PJWQA)](https://codecov.io/gh/Gifted-s/velarixdb)
 //![![Tests](https://github.com/Gifted-s/velarixdb/actions/workflows/rust.yml/badge.svg)](https://github.com/Gifted-s/velarixdb/actions/workflows/rust.yml)
@@ -9,7 +9,7 @@
 
 //! ## Introduction
 //!
-//! # Velarixdb: Designed to reduce IO amplification
+//! # Velarixdb: Designed to reduce I/O amplification
 //!
 //! This is an ongoing project (**not production ready**) designed to optimize data movement during load times, random access, and compaction. Inspired by the WiscKey paper, [WiscKey: Separating Keys from Values in SSD-conscious Storage](https://usenix.org/system/files/conference/fast16/fast16-papers-lu.pdf), velarixdb aims to significantly enhance performance over traditional key-value stores.
 //!
@@ -31,7 +31,7 @@
 //! 
 //! ## Addressing major concerns
 //! - **Range Query**: Since keys are separate from values, won't that affect range queries performance. Well, we now how have internal parallelism in SSDs, as we fetch the keys from  the LSM tree we can fetch the values in parallel from the vlog file. This [benchmark](https://github.com/Gifted-s/velarixdb/blob/main/bench.png) from the Wisckey Paper shows how for request size ≥ 64KB, the aggregate throughput of random reads with 32 threads matches the sequential read throughput.
-//! - **More Disk IO for Reads**: Since keys are now seperate from values, we have to make extra disk IO to fetch values? Yes, but since the key density now increases for each level (since we are only storing keys and value offsets in the sstable), we will most likely search fewer levels compared to LevelDB or RocksDB for thesame query. A significant portion of the LSM tree can also be cached in memory.
+//! - **More Disk I/O for Reads**: Since keys are now seperate from values, we have to make extra disk IO to fetch values? Yes, but since the key density now increases for each level (since we are only storing keys and value offsets in the sstable), we will most likely search fewer levels compared to LevelDB or RocksDB for thesame query. A significant portion of the LSM tree can also be cached in memory.
 //! 
 //! ## Designed for asynchronous runtime (unstable)
 //!
