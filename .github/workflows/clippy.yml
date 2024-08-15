@@ -1,6 +1,5 @@
 name: Clippy
-# Don't run clippy for V2
-# on: [push, pull_request]
+on: [push, pull_request]
 
 jobs:
   clippy:
