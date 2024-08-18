@@ -3,3 +3,4 @@
 - Researched maths on relations
 - Researched latest trends in Rust 
 - Experimenting with nom parser rust library 
+- Solving maths
