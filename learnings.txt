@@ -5,3 +5,4 @@
 - Experimenting with nom parser rust library 16 Aug 2024
 - Solving maths 19 Aug 2024
 - Researched Bigdata 20 Aug 2024
+- Researched Previous Projects on LSM
