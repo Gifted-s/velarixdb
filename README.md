@@ -46,7 +46,7 @@ According to the benchmarks presented in the WiscKey paper, implementations can 
 ## Designed for asynchronous runtime (unstable)
 Based on the introduction and efficiency of async IO at the OS kernel level e.g **io_uring** for the Linux kernel, VelarixDB is designed for asynchronous runtime. In this case Tokio runtime.
 Tokio allows for efficient and scalable asynchronous operations, making the most of modern multi-core processors. Frankly, most OS File System does not provide async API currently but Tokio uses a thread pool to offload blocking file system operations.
-This means that even though the file system operations themselves are blocking at the OS level, Tokio can handle them without blocking the main async task executor. Tokio might adopt [io_uring](https://docs.rs/tokio/latest/tokio/fs/index.html#:~:text=Currently%2C%20Tokio%20will%20always%20use%20spawn_blocking%20on%20all%20platforms%2C%20but%20it%20may%20be%20changed%20to%20use%20asynchronous%20file%20system%20APIs%20such%20as%20io_uring%20in%20the%20future.) in the future. (We haven't benchmarked the async version therefore this is unstable and might be removed in future versions)
+This means that even though the file system operations themselves are blocking at the OS level, Tokio can handle them without blocking the main async task executor. Tokio might adopt [io_uring](https://docs.rs/tokio/latest/tokio/fs/index.html#:~:text=Currently%2C%20Tokio%20will%20always%20use%20spawn_blocking%20on%20all%20platforms%2C%20but%20it%20may%20be%20changed%20to%20use%20asynchronous%20file%20system%20APIs%20such%20as%20io_uring%20in%20the%20future.) in the future. (We haven't benchmarked the async version therefore this is unstable and might be removed in a future version)
 
 
 ## Disclaimer
