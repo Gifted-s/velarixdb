@@ -17,7 +17,7 @@ VelarixDB is an LSM-based storage engine designed to significantly reduce IO amp
 
 ## Introduction
 
-**VelarixDB: Designed to reduce IO amplification**
+**VelarixDB: Designed to reduce I/O amplification**
 
 VelarixDB is an ongoing project (*not production ready*) designed to optimize data movement during load times and compaction. Inspired by the WiscKey paper, [WiscKey: Separating Keys from Values in SSD-conscious Storage](https://usenix.org/system/files/conference/fast16/fast16-papers-lu.pdf), velarixdb aims to significantly enhance performance over traditional key-value stores.
 
