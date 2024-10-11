@@ -240,7 +240,7 @@ impl Table {
     /// Writes SSTable files to disk
     ///
     /// After successful write, the summary and bloom filter
-    /// for the table is set
+    /// for the table is set and stored in memory
     ///
     /// Errors
     ///
