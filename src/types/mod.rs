@@ -33,7 +33,7 @@ pub type FlushSignal = u8;
 /// Represents the number of bytes read
 pub type NoBytesRead = usize;
 
-/// Represents entries in a SkipMap with generic key type
+/// Represents entries in a SkipMap with generic key type wih order trait
 pub type SkipMapEntries<K> = Arc<SkipMap<K, SkipMapValue<ValOffset>>>;
 
 /// Represents a receiver for flush signal
