@@ -46,7 +46,7 @@ impl<'a> RangeIterator<'a> {
 }
 
 impl<'a> DataStore<'a, Key> {
-    // TODO: range query
+    // TODO: range query, add next and previous method
     pub async fn seek(&self, _: &'a [u8], _: &'a [u8]) -> Result<RangeIterator, Error> {
       
         let range_iterator = RangeIterator::<'a>::new(
