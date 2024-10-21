@@ -173,7 +173,11 @@ impl MemTable<Key> {
         Self::with_specified_capacity_and_rate(SizeUnit::Bytes, capacity, false_positive_rate)
     }
 
-    pub fn with_specified_capacity_and_rate(size_unit: SizeUnit, capacity: usize, false_positive_rate: f64) -> Self {
+    pub fn with_specified_capacity_and_rate(
+        size_unit: SizeUnit,
+        capacity: usize,
+        false_positive_rate: f64,
+    ) -> Self {
         assert!(
             false_positive_rate >= 0.0,
             "False positive rate can not be les than or equal to zero"
@@ -347,7 +351,8 @@ mod tests {
         let buffer_size = 51200;
         let false_pos_rate = 1e-300;
 
-        let memtable = MemTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
+        let memtable =
+            MemTable::with_specified_capacity_and_rate(SizeUnit::Bytes, buffer_size, false_pos_rate);
         assert_eq!(memtable.entries.len(), 0);
         assert_eq!(memtable.bloom_filter.num_elements(), 0);
         assert_eq!(memtable.size, 0);
@@ -394,7 +399,7 @@ mod tests {
         let expected_len = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
 
         memtable.insert(&entry);
-       
+
         assert_eq!(memtable.size, expected_len);
 
         memtable.insert(&entry);
@@ -601,18 +606,23 @@ mod tests {
         map.insert(keys[3].to_owned(), (val_offset, created_at, is_tombstone));
         map.insert(keys[4].to_owned(), (val_offset, created_at, is_tombstone));
 
-        let within_range =
-            MemTable::is_entry_within_range(&map.get(&keys[0]).unwrap(), keys[0].to_owned(), keys[3].to_owned());
+        let within_range = MemTable::is_entry_within_range(
+            &map.get(&keys[0]).unwrap(),
+            keys[0].to_owned(),
+            keys[3].to_owned(),
+        );
         assert!(within_range);
 
         let start_invalid = vec![10, 20, 30, 40];
         let end_invalid = vec![0, 0, 0, 0];
-        let within_range = MemTable::is_entry_within_range(&map.get(&keys[0]).unwrap(), start_invalid, end_invalid);
+        let within_range =
+            MemTable::is_entry_within_range(&map.get(&keys[0]).unwrap(), start_invalid, end_invalid);
         assert!(!within_range);
 
         let start_valid = &keys[0];
         let end_invalid = vec![0, 0, 0, 0];
-        let within_range = MemTable::is_entry_within_range(&map.get(&keys[0]).unwrap(), start_valid, &end_invalid);
+        let within_range =
+            MemTable::is_entry_within_range(&map.get(&keys[0]).unwrap(), start_valid, &end_invalid);
         assert!(within_range);
     }
 

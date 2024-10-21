@@ -1,4 +1,6 @@
-use crate::consts::{BUCKET_DIRECTORY_PREFIX, BUCKET_HIGH, BUCKET_LOW, MAX_TRESHOLD, MIN_SSTABLE_SIZE, MIN_TRESHOLD};
+use crate::consts::{
+    BUCKET_DIRECTORY_PREFIX, BUCKET_HIGH, BUCKET_LOW, MAX_TRESHOLD, MIN_SSTABLE_SIZE, MIN_TRESHOLD,
+};
 use crate::err::Error;
 use crate::filter::BloomFilter;
 use crate::fs::{FileAsync, FileNode};
@@ -115,7 +117,10 @@ impl Bucket {
             .iter()
             .map(|s| tokio::spawn(fs::metadata(s.data_file.path.clone())));
         for meta_task in fetch_files_meta {
-            let meta_data = meta_task.await.map_err(|err| GetFileMetaData(err.into()))?.unwrap();
+            let meta_data = meta_task
+                .await
+                .map_err(|err| GetFileMetaData(err.into()))?
+                .unwrap();
             size += meta_data.len() as usize;
         }
         Ok(size / ssts.len() as u64 as usize)

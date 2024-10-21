@@ -7,7 +7,8 @@ use crate::{
     load_buffer,
     memtable::{Entry, SkipMapValue},
     types::{
-        CreatedAt, IsTombStone, Key, LastModified, NoBytesRead, SkipMapEntries, VLogHead, VLogTail, ValOffset, Value,
+        CreatedAt, IsTombStone, Key, LastModified, NoBytesRead, SkipMapEntries, VLogHead, VLogTail,
+        ValOffset, Value,
     },
     util,
     vlog::ValueLogEntry,
@@ -88,7 +89,10 @@ pub trait DataFs: Send + Sync + Debug + Clone {
         searched_key: &[u8],
     ) -> Result<Option<(ValOffset, CreatedAt, IsTombStone)>, Error>;
 
-    async fn load_entries_within_range(&self, range_offset: RangeOffset) -> Result<Vec<Entry<Key, usize>>, Error>;
+    async fn load_entries_within_range(
+        &self,
+        range_offset: RangeOffset,
+    ) -> Result<Vec<Entry<Key, usize>>, Error>;
 }
 
 #[async_trait]
@@ -110,8 +114,9 @@ pub trait VLogFs: Send + Sync + Debug + Clone {
 pub trait FilterFs: Send + Sync + Debug + Clone {
     async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<Self, Error>;
 
-    async fn recover<P: AsRef<Path> + Send + Sync>(path: P)
-        -> Result<(FalsePositive, NoHashFunc, NoOfElements), Error>;
+    async fn recover<P: AsRef<Path> + Send + Sync>(
+        path: P,
+    ) -> Result<(FalsePositive, NoHashFunc, NoOfElements), Error>;
 }
 
 #[async_trait]
@@ -223,7 +228,10 @@ impl FileAsync for FileNode {
 
     async fn sync_all(&self) -> Result<(), Error> {
         let file = self.w_lock().await;
-        Ok(file.sync_all().await.map_err(|err| Error::FileSync { error: err })?)
+        Ok(file
+            .sync_all()
+            .await
+            .map_err(|err| Error::FileSync { error: err })?)
     }
 
     async fn flush(&self) -> Result<(), Error> {
@@ -376,7 +384,10 @@ impl DataFs for DataFileNode {
         }
     }
 
-    async fn load_entries_within_range(&self, range_offset: RangeOffset) -> Result<Vec<Entry<Key, ValOffset>>, Error> {
+    async fn load_entries_within_range(
+        &self,
+        range_offset: RangeOffset,
+    ) -> Result<Vec<Entry<Key, ValOffset>>, Error> {
         let mut entries = Vec::new();
         let mut total_bytes_read = 0;
         let path = &self.node.file_path;
@@ -567,7 +578,9 @@ impl VLogFs for VLogFileNode {
         let path = &self.node.file_path;
         let mut entries = Vec::new();
         let mut file = self.node.file.write().await;
-        file.seek(std::io::SeekFrom::Start(offset)).await.map_err(FileSeek)?;
+        file.seek(std::io::SeekFrom::Start(offset))
+            .await
+            .map_err(FileSeek)?;
         let mut total_bytes_read: usize = 0;
         loop {
             let mut key_len_bytes = [0; SIZE_OF_U32];
@@ -646,7 +659,9 @@ impl IndexFs for IndexFileNode {
         let path = &self.node.file_path;
         let block_offset: i32 = -1;
         let mut file = self.node.file.write().await;
-        file.seek(std::io::SeekFrom::Start(0_u64)).await.map_err(FileSeek)?;
+        file.seek(std::io::SeekFrom::Start(0_u64))
+            .await
+            .map_err(FileSeek)?;
 
         loop {
             let mut key_len_bytes = [0; SIZE_OF_U32];
@@ -689,7 +704,9 @@ impl IndexFs for IndexFileNode {
         let path = &self.node.file_path;
         let mut range_offset = RangeOffset::new(0, 0);
         let mut file = self.node.file.write().await;
-        file.seek(std::io::SeekFrom::Start(0_u64)).await.map_err(FileSeek)?;
+        file.seek(std::io::SeekFrom::Start(0_u64))
+            .await
+            .map_err(FileSeek)?;
 
         loop {
             let mut key_len_bytes = [0; SIZE_OF_U32];
@@ -732,7 +749,10 @@ pub struct FilterFileNode {
 
 #[async_trait]
 impl FilterFs for FilterFileNode {
-    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<FilterFileNode, Error> {
+    async fn new<P: AsRef<Path> + Send + Sync>(
+        path: P,
+        file_type: FileType,
+    ) -> Result<FilterFileNode, Error> {
         let node = FileNode::new(path, file_type).await?;
         Ok(FilterFileNode { node })
     }
@@ -830,7 +850,10 @@ pub struct SummaryFileNode {
 
 #[async_trait]
 impl SummaryFs for SummaryFileNode {
-    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<SummaryFileNode, Error> {
+    async fn new<P: AsRef<Path> + Send + Sync>(
+        path: P,
+        file_type: FileType,
+    ) -> Result<SummaryFileNode, Error> {
         let node = FileNode::new(path, file_type).await?;
         Ok(SummaryFileNode { node })
     }

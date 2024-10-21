@@ -217,11 +217,11 @@ impl ValueLog {
     }
 
     /// Fetches an entry from value log using the `start_offset`
-    /// 
-    /// 
+    ///
+    ///
     /// This is used to fetch all entries that is yet to be flushed
     /// before crash happened
-    /// 
+    ///
     /// # Error
     ///
     /// Returns error in case there is an IO error
@@ -251,7 +251,7 @@ impl ValueLog {
                 log::info!("{}", err);
             }
         }
-        self.size=0;
+        self.size = 0;
         self.tail_offset = 0;
         self.head_offset = 0;
     }
@@ -289,7 +289,8 @@ impl ValueLogEntry {
 
     /// Converts value log entry to a byte vector
     pub(crate) fn serialize(&self) -> ByteSerializedEntry {
-        let entry_len = SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + self.key.len() + self.value.len() + SIZE_OF_U8;
+        let entry_len =
+            SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + self.key.len() + self.value.len() + SIZE_OF_U8;
         let mut serialized_data = Vec::with_capacity(entry_len);
 
         serialized_data.extend_from_slice(&(self.key.len() as u32).to_le_bytes());
@@ -307,4 +308,3 @@ impl ValueLogEntry {
         serialized_data
     }
 }
-

@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
-    use crate::tests::*;
     use crate::key_range::KeyRange;
+    use crate::tests::*;
     use std::time::Duration;
     use workload::SSTContructor;
 
@@ -93,7 +93,12 @@ mod tests {
         let biggest_key2 = binding.key();
         let fake_sst_dir2 = fake_sstable2.dir.to_owned();
         key_range
-            .set(fake_sst_dir2.to_owned(), smallest_key2, biggest_key2, fake_sstable2)
+            .set(
+                fake_sst_dir2.to_owned(),
+                smallest_key2,
+                biggest_key2,
+                fake_sstable2,
+            )
             .await;
         assert_eq!(key_range.key_ranges.read().await.len(), 2);
 
@@ -146,7 +151,13 @@ mod tests {
         let sst_with_empty_filter = range.get(&fake_sst_dir).unwrap();
 
         // Ensure Bloom Filter does not exist for this sstable
-        assert!(sst_with_empty_filter.sst.filter.clone().unwrap().sst_dir.is_none());
+        assert!(sst_with_empty_filter
+            .sst
+            .filter
+            .clone()
+            .unwrap()
+            .sst_dir
+            .is_none());
 
         // Searched for the first smallest key
         let retrieved_sstables = key_range.filter_sstables_by_key_range(smallest_key).await;
@@ -213,7 +224,13 @@ mod tests {
         let sst_with_empty_filter = range.get(&fake_sst_dir).unwrap();
 
         // Ensure Bloom Filter does not exist for this sstable
-        assert!(sst_with_empty_filter.sst.filter.clone().unwrap().sst_dir.is_none());
+        assert!(sst_with_empty_filter
+            .sst
+            .filter
+            .clone()
+            .unwrap()
+            .sst_dir
+            .is_none());
 
         // Ensure restored ranges is loaded
         let retrieved_sstables = key_range.filter_sstables_by_key_range(smallest_key).await;
@@ -264,7 +281,13 @@ mod tests {
         let sst_with_empty_filter = range.get(&fake_sst_dir).unwrap();
 
         // Ensure Bloom Filter does not exist for this sstable
-        assert!(sst_with_empty_filter.sst.filter.clone().unwrap().sst_dir.is_none());
+        assert!(sst_with_empty_filter
+            .sst
+            .filter
+            .clone()
+            .unwrap()
+            .sst_dir
+            .is_none());
 
         // Ensure restored ranges is loaded
         let retrieved_sstables = key_range.filter_sstables_by_key_range(smallest_key).await;

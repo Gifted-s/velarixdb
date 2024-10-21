@@ -6,9 +6,9 @@ mod tests {
     use crate::key_range::KeyRange;
     use crate::memtable::Entry;
     use crate::tests::workload::SSTContructor;
+    use chrono::Utc;
     use std::sync::Arc;
     use std::time::Duration;
-    use chrono::Utc;
     use tempfile::tempdir;
     use tokio::sync::RwLock;
     use tokio::time::sleep;
@@ -62,8 +62,11 @@ mod tests {
             filter_false_positive.to_owned(),
         );
 
-        let new_sized_tier_compaction_runner =
-            SizedTierRunner::new(Arc::new(RwLock::new(bucket_map)), Arc::new(default_key_range), config);
+        let new_sized_tier_compaction_runner = SizedTierRunner::new(
+            Arc::new(RwLock::new(bucket_map)),
+            Arc::new(default_key_range),
+            config,
+        );
         assert!(new_sized_tier_compaction_runner
             .bucket_map
             .read()
@@ -78,7 +81,10 @@ mod tests {
             .is_empty());
         assert!(new_sized_tier_compaction_runner.tombstones.is_empty());
         assert_eq!(new_sized_tier_compaction_runner.config.use_ttl, use_ttl);
-        assert_eq!(new_sized_tier_compaction_runner.config.tombstone_ttl, ttl.tombstone_ttl);
+        assert_eq!(
+            new_sized_tier_compaction_runner.config.tombstone_ttl,
+            ttl.tombstone_ttl
+        );
         assert_eq!(new_sized_tier_compaction_runner.config.entry_ttl, ttl.entry_ttl);
         assert_eq!(
             new_sized_tier_compaction_runner.config.flush_listener_interval,
@@ -89,7 +95,9 @@ mod tests {
             intervals.background_interval
         );
         assert_eq!(
-            new_sized_tier_compaction_runner.config.tombstone_compaction_interval,
+            new_sized_tier_compaction_runner
+                .config
+                .tombstone_compaction_interval,
             intervals.tombstone_compaction_interval
         );
         assert_eq!(
@@ -132,7 +140,8 @@ mod tests {
         bucket_map.buckets.insert(new_bucket3.id, new_bucket3);
         bucket_map.buckets.insert(new_bucket4.id, new_bucket4);
 
-        let imbalanced_buckets = SizedTierRunner::fetch_imbalanced_buckets(Arc::new(RwLock::new(bucket_map))).await;
+        let imbalanced_buckets =
+            SizedTierRunner::fetch_imbalanced_buckets(Arc::new(RwLock::new(bucket_map))).await;
         assert!(imbalanced_buckets.is_ok());
         let (buckets, ssts_to_remove) = imbalanced_buckets.unwrap();
         let mut expected_ssts_to_remove_in_buckets = 0;
@@ -147,7 +156,10 @@ mod tests {
         for (_id, ssts) in ssts_to_remove {
             expected_ssts_to_remove_from_file += ssts.len();
         }
-        assert_eq!(expected_ssts_to_remove_from_file, expected_ssts_to_remove_in_buckets);
+        assert_eq!(
+            expected_ssts_to_remove_from_file,
+            expected_ssts_to_remove_in_buckets
+        );
     }
 
     #[tokio::test]
@@ -179,9 +191,14 @@ mod tests {
 
         let default_key_range = KeyRange::default();
         let config = &generate_config();
-        let mut sized_tier_compaction_runner =
-            SizedTierRunner::new(Arc::new(RwLock::new(bucket_map)), Arc::new(default_key_range), config);
-        let merge_ssts = sized_tier_compaction_runner.merge_ssts_in_buckets(&[bucket]).await;
+        let mut sized_tier_compaction_runner = SizedTierRunner::new(
+            Arc::new(RwLock::new(bucket_map)),
+            Arc::new(default_key_range),
+            config,
+        );
+        let merge_ssts = sized_tier_compaction_runner
+            .merge_ssts_in_buckets(&[bucket])
+            .await;
         assert!(merge_ssts.is_ok());
         assert!(!merge_ssts.as_ref().unwrap().is_empty());
         for sst in merge_ssts.unwrap() {
@@ -348,9 +365,17 @@ mod tests {
         let compaction_res = sized_tier_compaction_runner.run_compaction().await;
         assert!(compaction_res.is_ok());
         assert!(sized_tier_compaction_runner.tombstones.is_empty());
-        assert!(!sized_tier_compaction_runner.bucket_map.read().await.buckets.is_empty());
+        assert!(!sized_tier_compaction_runner
+            .bucket_map
+            .read()
+            .await
+            .buckets
+            .is_empty());
         // all sstables should have been compacted to 1
-        assert_eq!(sized_tier_compaction_runner.bucket_map.read().await.buckets.len(), 1);
+        assert_eq!(
+            sized_tier_compaction_runner.bucket_map.read().await.buckets.len(),
+            1
+        );
         assert_eq!(
             sized_tier_compaction_runner.bucket_map.read().await.buckets[0]
                 .sstables
@@ -367,7 +392,15 @@ mod tests {
             .await
             .is_empty());
         // all sstables should have been compacted to 1 so we should have one range
-        assert_eq!(sized_tier_compaction_runner.key_range.key_ranges.read().await.len(), 1);
+        assert_eq!(
+            sized_tier_compaction_runner
+                .key_range
+                .key_ranges
+                .read()
+                .await
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -505,14 +538,20 @@ mod tests {
         let ssts_to_delete = &bucket_map.extract_imbalanced_buckets().await.unwrap().1;
         let bucket_map_ref = Arc::new(RwLock::new(bucket_map));
         let key_range_ref = Arc::new(key_range);
-        let sized_tier_compaction_runner = SizedTierRunner::new(bucket_map_ref.clone(), key_range_ref.clone(), config);
+        let sized_tier_compaction_runner =
+            SizedTierRunner::new(bucket_map_ref.clone(), key_range_ref.clone(), config);
 
         let cleanup_res = sized_tier_compaction_runner
             .clean_up_after_compaction(bucket_map_ref.clone(), ssts_to_delete, key_range_ref.clone())
             .await;
         assert!(cleanup_res.is_ok());
         assert!(cleanup_res.unwrap().is_some());
-        assert!(sized_tier_compaction_runner.bucket_map.read().await.buckets.is_empty());
+        assert!(sized_tier_compaction_runner
+            .bucket_map
+            .read()
+            .await
+            .buckets
+            .is_empty());
         assert!(sized_tier_compaction_runner
             .key_range
             .key_ranges
@@ -528,26 +567,26 @@ mod tests {
         let bucket_map = BucketMap::new(path.to_owned()).await.unwrap();
         let default_key_range = KeyRange::default();
         let config = &generate_config();
-        let mut sized_tier_compaction_runner =
-            SizedTierRunner::new(Arc::new(RwLock::new(bucket_map)), Arc::new(default_key_range), config);
-     
+        let mut sized_tier_compaction_runner = SizedTierRunner::new(
+            Arc::new(RwLock::new(bucket_map)),
+            Arc::new(default_key_range),
+            config,
+        );
 
-         let not_tombstone = false;
-         let merged_entries = [
+        let not_tombstone = false;
+        let merged_entries = [
             Entry::new("key1", 100, Utc::now(), not_tombstone),
             Entry::new("key2", 200, Utc::now(), not_tombstone),
             Entry::new("key3", 300, Utc::now(), not_tombstone),
-         ];
+        ];
 
-         let is_tombstone = true;
-         let to_insert = Entry::new("key4", 400, Utc::now(), is_tombstone);
-         
-         sized_tier_compaction_runner.tombstone_check(&to_insert, &mut merged_entries.to_vec());
-         // length should not change since insertion is not be allowed
-         assert_eq!(merged_entries.len(), 3);
+        let is_tombstone = true;
+        let to_insert = Entry::new("key4", 400, Utc::now(), is_tombstone);
+
+        sized_tier_compaction_runner.tombstone_check(&to_insert, &mut merged_entries.to_vec());
+        // length should not change since insertion is not be allowed
+        assert_eq!(merged_entries.len(), 3);
     }
-
-
 
     #[tokio::test]
     async fn test_not_insert_tombstone_elements_found_in_tombstone_hashmap() {
@@ -556,28 +595,30 @@ mod tests {
         let bucket_map = BucketMap::new(path.to_owned()).await.unwrap();
         let default_key_range = KeyRange::default();
         let config = &generate_config();
-        let mut sized_tier_compaction_runner =
-            SizedTierRunner::new(Arc::new(RwLock::new(bucket_map)), Arc::new(default_key_range), config);
-     
+        let mut sized_tier_compaction_runner = SizedTierRunner::new(
+            Arc::new(RwLock::new(bucket_map)),
+            Arc::new(default_key_range),
+            config,
+        );
 
-         let not_tombstone = false;
-         let merged_entries = [
+        let not_tombstone = false;
+        let merged_entries = [
             Entry::new("key1", 100, Utc::now(), not_tombstone),
             Entry::new("key2", 200, Utc::now(), not_tombstone),
             Entry::new("key3", 300, Utc::now(), not_tombstone),
-         ];
-         sleep(Duration::from_secs(1)).await;
-         let is_tombstone = false;
-         let deletion_time = Utc::now();
-         let to_insert = Entry::new("key3", 300, deletion_time, is_tombstone);
-         sized_tier_compaction_runner.tombstones.insert(to_insert.key.to_owned(), deletion_time);
-         
-         sized_tier_compaction_runner.tombstone_check(&to_insert, &mut merged_entries.to_vec());
-         // length should not change since insertion is not be allowed
-         assert_eq!(merged_entries.len(), 3);
+        ];
+        sleep(Duration::from_secs(1)).await;
+        let is_tombstone = false;
+        let deletion_time = Utc::now();
+        let to_insert = Entry::new("key3", 300, deletion_time, is_tombstone);
+        sized_tier_compaction_runner
+            .tombstones
+            .insert(to_insert.key.to_owned(), deletion_time);
+
+        sized_tier_compaction_runner.tombstone_check(&to_insert, &mut merged_entries.to_vec());
+        // length should not change since insertion is not be allowed
+        assert_eq!(merged_entries.len(), 3);
     }
-
-
 
     #[tokio::test]
     async fn test_insert_valid_elements() {
@@ -586,22 +627,24 @@ mod tests {
         let bucket_map = BucketMap::new(path.to_owned()).await.unwrap();
         let default_key_range = KeyRange::default();
         let config = &generate_config();
-        let mut sized_tier_compaction_runner =
-            SizedTierRunner::new(Arc::new(RwLock::new(bucket_map)), Arc::new(default_key_range), config);
-     
+        let mut sized_tier_compaction_runner = SizedTierRunner::new(
+            Arc::new(RwLock::new(bucket_map)),
+            Arc::new(default_key_range),
+            config,
+        );
 
-         let not_tombstone = false;
-         let mut merged_entries = vec![
+        let not_tombstone = false;
+        let mut merged_entries = vec![
             Entry::new("key1", 100, Utc::now(), not_tombstone),
             Entry::new("key2", 200, Utc::now(), not_tombstone),
             Entry::new("key3", 300, Utc::now(), not_tombstone),
-         ];
+        ];
 
-         let not_tombstone = false;
-         let to_insert = Entry::new("key4", 400, Utc::now(), not_tombstone);
-         
-         sized_tier_compaction_runner.tombstone_check(&to_insert, &mut merged_entries);
-         // length should increase since insertion is allowed
-         assert_eq!(merged_entries.len(), 4);
+        let not_tombstone = false;
+        let to_insert = Entry::new("key4", 400, Utc::now(), not_tombstone);
+
+        sized_tier_compaction_runner.tombstone_check(&to_insert, &mut merged_entries);
+        // length should increase since insertion is allowed
+        assert_eq!(merged_entries.len(), 4);
     }
 }

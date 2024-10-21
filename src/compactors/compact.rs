@@ -144,7 +144,10 @@ pub struct MergedSSTable {
 impl Clone for MergedSSTable {
     fn clone(&self) -> Self {
         Self {
-            sstable: Box::new(super::TableInsertor::from(self.sstable.get_entries(), &self.filter)),
+            sstable: Box::new(super::TableInsertor::from(
+                self.sstable.get_entries(),
+                &self.filter,
+            )),
             hotness: self.hotness,
             filter: self.filter.clone(),
         }
@@ -249,7 +252,8 @@ impl Compactor {
                     *state = CompState::Active;
                     drop(state);
                     if let Err(err) =
-                        Compactor::handle_compaction(Arc::clone(&bucket_map), Arc::clone(&key_range), &cfg).await
+                        Compactor::handle_compaction(Arc::clone(&bucket_map), Arc::clone(&key_range), &cfg)
+                            .await
                     {
                         log::info!("{}", Error::CompactionFailed(Box::new(err)));
                         continue;
@@ -292,7 +296,8 @@ impl Compactor {
     ) -> Result<(), Error> {
         match cfg.strategy {
             Strategy::STCS => {
-                let mut runner = super::sized::SizedTierRunner::new(Arc::clone(&buckets), Arc::clone(&key_range), cfg);
+                let mut runner =
+                    super::sized::SizedTierRunner::new(Arc::clone(&buckets), Arc::clone(&key_range), cfg);
                 runner.run_compaction().await
             } // LCS, UCS and TWS will be added later
         }
@@ -336,7 +341,10 @@ mod tests {
         assert_eq!(compactor.config.use_ttl, use_ttl);
         assert_eq!(compactor.config.entry_ttl, ttl.entry_ttl);
         assert_eq!(compactor.config.tombstone_ttl, ttl.tombstone_ttl);
-        assert_eq!(compactor.config.background_interval, intervals.background_interval);
+        assert_eq!(
+            compactor.config.background_interval,
+            intervals.background_interval
+        );
         assert_eq!(
             compactor.config.flush_listener_interval,
             intervals.flush_listener_interval

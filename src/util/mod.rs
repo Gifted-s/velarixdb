@@ -8,7 +8,11 @@ use rand::{distributions::Alphanumeric, Rng};
 #[cfg(test)]
 pub fn generate_random_id(length: usize) -> String {
     let rng = rand::thread_rng();
-    let id: String = rng.sample_iter(&Alphanumeric).take(length).map(char::from).collect();
+    let id: String = rng
+        .sample_iter(&Alphanumeric)
+        .take(length)
+        .map(char::from)
+        .collect();
     id
 }
 
@@ -48,7 +52,6 @@ pub fn float_from_le_bytes(bytes: &[u8]) -> Option<f64> {
     let float: f64 = f64::from_bits(bits);
     Some(float)
 }
-
 
 #[cfg(test)]
 mod tests {

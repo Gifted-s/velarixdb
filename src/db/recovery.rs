@@ -7,8 +7,8 @@ use crate::bucket::{Bucket, BucketID, BucketMap};
 use crate::cfg::Config;
 use crate::compactors::{self, Compactor, IntervalParams, TtlParams};
 use crate::consts::{
-    DEFAULT_DB_NAME, DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE, HEAD_ENTRY_KEY, HEAD_ENTRY_VALUE, SIZE_OF_U32, SIZE_OF_U64,
-    SIZE_OF_U8, TAIL_ENTRY_KEY, TAIL_ENTRY_VALUE,
+    DEFAULT_DB_NAME, DEFAULT_FLUSH_SIGNAL_CHANNEL_SIZE, HEAD_ENTRY_KEY, HEAD_ENTRY_VALUE, SIZE_OF_U32,
+    SIZE_OF_U64, SIZE_OF_U8, TAIL_ENTRY_KEY, TAIL_ENTRY_VALUE,
 };
 use crate::err::Error;
 use crate::err::Error::*;
@@ -31,6 +31,17 @@ use std::sync::Arc;
 use tokio::fs::read_dir;
 use tokio::sync::RwLock;
 
+/// Parameters to create an empty ['DataStore'] or recover exisiting one from ['ValueLog']
+pub struct CreateOrRecoverStoreParams<'a, P> {
+    pub dir: DirPath,
+    pub buckets_path: P,
+    pub vlog: ValueLog,
+    pub key_range: KeyRange,
+    pub config: &'a Config,
+    pub size_unit: SizeUnit,
+    pub meta: Meta,
+}
+
 impl DataStore<'static, Key> {
     /// Recovers [`DataStore`] state after crash
     ///
@@ -38,14 +49,18 @@ impl DataStore<'static, Key> {
     ///
     /// Returns error incase there is an IO error
     pub async fn recover<P: AsRef<Path> + Send + Sync + Clone>(
-        dir: DirPath,
-        buckets_path: P,
-        mut vlog: ValueLog,
-        key_range: KeyRange,
-        config: &Config,
-        size_unit: SizeUnit,
-        mut meta: Meta,
+        params: CreateOrRecoverStoreParams<'_, P>,
     ) -> Result<DataStore<'static, Key>, Error> {
+        let (buckets_path, dir, mut vlog, key_range, config, size_unit, mut meta) = (
+            params.buckets_path,
+            params.dir,
+            params.vlog,
+            params.key_range,
+            params.config,
+            params.size_unit,
+            params.meta,
+        );
+
         let mut recovered_buckets: IndexMap<BucketID, Bucket> = IndexMap::new();
         // Get bucket diretories streams
         let mut buckets_stream = open_dir_stream!(buckets_path.as_ref().to_path_buf());
@@ -105,12 +120,18 @@ impl DataStore<'static, Key> {
                 if let Some(b) = recovered_buckets.get(&bucket_uuid) {
                     let temp_sstables = b.sstables.clone();
                     temp_sstables.write().await.push(table.clone());
-                    let updated_bucket =
-                        Bucket::from(bucket_dir.path(), bucket_uuid, temp_sstables.read().await.clone(), 0).await?;
+                    let updated_bucket = Bucket::from(
+                        bucket_dir.path(),
+                        bucket_uuid,
+                        temp_sstables.read().await.clone(),
+                        0,
+                    )
+                    .await?;
                     recovered_buckets.insert(bucket_uuid, updated_bucket);
                 } else {
                     // Create new bucket
-                    let updated_bucket = Bucket::from(bucket_dir.path(), bucket_uuid, vec![table.clone()], 0).await?;
+                    let updated_bucket =
+                        Bucket::from(bucket_dir.path(), bucket_uuid, vec![table.clone()], 0).await?;
                     recovered_buckets.insert(bucket_uuid, updated_bucket);
                 }
 
@@ -230,7 +251,8 @@ impl DataStore<'static, Key> {
         head_offset: usize,
     ) -> Result<(MemTable<Key>, ImmutableMemTablesLockFree<Key>), Error> {
         let read_only_memtables: ImmutableMemTablesLockFree<Key> = SkipMap::new();
-        let mut active_memtable = MemTable::with_specified_capacity_and_rate(size_unit, capacity, false_positive_rate);
+        let mut active_memtable =
+            MemTable::with_specified_capacity_and_rate(size_unit, capacity, false_positive_rate);
         let mut vlog = ValueLog::new(vlog_path.as_ref()).await?;
         let mut most_recent_offset = head_offset;
         let entries = vlog.recover(head_offset).await?;
@@ -244,7 +266,10 @@ impl DataStore<'static, Key> {
                 if active_memtable.is_full(e.key.len()) {
                     // Make memtable read only
                     active_memtable.read_only = true;
-                    read_only_memtables.insert(MemTable::generate_table_id(), Arc::new(active_memtable.to_owned()));
+                    read_only_memtables.insert(
+                        MemTable::generate_table_id(),
+                        Arc::new(active_memtable.to_owned()),
+                    );
                     active_memtable =
                         MemTable::with_specified_capacity_and_rate(size_unit, capacity, false_positive_rate);
                 }
@@ -264,24 +289,41 @@ impl DataStore<'static, Key> {
     /// Creates new [`DataStore`]
     /// Used in case there is no recovery needed
     pub async fn handle_empty_vlog<P: AsRef<Path> + Send + Sync>(
-        dir: DirPath,
-        buckets_path: P,
-        mut vlog: ValueLog,
-        key_range: KeyRange,
-        config: &Config,
-        size_unit: SizeUnit,
-        meta: Meta,
+        params: CreateOrRecoverStoreParams<'_, P>,
     ) -> Result<DataStore<'static, Key>, Error> {
-        let mut active_memtable =
-            MemTable::with_specified_capacity_and_rate(size_unit, config.write_buffer_size, config.false_positive_rate);
+        let (buckets_path, dir, mut vlog, key_range, config, size_unit, meta) = (
+            params.buckets_path,
+            params.dir,
+            params.vlog,
+            params.key_range,
+            params.config,
+            params.size_unit,
+            params.meta,
+        );
+
+        let mut active_memtable = MemTable::with_specified_capacity_and_rate(
+            size_unit,
+            config.write_buffer_size,
+            config.false_positive_rate,
+        );
         // if ValueLog is empty then we want to insert both tail and head
         let created_at = Utc::now();
         let tail_offset = vlog
-            .append(&TAIL_ENTRY_KEY.to_vec(), &TAIL_ENTRY_VALUE.to_vec(), created_at, false)
+            .append(
+                &TAIL_ENTRY_KEY.to_vec(),
+                &TAIL_ENTRY_VALUE.to_vec(),
+                created_at,
+                false,
+            )
             .await?;
         let tail_entry = Entry::new(TAIL_ENTRY_KEY.to_vec(), tail_offset, created_at, false);
         let head_offset = vlog
-            .append(&HEAD_ENTRY_KEY.to_vec(), &HEAD_ENTRY_VALUE.to_vec(), created_at, false)
+            .append(
+                &HEAD_ENTRY_KEY.to_vec(),
+                &HEAD_ENTRY_VALUE.to_vec(),
+                created_at,
+                false,
+            )
             .await?;
         let head_entry = Entry::new(HEAD_ENTRY_KEY.to_vec(), head_offset, created_at, false);
         vlog.set_head(head_offset);

@@ -37,7 +37,10 @@
 use crate::{
     block::Block,
     bucket::InsertableToBucket,
-    consts::{DATA_FILE_NAME, INDEX_FILE_NAME, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, SIZE_OF_USIZE, SUMMARY_FILE_NAME},
+    consts::{
+        DATA_FILE_NAME, INDEX_FILE_NAME, SIZE_OF_U32, SIZE_OF_U64, SIZE_OF_U8, SIZE_OF_USIZE,
+        SUMMARY_FILE_NAME,
+    },
     err::Error,
     filter::BloomFilter,
     fs::{DataFileNode, DataFs, FileAsync, FileNode, IndexFileNode, IndexFs, SummaryFileNode, SummaryFs},
@@ -230,7 +233,15 @@ impl Table {
             summary: None,
         };
         table.size = table.data_file.file.node.size().await;
-        let modified_time = table.data_file.file.node.metadata().await.unwrap().modified().unwrap();
+        let modified_time = table
+            .data_file
+            .file
+            .node
+            .metadata()
+            .await
+            .unwrap()
+            .modified()
+            .unwrap();
         let epoch = SystemTime::UNIX_EPOCH;
         let elapsed_nanos = modified_time.duration_since(epoch).unwrap().as_nanos() as u64;
         table.created_at = util::milliseconds_to_datetime(elapsed_nanos / 1_000_000);
@@ -256,10 +267,10 @@ impl Table {
         let mut blocks: Vec<Block> = Vec::new();
         let mut index = Index::new(self.index_file.path.clone(), index_file.file.clone());
         let mut summary = Summary::new(self.dir.to_owned());
-        
+
         let smallest_entry = self.entries.front();
         let biggest_entry = self.entries.back();
-    
+
         summary.smallest_key = smallest_entry.unwrap().key().to_vec();
         summary.biggest_key = biggest_entry.unwrap().key().to_vec();
 
@@ -269,7 +280,10 @@ impl Table {
 
         // write filter to disk
         self.filter.as_mut().unwrap().write(self.dir.to_owned()).await?;
-        self.filter.as_mut().unwrap().set_sstable_path(&self.data_file.path);
+        self.filter
+            .as_mut()
+            .unwrap()
+            .set_sstable_path(&self.data_file.path);
         // write data blocks
         let mut current_block = Block::new();
         if self.size > 0 {

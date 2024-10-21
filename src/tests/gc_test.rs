@@ -28,13 +28,16 @@ mod tests {
     async fn datastore_gc_test_success() {
         let root = tempdir().unwrap();
         let path = root.path().join("gc_test_1");
-        let s_engine = DataStore::open_without_background("test", path.clone()).await.unwrap();
+        let s_engine = DataStore::open_without_background("test", path.clone())
+            .await
+            .unwrap();
         let store = Arc::new(RwLock::new(s_engine));
         let workload_size = 5000;
         let key_len = 5;
         let val_len = 5;
         let write_read_ratio = 0.5;
-        let workload = crate::tests::workload::Workload::new(workload_size, key_len, val_len, write_read_ratio);
+        let workload =
+            crate::tests::workload::Workload::new(workload_size, key_len, val_len, write_read_ratio);
         if let Err(err) = setup(store.clone(), &workload, true).await {
             log::error!("Setup failed {}", err);
             return;
@@ -63,13 +66,16 @@ mod tests {
     async fn datastore_gc_test_unsupported_platform() {
         let root = tempdir().unwrap();
         let path = root.path().join("gc_test_2");
-        let s_engine = DataStore::open_without_background("test", path.clone()).await.unwrap();
+        let s_engine = DataStore::open_without_background("test", path.clone())
+            .await
+            .unwrap();
         let store = Arc::new(RwLock::new(s_engine));
         let workload_size = 5000;
         let key_len = 5;
         let val_len = 5;
         let write_read_ratio = 0.5;
-        let workload = crate::tests::workload::Workload::new(workload_size, key_len, val_len, write_read_ratio);
+        let workload =
+            crate::tests::workload::Workload::new(workload_size, key_len, val_len, write_read_ratio);
         if let Err(err) = setup(store.clone(), &workload, true).await {
             log::error!("Setup failed {}", err);
             return;
@@ -97,13 +103,16 @@ mod tests {
     async fn datastore_gc_test_tail_shifted() {
         let root = tempdir().unwrap();
         let path = root.path().join("gc_test_3");
-        let s_engine = DataStore::open_without_background("test", path.clone()).await.unwrap();
+        let s_engine = DataStore::open_without_background("test", path.clone())
+            .await
+            .unwrap();
         let store = Arc::new(RwLock::new(s_engine));
         let workload_size = 5000;
         let key_len = 5;
         let val_len = 5;
         let write_read_ratio = 0.5;
-        let workload = crate::tests::workload::Workload::new(workload_size, key_len, val_len, write_read_ratio);
+        let workload =
+            crate::tests::workload::Workload::new(workload_size, key_len, val_len, write_read_ratio);
         if let Err(err) = setup(store.clone(), &workload, true).await {
             log::error!("Setup failed {}", err);
             return;
@@ -133,13 +142,16 @@ mod tests {
     async fn datastore_gc_test_free_before_synchronization() {
         let root = tempdir().unwrap();
         let path = root.path().join("gc_test_free");
-        let s_engine = DataStore::open_without_background("test", path.clone()).await.unwrap();
+        let s_engine = DataStore::open_without_background("test", path.clone())
+            .await
+            .unwrap();
         let store = Arc::new(RwLock::new(s_engine));
         let workload_size = 5000;
         let key_len = 5;
         let val_len = 5;
         let write_read_ratio = 0.5;
-        let workload = crate::tests::workload::Workload::new(workload_size, key_len, val_len, write_read_ratio);
+        let workload =
+            crate::tests::workload::Workload::new(workload_size, key_len, val_len, write_read_ratio);
         if let Err(err) = setup(store.clone(), &workload, true).await {
             log::error!("Setup failed {}", err);
             return;
@@ -168,13 +180,16 @@ mod tests {
         let bytes_to_scan_for_garbage_colection = SizeUnit::Bytes.as_bytes(100);
         let root = tempdir().unwrap();
         let path = root.path().join("gc_test_4");
-        let s_engine = DataStore::open_without_background("test", path.clone()).await.unwrap();
+        let s_engine = DataStore::open_without_background("test", path.clone())
+            .await
+            .unwrap();
         let store = Arc::new(RwLock::new(s_engine));
         let workload_size = 5;
         let key_len = 5;
         let val_len = 5;
         let write_read_ratio = 0.5;
-        let workload = crate::tests::workload::Workload::new(workload_size, key_len, val_len, write_read_ratio);
+        let workload =
+            crate::tests::workload::Workload::new(workload_size, key_len, val_len, write_read_ratio);
         if let Err(err) = setup(store.clone(), &workload, true).await {
             log::error!("Setup failed {}", err);
             return;
@@ -216,7 +231,9 @@ mod tests {
         let bytes_to_scan_for_garbage_colection = SizeUnit::Bytes.as_bytes(100);
         let root = tempdir().unwrap();
         let path = root.path().join("gc_test_5");
-        let s_engine = DataStore::open_without_background("test", path.clone()).await.unwrap();
+        let s_engine = DataStore::open_without_background("test", path.clone())
+            .await
+            .unwrap();
         let store = Arc::new(RwLock::new(s_engine));
         let _ = store.write().await.put("test_key", "test_val").await;
         let _ = store.write().await.delete("test_key").await;
@@ -224,7 +241,8 @@ mod tests {
         let key_len = 5;
         let val_len = 5;
         let write_read_ratio = 0.5;
-        let workload = crate::tests::workload::Workload::new(workload_size, key_len, val_len, write_read_ratio);
+        let workload =
+            crate::tests::workload::Workload::new(workload_size, key_len, val_len, write_read_ratio);
         if let Err(err) = setup(store.clone(), &workload, true).await {
             log::error!("Setup failed {}", err);
             return;
@@ -253,13 +271,16 @@ mod tests {
         let prepare_delete = false;
         let root = tempdir().unwrap();
         let path = root.path().join("gc_test_no_delete");
-        let s_engine = DataStore::open_without_background("test", path.clone()).await.unwrap();
+        let s_engine = DataStore::open_without_background("test", path.clone())
+            .await
+            .unwrap();
         let store = Arc::new(RwLock::new(s_engine));
         let workload_size = 5000;
         let key_len = 5;
         let val_len = 5;
         let write_read_ratio = 0.5;
-        let workload = crate::tests::workload::Workload::new(workload_size, key_len, val_len, write_read_ratio);
+        let workload =
+            crate::tests::workload::Workload::new(workload_size, key_len, val_len, write_read_ratio);
         if let Err(err) = setup(store.clone(), &workload, prepare_delete).await {
             log::error!("Setup failed {}", err);
             return;

@@ -1,8 +1,0 @@
-- Researched Tokio Uring, 12 Aug 2024
-- Research on Tokio Uring continues 13 Aug 2024
-- Researched maths on relations 14 Aug 2024
-- Researched latest trends in Rust 15 Aug 2024
-- Experimenting with nom parser rust library 16 Aug 2024
-- Solving maths 19 Aug 2024
-- Researched Bigdata 20 Aug 2024
-- Researched Previous Projects on LSM

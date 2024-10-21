@@ -26,8 +26,10 @@ mod tests {
         setup();
         let path = PathBuf::new().join("src/tests/fixtures/data");
 
-        let store = DataStore::open_without_background("test", path.clone()).await.unwrap();
-    
+        let store = DataStore::open_without_background("test", path.clone())
+            .await
+            .unwrap();
+
         assert!(!store.buckets.read().await.buckets.is_empty());
         assert!(!store.key_range.key_ranges.read().await.is_empty());
         assert!(!store.active_memtable.entries.is_empty());
@@ -38,7 +40,9 @@ mod tests {
         setup();
         let root = tempdir().unwrap();
         let path = root.path().join("store_test_2");
-        let store = DataStore::open_without_background("test", path.clone()).await.unwrap();
+        let store = DataStore::open_without_background("test", path.clone())
+            .await
+            .unwrap();
         let workload_size = 10000;
         let key_len = 5;
         let val_len = 5;
@@ -122,7 +126,9 @@ mod tests {
         setup();
         let root = tempdir().unwrap();
         let path = root.path().join("store_test_4");
-        let store = DataStore::open_without_background("test", path.clone()).await.unwrap();
+        let store = DataStore::open_without_background("test", path.clone())
+            .await
+            .unwrap();
         let workload_size = 1;
         let key_len = 5;
         let val_len = 5;
@@ -160,7 +166,11 @@ mod tests {
             assert!(tokio_res.unwrap().unwrap());
         }
 
-        let res = store_ref.read().await.get(std::str::from_utf8(key).unwrap()).await;
+        let res = store_ref
+            .read()
+            .await
+            .get(std::str::from_utf8(key).unwrap())
+            .await;
         assert!(res.is_ok());
         // Even though the write of thesame key happened concurrently, we expect the last entry to reflect
         assert_eq!(res.unwrap().unwrap().val, entry5.val);
@@ -171,7 +181,9 @@ mod tests {
         setup();
         let root = tempdir().unwrap();
         let path = root.path().join("store_test_5");
-        let mut store = DataStore::open_without_background("test", path.clone()).await.unwrap();
+        let mut store = DataStore::open_without_background("test", path.clone())
+            .await
+            .unwrap();
         let workload_size = 10000;
         let key_len = 5;
         let val_len = 5;
@@ -192,7 +204,9 @@ mod tests {
         setup();
         let root = tempdir().unwrap();
         let path = root.path().join("store_test_6");
-        let mut store = DataStore::open_without_background("test", path.clone()).await.unwrap();
+        let mut store = DataStore::open_without_background("test", path.clone())
+            .await
+            .unwrap();
         let workload_size = 5000;
         let key_len = 5;
         let val_len = 5;
@@ -217,7 +231,9 @@ mod tests {
         setup();
         let root = tempdir().unwrap();
         let path = root.path().join("store_test_7");
-        let store = DataStore::open_without_background("test", path.clone()).await.unwrap();
+        let store = DataStore::open_without_background("test", path.clone())
+            .await
+            .unwrap();
         let workload_size = 10000;
         let key_len = 5;
         let val_len = 5;
@@ -242,7 +258,9 @@ mod tests {
         setup();
         let root = tempdir().unwrap();
         let path = root.path().join("store_test_8");
-        let store = DataStore::open_without_background("test", path.clone()).await.unwrap();
+        let store = DataStore::open_without_background("test", path.clone())
+            .await
+            .unwrap();
         let workload_size = 10000;
         let key_len = 5;
         let val_len = 5;
@@ -302,7 +320,9 @@ mod tests {
         setup();
         let root = tempdir().unwrap();
         let path = root.path().join("store_test_9");
-        let store = DataStore::open_without_background("test", path.clone()).await.unwrap();
+        let store = DataStore::open_without_background("test", path.clone())
+            .await
+            .unwrap();
         let workload_size = 10000;
         let key_len = 5;
         let val_len = 5;
@@ -353,7 +373,9 @@ mod tests {
         setup();
         let root = tempdir().unwrap();
         let path = root.path().join("store_test_10");
-        let store = DataStore::open_without_background("test", path.clone()).await.unwrap();
+        let store = DataStore::open_without_background("test", path.clone())
+            .await
+            .unwrap();
         let workload_size = 10000;
         let key_len = 5;
         let val_len = 5;
@@ -390,7 +412,4 @@ mod tests {
         assert!(res.is_ok());
         assert!(res.unwrap().is_none());
     }
-
-
-
 }

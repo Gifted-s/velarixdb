@@ -148,17 +148,20 @@ mod tests {
         }
         let mut sst_within_size_range = SSTContructor::generate_ssts(1).await[0].to_owned();
         new_bucket.avarage_size = sst_within_size_range.size();
-        let fits_into_bucket = new_bucket.fits_into_bucket(Arc::new(Box::new(sst_within_size_range.to_owned())));
+        let fits_into_bucket =
+            new_bucket.fits_into_bucket(Arc::new(Box::new(sst_within_size_range.to_owned())));
         // size of sstable is not less than bucket low
         assert!(fits_into_bucket);
         // increase sstable size to be greater than bucket high range
         sst_within_size_range.size = ((new_bucket.avarage_size as f64 * BUCKET_HIGH) * 2.0) as usize;
-        let fits_into_bucket = new_bucket.fits_into_bucket(Arc::new(Box::new(sst_within_size_range.to_owned())));
+        let fits_into_bucket =
+            new_bucket.fits_into_bucket(Arc::new(Box::new(sst_within_size_range.to_owned())));
         // sstable size is greater than bucket high range
         assert!(!fits_into_bucket);
         // increase bucket average
         new_bucket.avarage_size = ((new_bucket.avarage_size as f64 * BUCKET_HIGH) * 2.0) as usize;
-        let fits_into_bucket = new_bucket.fits_into_bucket(Arc::new(Box::new(sst_within_size_range.to_owned())));
+        let fits_into_bucket =
+            new_bucket.fits_into_bucket(Arc::new(Box::new(sst_within_size_range.to_owned())));
         // sstable size is within bucket range
         assert!(fits_into_bucket);
     }
@@ -223,7 +226,10 @@ mod tests {
         for (_id, ssts) in ssts_to_remove {
             expected_ssts_to_remove_from_file += ssts.len();
         }
-        assert_eq!(expected_ssts_to_remove_from_file, expected_ssts_to_remove_in_buckets);
+        assert_eq!(
+            expected_ssts_to_remove_from_file,
+            expected_ssts_to_remove_in_buckets
+        );
 
         // test empty map
         bucket_map.buckets.clear();
@@ -340,7 +346,7 @@ mod tests {
         let sst4 = tempdir().unwrap().path().to_owned();
         let sst5 = tempdir().unwrap().path().to_owned();
         let sst6 = tempdir().unwrap().path().to_owned();
-        let ssts = [sst1, sst2, sst3, sst4, sst5,sst6];
+        let ssts = [sst1, sst2, sst3, sst4, sst5, sst6];
 
         for (idx, mut s) in sst_samples.iter().cloned().enumerate() {
             s.dir = ssts[idx].to_owned().to_path_buf();

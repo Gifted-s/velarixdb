@@ -68,7 +68,10 @@ pub enum Error {
     MemTableRecovery(#[source] Box<Self>),
 
     #[error("Invalid string provided to be parsed to UUID `{input_string}`: {error}")]
-    InvaidUUIDParseString { input_string: String, error: uuid::Error },
+    InvaidUUIDParseString {
+        input_string: String,
+        error: uuid::Error,
+    },
 
     #[error("Invalid sstable directory error: `{input_string}`")]
     InvalidSSTableDirectory { input_string: String },
@@ -169,7 +172,9 @@ pub enum Error {
     #[error("Compaction cleanup failed but sstable merge was successful : {0} ")]
     CompactionCleanup(Box<Self>),
 
-    #[error("Cannot remove obsolete sstables from disk because not every merged sstable was written to disk")]
+    #[error(
+        "Cannot remove obsolete sstables from disk because not every merged sstable was written to disk"
+    )]
     CannotRemoveObsoleteSST,
 
     #[error("Error, merged sstables has empty entries")]

@@ -86,7 +86,7 @@ pub const DEFAULT_PREFETCH_SIZE: usize = 10;
 pub const EOF: &str = "EOF";
 
 pub const HEAD_ENTRY_KEY: &[u8; 4] = b"head";
- 
+
 pub const HEAD_KEY_SIZE: usize = 4; // "head"
 
 pub const TAIL_ENTRY_KEY: &[u8; 4] = b"tail";

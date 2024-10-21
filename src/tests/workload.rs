@@ -120,7 +120,10 @@ impl Workload {
 pub struct FilterWorkload {}
 
 impl FilterWorkload {
-    pub fn from(false_pos: f64, entries: Arc<SkipMap<Vec<u8>, SkipMapValue<usize>>>) -> crate::filter::BloomFilter {
+    pub fn from(
+        false_pos: f64,
+        entries: Arc<SkipMap<Vec<u8>, SkipMapValue<usize>>>,
+    ) -> crate::filter::BloomFilter {
         let mut filter = crate::filter::BloomFilter::new(false_pos, entries.len());
         filter.build_filter_from_entries(&entries);
         filter
@@ -142,7 +145,13 @@ pub struct SSTContructor {
 }
 
 impl SSTContructor {
-    fn new<P: AsRef<Path> + Send + Sync>(dir: P, data_path: P, index_path: P, filter_path: P, summary_path: P) -> Self {
+    fn new<P: AsRef<Path> + Send + Sync>(
+        dir: P,
+        data_path: P,
+        index_path: P,
+        filter_path: P,
+        summary_path: P,
+    ) -> Self {
         return Self {
             dir: dir.as_ref().to_path_buf(),
             data_path: data_path.as_ref().to_path_buf(),
@@ -273,7 +282,9 @@ SSTContructor::new(
                         node: FileNode {
                             file_path: sst_contructor[idx].data_path.to_owned(),
                             file: Arc::new(RwLock::new(
-                                File::open(sst_contructor[idx].data_path.to_owned()).await.unwrap(),
+                                File::open(sst_contructor[idx].data_path.to_owned())
+                                    .await
+                                    .unwrap(),
                             )),
                             file_type: FileType::Data,
                         },
@@ -285,7 +296,9 @@ SSTContructor::new(
                         node: FileNode {
                             file_path: sst_contructor[idx].index_path.to_owned(),
                             file: Arc::new(RwLock::new(
-                                File::open(sst_contructor[idx].index_path.to_owned()).await.unwrap(),
+                                File::open(sst_contructor[idx].index_path.to_owned())
+                                    .await
+                                    .unwrap(),
                             )),
                             file_type: FileType::Index,
                         },

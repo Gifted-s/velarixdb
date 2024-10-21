@@ -2,9 +2,9 @@ use crate::{
     compactors,
     consts::{
         DEFAULT_ALLOW_PREFETCH, DEFAULT_COMPACTION_FLUSH_LISTNER_INTERVAL, DEFAULT_COMPACTION_INTERVAL,
-        DEFAULT_ENABLE_TTL, DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MAX_WRITE_BUFFER_NUMBER, DEFAULT_ONLINE_GC_INTERVAL,
-        DEFAULT_PREFETCH_SIZE, DEFAULT_TOMBSTONE_COMPACTION_INTERVAL, DEFAULT_TOMBSTONE_TTL, ENTRY_TTL, GC_CHUNK_SIZE,
-        WRITE_BUFFER_SIZE,
+        DEFAULT_ENABLE_TTL, DEFAULT_FALSE_POSITIVE_RATE, DEFAULT_MAX_WRITE_BUFFER_NUMBER,
+        DEFAULT_ONLINE_GC_INTERVAL, DEFAULT_PREFETCH_SIZE, DEFAULT_TOMBSTONE_COMPACTION_INTERVAL,
+        DEFAULT_TOMBSTONE_TTL, ENTRY_TTL, GC_CHUNK_SIZE, WRITE_BUFFER_SIZE,
     },
 };
 use crate::{
@@ -74,7 +74,6 @@ fn get_open_file_limit() -> usize {
     return 150;
 }
 
-
 impl Default for Config {
     fn default() -> Self {
         Config {
@@ -126,7 +125,10 @@ impl DataStore<'static, Key> {
     /// Sets the write buffer size in kilobytes.
     /// The size must be at least 50 kilobytes.
     pub fn with_write_buffer_size(mut self, size: usize) -> Self {
-        assert!(size >= 50, "write_buffer_size should not be less than 50 Kilobytes");
+        assert!(
+            size >= 50,
+            "write_buffer_size should not be less than 50 Kilobytes"
+        );
         self.config.write_buffer_size = SizeUnit::Kilobytes.as_bytes(size);
         self
     }
@@ -358,7 +360,9 @@ mod tests {
     #[tokio::test]
     async fn test_with_tombstone_ttl() {
         let ds = create_datastore();
-        let ds = ds.await.with_tombstone_ttl(Duration::from_secs(15 * 24 * 60 * 60)); // 15 days
+        let ds = ds
+            .await
+            .with_tombstone_ttl(Duration::from_secs(15 * 24 * 60 * 60)); // 15 days
         assert_eq!(ds.config.tombstone_ttl, Duration::from_secs(15 * 24 * 60 * 60));
     }
 
@@ -375,11 +379,16 @@ mod tests {
     async fn test_with_compactor_flush_listener_interval() {
         let ds = create_datastore().await;
         let ds = ds.with_compactor_flush_listener_interval(Duration::from_secs(3 * 60)); // 3 minutes
-        assert_eq!(ds.config.compactor_flush_listener_interval, Duration::from_secs(3 * 60));
+        assert_eq!(
+            ds.config.compactor_flush_listener_interval,
+            Duration::from_secs(3 * 60)
+        );
     }
 
     #[tokio::test]
-    #[should_panic(expected = "background_compaction_interval should not be less than 5 minutes to prevent overloads")]
+    #[should_panic(
+        expected = "background_compaction_interval should not be less than 5 minutes to prevent overloads"
+    )]
     async fn test_with_background_compaction_interval_invalid() {
         let ds = create_datastore().await;
         ds.with_background_compaction_interval(Duration::from_secs(4 * 60)); // 4 minutes
@@ -389,7 +398,10 @@ mod tests {
     async fn test_with_background_compaction_interval() {
         let ds = create_datastore().await;
         let ds = ds.with_background_compaction_interval(Duration::from_secs(6 * 60)); // 6 minutes
-        assert_eq!(ds.config.background_compaction_interval, Duration::from_secs(6 * 60));
+        assert_eq!(
+            ds.config.background_compaction_interval,
+            Duration::from_secs(6 * 60)
+        );
     }
 
     #[tokio::test]

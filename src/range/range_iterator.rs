@@ -1,6 +1,5 @@
-
-use crate::err::Error;
 use crate::db::DataStore;
+use crate::err::Error;
 use crate::memtable::Entry;
 use crate::types::{Key, ValOffset, Value};
 use crate::vlog::ValueLog;
@@ -48,7 +47,6 @@ impl<'a> RangeIterator<'a> {
 impl<'a> DataStore<'a, Key> {
     // TODO: range query, add next and previous method
     pub async fn seek(&self, _: &'a [u8], _: &'a [u8]) -> Result<RangeIterator, Error> {
-      
         let range_iterator = RangeIterator::<'a>::new(
             &[1],
             &[2],

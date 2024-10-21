@@ -38,7 +38,9 @@ impl Flusher {
         let flush_data = self;
         let table_reader = table;
         if table_reader.entries.is_empty() {
-            return Err(Error::FailedToInsertToBucket("Cannot flush an empty table".to_string()));
+            return Err(Error::FailedToInsertToBucket(
+                "Cannot flush an empty table".to_string(),
+            ));
         }
         let mut bucket_lock = flush_data.bucket_map.write().await;
         let sst = bucket_lock

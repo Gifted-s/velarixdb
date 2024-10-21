@@ -99,7 +99,13 @@ impl KeyRange {
         }
         let mut restored_range_map: HashMap<PathBuf, Range> = HashMap::new();
         for (_, range) in self.key_ranges.read().await.iter() {
-            if has_restored_ranges && self.restored_ranges.read().await.contains_key(range.sst.dir.as_path()) {
+            if has_restored_ranges
+                && self
+                    .restored_ranges
+                    .read()
+                    .await
+                    .contains_key(range.sst.dir.as_path())
+            {
                 continue;
             }
 
@@ -176,7 +182,10 @@ impl KeyRange {
         let restored_ranges = self.restored_ranges.read().await;
         if !restored_ranges.is_empty() {
             for (path, range) in restored_ranges.iter() {
-                self.key_ranges.write().await.insert(path.to_owned(), range.to_owned());
+                self.key_ranges
+                    .write()
+                    .await
+                    .insert(path.to_owned(), range.to_owned());
             }
             drop(restored_ranges);
             self.restored_ranges.write().await.clear();

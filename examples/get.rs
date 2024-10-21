@@ -30,10 +30,19 @@ async fn main() {
     let entry7 = store.get("***not_found_key**").await.unwrap();
 
     assert_eq!(std::str::from_utf8(&entry1.unwrap().val).unwrap(), "tim cook");
-    assert_eq!(std::str::from_utf8(&entry2.unwrap().val).unwrap(), "sundar pichai");
+    assert_eq!(
+        std::str::from_utf8(&entry2.unwrap().val).unwrap(),
+        "sundar pichai"
+    );
     assert_eq!(std::str::from_utf8(&entry3.unwrap().val).unwrap(), "jensen huang");
-    assert_eq!(std::str::from_utf8(&entry4.unwrap().val).unwrap(), "satya nadella");
-    assert_eq!(std::str::from_utf8(&entry5.unwrap().val).unwrap(), "mark zuckerberg");
+    assert_eq!(
+        std::str::from_utf8(&entry4.unwrap().val).unwrap(),
+        "satya nadella"
+    );
+    assert_eq!(
+        std::str::from_utf8(&entry5.unwrap().val).unwrap(),
+        "mark zuckerberg"
+    );
     assert_eq!(std::str::from_utf8(&entry6.unwrap().val).unwrap(), "sam altman");
     assert!(entry7.is_none())
 }

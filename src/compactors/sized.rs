@@ -38,7 +38,11 @@ pub struct SizedTierRunner<'a> {
 
 impl<'a> SizedTierRunner<'a> {
     /// creates new instance of `SizedTierRunner`
-    pub fn new(bucket_map: BucketMapHandle, key_range: KeyRangeHandle, config: &'a Config) -> SizedTierRunner<'a> {
+    pub fn new(
+        bucket_map: BucketMapHandle,
+        key_range: KeyRangeHandle,
+        config: &'a Config,
+    ) -> SizedTierRunner<'a> {
         Self {
             tombstones: HashMap::new(),
             bucket_map,
@@ -111,7 +115,9 @@ impl<'a> SizedTierRunner<'a> {
                             .await;
                         match clean_up_successful {
                             Ok(None) => {
-                                return Err(Error::CompactionPartiallyFailed(Box::new(CompactionCleanupPartial)));
+                                return Err(Error::CompactionPartiallyFailed(Box::new(
+                                    CompactionCleanupPartial,
+                                )));
                             }
                             Err(err) => {
                                 return Err(Error::CompactionCleanup(Box::new(err)));
@@ -281,7 +287,11 @@ impl<'a> SizedTierRunner<'a> {
     /// and prevented from being inserted
     ///
     /// Returns true if entry should be inserted or false otherwise
-   pub(crate)  fn tombstone_check(&mut self, entry: &Entry<Key, usize>, merged_entries: &mut Vec<Entry<Key, usize>>) {
+    pub(crate) fn tombstone_check(
+        &mut self,
+        entry: &Entry<Key, usize>,
+        merged_entries: &mut Vec<Entry<Key, usize>>,
+    ) {
         let mut should_insert = false;
         if self.tombstones.contains_key(&entry.key) {
             let tomb_insert_time = *self.tombstones.get(&entry.key).unwrap();

@@ -136,7 +136,8 @@ impl BloomFilter {
         if self.file_path.is_none() {
             return Err(FilterFilePathNotProvided);
         };
-        let (false_pos, no_hash_func, no_elements) = FilterFileNode::recover(self.file_path.as_ref().unwrap()).await?;
+        let (false_pos, no_hash_func, no_elements) =
+            FilterFileNode::recover(self.file_path.as_ref().unwrap()).await?;
         self.false_positive_rate = false_pos;
         self.no_of_hash_func = no_hash_func as usize;
         self.no_of_elements = AtomicU32::new(no_elements);
@@ -162,7 +163,8 @@ impl BloomFilter {
 
         serialized_data.extend_from_slice(&(self.no_of_hash_func as u32).to_le_bytes());
 
-        serialized_data.extend_from_slice(&AtomicU32::load(&self.no_of_elements, Ordering::Relaxed).to_le_bytes());
+        serialized_data
+            .extend_from_slice(&AtomicU32::load(&self.no_of_elements, Ordering::Relaxed).to_le_bytes());
 
         serialized_data.extend_from_slice(&util::float_to_le_bytes(self.false_positive_rate));
 

@@ -80,7 +80,8 @@ impl Meta {
     ///
     /// Returns IO error in case it occurs
     pub async fn recover(&mut self) -> Result<(), Error> {
-        let (head, tail, created_at, last_modified) = MetaFileNode::recover(self.file_handle.path.to_owned()).await?;
+        let (head, tail, created_at, last_modified) =
+            MetaFileNode::recover(self.file_handle.path.to_owned()).await?;
         self.v_log_head = head;
         self.v_log_tail = tail;
         self.created_at = created_at;

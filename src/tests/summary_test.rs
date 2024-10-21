@@ -12,16 +12,14 @@ mod tests {
 
         let summary = Summary::new(path.to_owned());
 
-    
         assert_eq!(summary.smallest_key, vec![]);
         assert_eq!(summary.biggest_key, vec![]);
         assert_eq!(summary.path, path.join(format!("{}.db", SUMMARY_FILE_NAME)));
-     
     }
 
     #[tokio::test]
     async fn test_summary_recover() {
-       let sst = SSTContructor::generate_ssts(1).await[0].to_owned();
+        let sst = SSTContructor::generate_ssts(1).await[0].to_owned();
 
         let mut recovered_summary = Summary::new(sst.dir);
         let res = recovered_summary.recover().await;
@@ -46,10 +44,11 @@ mod tests {
         let path = root.path().join("summary_write");
 
         let mut summary = Summary::new(path);
-        summary.biggest_key = vec![1,2,3];
-        summary.smallest_key = vec![0,2,3];
+        summary.biggest_key = vec![1, 2, 3];
+        summary.smallest_key = vec![0, 2, 3];
 
-        let expected_entry_len =  SIZE_OF_U32 + SIZE_OF_U32 + summary.biggest_key.len() + summary.smallest_key.len();
+        let expected_entry_len =
+            SIZE_OF_U32 + SIZE_OF_U32 + summary.biggest_key.len() + summary.smallest_key.len();
         let serialized_entry = summary.serialize();
 
         assert_eq!(serialized_entry.len(), expected_entry_len);

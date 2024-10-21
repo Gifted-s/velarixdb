@@ -1,8 +1,8 @@
 use crate::cfg::Config;
 use crate::compactors::{CompactionReason, Compactor};
 use crate::consts::{
-    BUCKETS_DIRECTORY_NAME, HEAD_ENTRY_KEY, KB, MAX_KEY_SIZE, MAX_VALUE_SIZE, META_DIRECTORY_NAME, TOMB_STONE_MARKER,
-    VALUE_LOG_DIRECTORY_NAME, VLOG_START_OFFSET,HEAD_KEY_SIZE
+    BUCKETS_DIRECTORY_NAME, HEAD_ENTRY_KEY, HEAD_KEY_SIZE, KB, MAX_KEY_SIZE, MAX_VALUE_SIZE,
+    META_DIRECTORY_NAME, TOMB_STONE_MARKER, VALUE_LOG_DIRECTORY_NAME, VLOG_START_OFFSET,
 };
 use crate::db::keyspace::is_valid_keyspace_name;
 use crate::flush::Flusher;
@@ -24,6 +24,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs::{self};
 use tokio::sync::{Mutex, RwLock};
+
+use super::recovery::CreateOrRecoverStoreParams;
 
 /// DataStore struct is the main struct for the library crate
 /// i.e user-facing struct
@@ -138,7 +140,8 @@ impl DataStore<'static, Key> {
         dir: P,
     ) -> Result<DataStore<'static, Key>, crate::err::Error> {
         assert!(is_valid_keyspace_name(keyspace));
-        let mut store = Self::create_or_recover(DirPath::build(dir), SizeUnit::Bytes, Config::default()).await?;
+        let mut store =
+            Self::create_or_recover(DirPath::build(dir), SizeUnit::Bytes, Config::default()).await?;
         store.keyspace = keyspace;
         store.start_background_tasks();
         Ok(store)
@@ -156,7 +159,8 @@ impl DataStore<'static, Key> {
     ) -> Result<DataStore<'static, Key>, crate::err::Error> {
         assert!(is_valid_keyspace_name(keyspace));
         log::info!("Opening keyspace at {:?}", dir.as_ref());
-        let mut store = Self::create_or_recover(DirPath::build(dir), SizeUnit::Bytes, Config::default()).await?;
+        let mut store =
+            Self::create_or_recover(DirPath::build(dir), SizeUnit::Bytes, Config::default()).await?;
         store.keyspace = keyspace;
         Ok(store)
     }
@@ -209,7 +213,11 @@ impl DataStore<'static, Key> {
     /// }
     ///
     /// ```
-    pub async fn put<K: AsRef<[u8]>, V: AsRef<[u8]>>(&mut self, key: K, val: V) -> Result<Bool, crate::err::Error> {
+    pub async fn put<K: AsRef<[u8]>, V: AsRef<[u8]>>(
+        &mut self,
+        key: K,
+        val: V,
+    ) -> Result<Bool, crate::err::Error> {
         self.validate_size(key.as_ref(), Some(val.as_ref()))?;
 
         if !self.gc_updated_entries.read().await.is_empty() {
@@ -260,8 +268,10 @@ impl DataStore<'static, Key> {
         if self.read_only_memtables.is_empty() {
             self.flush_stream.clear();
         }
-        self.read_only_memtables
-            .insert(MemTable::generate_table_id(), Arc::new(self.active_memtable.to_owned()));
+        self.read_only_memtables.insert(
+            MemTable::generate_table_id(),
+            Arc::new(self.active_memtable.to_owned()),
+        );
 
         if self.read_only_memtables.len() >= self.config.max_buffer_write_number {
             self.flush_read_only_memtables();
@@ -374,7 +384,8 @@ impl DataStore<'static, Key> {
         let capacity = self.active_memtable.capacity();
         let size_unit = self.active_memtable.size_unit();
         let false_positive_rate = self.active_memtable.false_positive_rate();
-        self.active_memtable = MemTable::with_specified_capacity_and_rate(size_unit, capacity, false_positive_rate);
+        self.active_memtable =
+            MemTable::with_specified_capacity_and_rate(size_unit, capacity, false_positive_rate);
         self.gc_table = Arc::new(RwLock::new(MemTable::with_specified_capacity_and_rate(
             size_unit,
             capacity,
@@ -642,8 +653,10 @@ impl DataStore<'static, Key> {
 
         self.active_memtable.mark_readonly();
 
-        self.read_only_memtables
-            .insert(MemTable::generate_table_id(), Arc::new(self.active_memtable.to_owned()));
+        self.read_only_memtables.insert(
+            MemTable::generate_table_id(),
+            Arc::new(self.active_memtable.to_owned()),
+        );
         let immutable_tables = self.read_only_memtables.to_owned();
         let mut flusher = Flusher::new(
             Arc::clone(&self.read_only_memtables),
@@ -684,10 +697,21 @@ impl DataStore<'static, Key> {
         let key_range = KeyRange::default();
         let vlog = ValueLog::new(vlog_path).await?;
         let meta = Meta::new(&dir.meta).await?;
+
+        let params = CreateOrRecoverStoreParams {
+            dir,
+            buckets_path,
+            vlog,
+            key_range,
+            config: &config,
+            size_unit,
+            meta,
+        };
+
         if vlog_empty {
-            return DataStore::handle_empty_vlog(dir, buckets_path, vlog, key_range, &config, size_unit, meta).await;
+            return DataStore::handle_empty_vlog(params).await;
         }
-        DataStore::recover(dir, buckets_path, vlog, key_range, &config, size_unit, meta).await
+        DataStore::recover(params).await
     }
 
     /// Trigger compaction mannually

@@ -200,7 +200,9 @@ impl GC {
                         .await;
                         match most_recent_value {
                             Ok((value, creation_time)) => {
-                                if entry.created_at < creation_time || value == TOMB_STONE_MARKER.as_bytes().to_vec() {
+                                if entry.created_at < creation_time
+                                    || value == TOMB_STONE_MARKER.as_bytes().to_vec()
+                                {
                                     invalid_entries_ref.write().await.push(entry);
                                 } else {
                                     valid_entries_ref.write().await.push((entry.key, value));
@@ -233,7 +235,8 @@ impl GC {
                     v_offset,
                 ));
 
-                GC::write_valid_entries_to_vlog(valid_entries, synced_entries.to_owned(), Arc::clone(&vlog)).await?;
+                GC::write_valid_entries_to_vlog(valid_entries, synced_entries.to_owned(), Arc::clone(&vlog))
+                    .await?;
                 // call fsync on vlog to guarantee persistence to disk
                 vlog.write().await.sync_to_disk().await?;
 
