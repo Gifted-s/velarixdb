@@ -149,7 +149,7 @@ impl DataStore<'static, Key> {
 
     /// Same as [`Datastor::open`], but does not start background tasks.
     ///
-    /// Needed to open a keyspace without background tasks for testing.
+    /// Open a keyspace without background tasks for testing.
     ///
     /// Should not be user-facing.
     #[doc(hidden)]
@@ -685,30 +685,28 @@ impl DataStore<'static, Key> {
         size_unit: SizeUnit,
         config: Config,
     ) -> Result<DataStore<'static, Key>, crate::err::Error> {
-        let vlog_path = &dir.clone().val_log;
-        let buckets_path = dir.buckets.clone();
-        let vlog_exit = vlog_path.exists();
-        let vlog_empty = !vlog_exit
+        let vlog_path = &dir.val_log.to_owned(); // value log file path
+        let vlog_exist = vlog_path.try_exists().map_err(|err| crate::err::Error::DirOpen {
+            path: vlog_path.to_path_buf(),
+            error: err,
+        })?;
+        let params = CreateOrRecoverStoreParams {
+            buckets_path: dir.buckets.clone(),
+            meta: Meta::new(&dir.meta).await?,
+            dir,
+            vlog: ValueLog::new(vlog_path).await?,
+            key_range: KeyRange::default(),
+            config: &config,
+            size_unit,
+        };
+
+        if !vlog_exist
             || fs::metadata(vlog_path)
                 .await
                 .map_err(crate::err::Error::GetFileMetaData)?
                 .len()
-                == 0;
-        let key_range = KeyRange::default();
-        let vlog = ValueLog::new(vlog_path).await?;
-        let meta = Meta::new(&dir.meta).await?;
-
-        let params = CreateOrRecoverStoreParams {
-            dir,
-            buckets_path,
-            vlog,
-            key_range,
-            config: &config,
-            size_unit,
-            meta,
-        };
-
-        if vlog_empty {
+                == 0
+        {
             return DataStore::handle_empty_vlog(params).await;
         }
         DataStore::recover(params).await
