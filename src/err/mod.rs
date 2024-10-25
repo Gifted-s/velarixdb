@@ -31,6 +31,9 @@ pub enum Error {
     #[error("Failed to get file metadata")]
     GetFileMetaData(#[source] std::io::Error),
 
+    #[error("Failed to check if file path exist")]
+    TryFilePathExist(#[source] std::io::Error),
+
     #[error("Failed to create directory")]
     DirCreation { path: PathBuf, error: io::Error },
 

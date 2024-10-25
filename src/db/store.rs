@@ -686,10 +686,10 @@ impl DataStore<'static, Key> {
         config: Config,
     ) -> Result<DataStore<'static, Key>, crate::err::Error> {
         let vlog_path = &dir.val_log.to_owned(); // value log file path
-        let vlog_exist = vlog_path.try_exists().map_err(|err| crate::err::Error::DirOpen {
-            path: vlog_path.to_path_buf(),
-            error: err,
-        })?;
+        let vlog_exist = vlog_path
+            .try_exists()
+            .map_err(crate::err::Error::TryFilePathExist)?;
+
         let params = CreateOrRecoverStoreParams {
             buckets_path: dir.buckets.clone(),
             meta: Meta::new(&dir.meta).await?,
