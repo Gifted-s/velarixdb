@@ -228,15 +228,12 @@ impl FileAsync for FileNode {
 
     async fn sync_all(&self) -> Result<(), Error> {
         let file = self.w_lock().await;
-        Ok(file
-            .sync_all()
-            .await
-            .map_err(|err| Error::FileSync { error: err })?)
+        Ok(file.sync_all().await.map_err(Error::FileSync)?)
     }
 
     async fn flush(&self) -> Result<(), Error> {
         let mut file = self.w_lock().await;
-        Ok(file.flush().await.map_err(|err| Error::FileSync { error: err })?)
+        Ok(file.flush().await.map_err(Error::FileSync)?)
     }
 
     async fn seek(&self, start_offset: u64) -> Result<u64, Error> {

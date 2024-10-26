@@ -4,8 +4,8 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum Error {
-    #[error("Failed to sync writes to file : {error}")]
-    FileSync { error: io::Error },
+    #[error("Failed to sync writes to file")]
+    FileSync(#[source] io::Error),
 
     #[error("Failed to create file: `{path}`: {error}")]
     FileCreation { path: PathBuf, error: io::Error },
