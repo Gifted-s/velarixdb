@@ -199,7 +199,6 @@ impl Table {
     /// Returns IO error incase it occurs
     pub(crate) async fn load_entries_from_file(&mut self) -> Result<(), Error> {
         let (entries, bytes_read) = self.data_file.file.load_entries().await?;
-        //TODO: review should only return entries not an entire table
         self.entries = entries;
         self.size = bytes_read;
         Ok(())
