@@ -147,7 +147,7 @@ impl DataStore<'static, Key> {
         Ok(store)
     }
 
-    /// Same as [`Datastor::open`], but does not start background tasks.
+    /// Same as [`Datastore::open`], but does not start background tasks.
     ///
     /// Open a keyspace without background tasks for testing.
     ///
