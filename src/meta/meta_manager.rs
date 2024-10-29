@@ -76,7 +76,7 @@ impl Meta {
 
     /// Recovers `Meta` from disk
     ///
-    /// # Errors
+    /// # Error
     ///
     /// Returns IO error in case it occurs
     pub async fn recover(&mut self) -> Result<(), Error> {
