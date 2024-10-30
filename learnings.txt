@@ -1,0 +1,1 @@
+Oct 30, Learnt about Coordinator-free model and Lattice composition for eventual consistency
