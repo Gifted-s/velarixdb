@@ -1,2 +1,3 @@
 Oct 30, Learnt about Coordinator-free model and Lattice composition for eventual consistency
 Oct 31 Raft Logs
+3 Nov 2, Learnt about memory layout and memory mapping
