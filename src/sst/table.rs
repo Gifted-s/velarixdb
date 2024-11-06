@@ -283,6 +283,7 @@ impl Table {
             .as_mut()
             .unwrap()
             .set_sstable_path(&self.data_file.path);
+        
         // write data blocks
         let mut current_block = Block::new();
         if self.size > 0 {
