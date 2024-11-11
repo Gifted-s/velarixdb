@@ -3,3 +3,4 @@ Oct 31 Raft Logs
 3 Nov 2, Learnt about memory layout and memory mapping
 Nov 3, Learnt about DuckDB and it's use cases
 Nov 8, Learnt about, analytical concurrent transaction in DuckDB 
+Nov 11, Learnt about, Learned index for fast lookups (Machine learning)
