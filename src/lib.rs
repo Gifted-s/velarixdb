@@ -3,7 +3,7 @@
 //![![codecov](https://codecov.io/gh/Gifted-s/velarixdb/branch/ft%2Ffinal/graph/badge.svg?token=01K79PJWQA)](https://codecov.io/gh/Gifted-s/velarixdb)
 //![![Tests](https://github.com/Gifted-s/velarixdb/actions/workflows/rust.yml/badge.svg)](https://github.com/Gifted-s/velarixdb/actions/workflows/rust.yml)
 //![![Crates.io](https://img.shields.io/crates/v/velarixdb.svg)](https://crates.io/crates/velarixdb)
-//![![Documentation](https://docs.rs/velarixdb/badge.svg)](https://docs.rs/velarixdb)
+//![![Crates.io](https://img.shields.io/crates/v/velarixdb.svg)](https://crates.io/crates/velarixdb)
 //![![Clippy](https://github.com/Gifted-s/velarixdb/actions/workflows/clippy.yml/badge.svg)](https://github.com/Gifted-s/velarixdb/actions/workflows/clippy.yml)
 //![![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](code_of_conduct.md)
 //![![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
