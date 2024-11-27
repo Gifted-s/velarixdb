@@ -172,7 +172,7 @@ impl Block {
 
     /// Serializes the entry in the block to a byte vector
     ///
-    /// Returns `Ok(entry_vec)`or Error if serialization failed
+    /// Returns `Ok(entry_vec)` or Error if serialization failed
     pub(crate) fn serialize(&self, entry: &BlockEntry) -> Result<ByteSerializedEntry, Error> {
         let entry_len = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
         let mut entry_vec = Vec::with_capacity(entry_len);
