@@ -109,10 +109,10 @@ impl Block {
     /// # Errors
     ///
     /// Returns error if the `Block` is already full and cannot accommodate the new entry.
-    pub fn set_entry<K: AsRef<[u8]>>(
+    pub fn set_entry(
         &mut self,
         key_prefix: u32,
-        key: K,
+        key: impl AsRef<[u8]>,
         value_offset: u32,
         creation_date: DateTime<Utc>,
         is_tombstone: bool,
@@ -161,7 +161,7 @@ impl Block {
     }
 
     pub fn get_last_entry(&self) -> BlockEntry {
-        return self.entries.last().unwrap().to_owned();
+        self.entries.last().unwrap().to_owned()
     }
 
     #[cfg(test)]
@@ -197,7 +197,7 @@ impl Block {
     /// Returns `Some(&BlockEntry)` entry was constructed, `None` otherwise.
     /// Method will be used when we implement the block cache
     #[allow(dead_code)]
-    pub(crate) fn get_entry<K: AsRef<[u8]>>(&self, key: &K) -> Option<&BlockEntry> {
+    pub(crate) fn get_entry(&self, key: impl AsRef<[u8]>) -> Option<&BlockEntry> {
         self.entries.iter().find(|entry| *entry.key == *key.as_ref())
     }
 }

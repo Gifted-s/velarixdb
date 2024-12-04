@@ -166,7 +166,7 @@ impl Index {
         Ok(entry_vec)
     }
     /// Retrieves a Block Offset from index file
-    pub(crate) async fn get<K: AsRef<[u8]>>(&self, searched_key: K) -> Result<Option<BlockOffset>, Error> {
+    pub(crate) async fn get(&self, searched_key: impl AsRef<[u8]>) -> Result<Option<BlockOffset>, Error> {
         self.file.file.get_from_index(searched_key.as_ref()).await
     }
 

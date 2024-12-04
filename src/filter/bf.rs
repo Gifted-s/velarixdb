@@ -81,7 +81,7 @@ impl BloomFilter {
     }
 
     /// Adds key to filter
-    pub(crate) fn set<K: Hash + Copy>(&mut self, key: K) {
+    pub(crate) fn set(&mut self, key: impl Hash + Copy) {
         let mut bits = self.bit_vec.lock().expect("Failed to lock file");
         for i in 0..self.no_of_hash_func {
             let hash = self.calculate_hash(key, i);
@@ -92,7 +92,7 @@ impl BloomFilter {
     }
 
     /// Checks if a key exists or not
-    pub(crate) fn contains<K: Hash + Copy>(&self, key: K) -> bool {
+    pub(crate) fn contains(&self, key: impl Hash + Copy) -> bool {
         let bits = self.bit_vec.lock().expect("Failed to lock file");
         for i in 0..self.no_of_hash_func {
             let hash = self.calculate_hash(key, i);
@@ -111,7 +111,7 @@ impl BloomFilter {
     /// # Errors
     ///
     /// Returns IO error in case write fails
-    pub async fn write<P: AsRef<Path> + Send + Sync>(&mut self, dir: P) -> Result<(), Error> {
+    pub async fn write(&mut self, dir: impl AsRef<Path> + Send + Sync) -> Result<(), Error> {
         let file_path = dir.as_ref().join(format!("{}.db", FILTER_FILE_NAME));
         let file = FilterFileNode::new(file_path.to_owned(), crate::fs::FileType::Filter)
             .await
@@ -172,7 +172,7 @@ impl BloomFilter {
     }
 
     /// Sets the sst_dir field for [`BloomFilter`]
-    pub fn set_sstable_path<P: AsRef<Path>>(&mut self, path: P) {
+    pub fn set_sstable_path(&mut self, path: impl AsRef<Path>) {
         self.sst_dir = Some(path.as_ref().to_path_buf());
     }
 
@@ -219,7 +219,7 @@ impl BloomFilter {
     }
 
     /// Generates the hashed version of a provided key
-    fn calculate_hash<K: Hash>(&self, key: K, seed: usize) -> u64 {
+    fn calculate_hash(&self, key: impl Hash, seed: usize) -> u64 {
         let mut hasher = DefaultHasher::new();
         key.hash(&mut hasher);
         hasher.write_u64(seed as u64);
@@ -267,7 +267,6 @@ impl Default for BloomFilter {
 }
 
 #[cfg(test)]
-
 mod tests {
 
     use super::*;

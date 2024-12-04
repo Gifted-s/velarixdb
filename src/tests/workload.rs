@@ -152,13 +152,13 @@ impl SSTContructor {
         filter_path: P,
         summary_path: P,
     ) -> Self {
-        return Self {
+        Self {
             dir: dir.as_ref().to_path_buf(),
             data_path: data_path.as_ref().to_path_buf(),
             index_path: index_path.as_ref().to_path_buf(),
             filter_path: filter_path.as_ref().to_path_buf(),
             summary_path: summary_path.as_ref().to_path_buf(),
-        };
+        }
     }
 
     pub async fn generate_ssts(number: u32) -> Vec<Table> {

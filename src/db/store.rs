@@ -6,6 +6,7 @@ use crate::consts::{
 };
 use crate::db::keyspace::is_valid_keyspace_name;
 use crate::flush::Flusher;
+use crate::fs::P;
 use crate::gc::garbage_collector::GC;
 use crate::index::Index;
 use crate::key_range::KeyRange;
@@ -135,9 +136,9 @@ impl DataStore<'static, Key> {
     /// # Panics
     ///
     /// Panics if the keyspace name is invalid.
-    pub async fn open<P: AsRef<Path> + Send + Sync>(
+    pub async fn open(
         keyspace: &'static str,
-        dir: P,
+        dir: impl P,
     ) -> Result<DataStore<'static, Key>, crate::err::Error> {
         assert!(is_valid_keyspace_name(keyspace));
         let mut store =
@@ -153,9 +154,9 @@ impl DataStore<'static, Key> {
     ///
     /// Should not be user-facing.
     #[doc(hidden)]
-    pub async fn open_without_background<P: AsRef<Path> + Send + Sync>(
+    pub async fn open_without_background(
         keyspace: &'static str,
-        dir: P,
+        dir: impl P,
     ) -> Result<DataStore<'static, Key>, crate::err::Error> {
         assert!(is_valid_keyspace_name(keyspace));
         log::info!("Opening keyspace at {:?}", dir.as_ref());
@@ -190,7 +191,6 @@ impl DataStore<'static, Key> {
     /// ```
     /// # use tempfile::tempdir;
     /// use velarixdb::db::DataStore;
-
     /// #[tokio::main]
     /// async fn main() {
     ///     let root = tempdir().unwrap();
@@ -211,12 +211,11 @@ impl DataStore<'static, Key> {
     ///     assert!(res5.is_ok());
     ///     assert!(res6.is_ok());
     /// }
-    ///
     /// ```
-    pub async fn put<K: AsRef<[u8]>, V: AsRef<[u8]>>(
+    pub async fn put(
         &mut self,
-        key: K,
-        val: V,
+        key: impl AsRef<[u8]>,
+        val: impl AsRef<[u8]>,
     ) -> Result<Bool, crate::err::Error> {
         self.validate_size(key.as_ref(), Some(val.as_ref()))?;
 
@@ -349,7 +348,6 @@ impl DataStore<'static, Key> {
     /// }
     ///
     /// ```
-
     pub async fn delete<T: AsRef<[u8]>>(&mut self, key: T) -> Result<bool, crate::err::Error> {
         self.validate_size(key.as_ref(), None::<T>)?;
         self.get(key.as_ref()).await?;
@@ -441,7 +439,6 @@ impl DataStore<'static, Key> {
     ///  assert!(entry7.is_none())
     /// }
     /// ```
-
     pub async fn get<T: AsRef<[u8]>>(&self, key: T) -> Result<Option<UserEntry>, crate::err::Error> {
         self.validate_size(key.as_ref(), None::<T>)?;
 
@@ -489,10 +486,10 @@ impl DataStore<'static, Key> {
     /// # Errors
     ///
     /// Returns error, if IO error occurs
-    async fn search_gc_entries(&self, key: &[u8]) -> Result<Option<UserEntry>, crate::err::Error> {
+    async fn search_gc_entries(&self, key: impl AsRef<[u8]>) -> Result<Option<UserEntry>, crate::err::Error> {
         let gc_entries = self.gc_updated_entries.read().await;
         if !gc_entries.is_empty() {
-            if let Some(e) = gc_entries.get(key) {
+            if let Some(e) = gc_entries.get(key.as_ref()) {
                 let val = e.value();
                 if val.is_tombstone {
                     return Ok(None);
@@ -528,8 +525,11 @@ impl DataStore<'static, Key> {
     ///     assert_eq!(std::str::from_utf8(&entry.unwrap().val).unwrap(), "elon musk")
     /// }
     /// ```
-
-    pub async fn update<T: AsRef<[u8]>>(&mut self, key: T, value: T) -> Result<bool, crate::err::Error> {
+    pub async fn update(
+        &mut self,
+        key: impl AsRef<[u8]>,
+        value: impl AsRef<[u8]>,
+    ) -> Result<bool, crate::err::Error> {
         self.validate_size(key.as_ref(), Some(value.as_ref()))?;
         self.get(key.as_ref()).await?;
         self.put(key, value).await
@@ -544,10 +544,10 @@ impl DataStore<'static, Key> {
     /// # Errors
     ///
     /// Returns error, if validation failed.
-    pub(crate) fn validate_size<K: AsRef<[u8]>, V: AsRef<[u8]>>(
+    pub(crate) fn validate_size(
         &self,
-        key: K,
-        val: Option<V>,
+        key: impl AsRef<[u8]>,
+        val: Option<impl AsRef<[u8]>>,
     ) -> Result<(), crate::err::Error> {
         if key.as_ref().is_empty() {
             return Err(crate::err::Error::KeySizeNone);
@@ -576,9 +576,9 @@ impl DataStore<'static, Key> {
     /// # Errors
     ///
     /// Returns error, if any error occurs.
-    pub(crate) async fn search_key_in_sstables<K: AsRef<[u8]>>(
+    pub(crate) async fn search_key_in_sstables(
         &self,
-        key: K,
+        key: impl AsRef<[u8]>,
         ssts: Vec<Table>,
     ) -> Result<Option<UserEntry>, crate::err::Error> {
         let mut insert_time = util::default_datetime();
@@ -587,7 +587,7 @@ impl DataStore<'static, Key> {
         let mut is_deleted = false;
         for sst in ssts.iter() {
             let index = Index::new(sst.index_file.path.to_owned(), sst.index_file.file.to_owned());
-            let block_handle = index.get(&key).await?;
+            let block_handle = index.get(key.as_ref()).await?;
             if block_handle.is_some() {
                 let sst_res = sst.get(block_handle.unwrap(), &key).await?;
 
@@ -691,12 +691,12 @@ impl DataStore<'static, Key> {
             .map_err(crate::err::Error::TryFilePathExist)?;
 
         let params = CreateOrRecoverStoreParams {
-            buckets_path: dir.buckets.clone(),
+            buckets_path: &dir.buckets,
             meta: Meta::new(&dir.meta).await?,
-            dir,
+            dir: &dir,
             vlog: ValueLog::new(vlog_path).await?,
             key_range: KeyRange::default(),
-            config: &config,
+            config,
             size_unit,
         };
 
@@ -743,7 +743,7 @@ impl DataStore<'static, Key> {
     }
 }
 impl DirPath {
-    pub(crate) fn build<P: AsRef<Path> + Send + Sync>(root_path: P) -> Self {
+    pub(crate) fn build(root_path: impl AsRef<Path> + Send + Sync) -> Self {
         let root = root_path;
         let val_log = root.as_ref().join(VALUE_LOG_DIRECTORY_NAME);
         let buckets = root.as_ref().join(BUCKETS_DIRECTORY_NAME);

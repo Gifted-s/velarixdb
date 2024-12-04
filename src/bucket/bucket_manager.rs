@@ -179,7 +179,7 @@ impl BucketMap {
     /// # Errors
     ///
     /// Returns error if an IO error occured
-    pub async fn new<P: AsRef<Path>>(dir: P) -> Result<BucketMap, Error> {
+    pub async fn new(dir: impl AsRef<Path>) -> Result<BucketMap, Error> {
         let dir = dir.as_ref();
         FileNode::create_dir_all(dir.to_path_buf()).await?;
         Ok(Self {
