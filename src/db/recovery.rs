@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::path::Path;
 
 use super::{store::DirPath, DataStore, SizeUnit};
 
@@ -14,7 +13,7 @@ use crate::err::Error;
 use crate::err::Error::*;
 use crate::filter::BloomFilter;
 use crate::flush::Flusher;
-use crate::fs::FileAsync;
+use crate::fs::{FileAsync, P};
 use crate::gc::garbage_collector::GC;
 use crate::key_range::KeyRange;
 use crate::memtable::{Entry, MemTable};
@@ -33,11 +32,11 @@ use tokio::sync::RwLock;
 
 /// Parameters to create an empty ['DataStore'] or recover exisiting one from ['ValueLog']
 pub struct CreateOrRecoverStoreParams<'a, P> {
-    pub dir: DirPath,
+    pub dir: &'a DirPath,
     pub buckets_path: P,
     pub vlog: ValueLog,
     pub key_range: KeyRange,
-    pub config: &'a Config,
+    pub config: Config,
     pub size_unit: SizeUnit,
     pub meta: Meta,
 }
@@ -48,8 +47,8 @@ impl DataStore<'static, Key> {
     /// Errors
     ///
     /// Returns error incase there is an IO error
-    pub async fn recover<P: AsRef<Path> + Send + Sync + Clone>(
-        params: CreateOrRecoverStoreParams<'_, P>,
+    pub async fn recover(
+        params: CreateOrRecoverStoreParams<'_, impl P>,
     ) -> Result<DataStore<'static, Key>, Error> {
         let (buckets_path, dir, mut vlog, key_range, config, size_unit, mut meta) = (
             params.buckets_path,
@@ -152,7 +151,7 @@ impl DataStore<'static, Key> {
                     .await;
             }
         }
-        let mut buckets_map = BucketMap::new(buckets_path.clone()).await?;
+        let mut buckets_map = BucketMap::new(buckets_path.as_ref()).await?;
         for (bucket_id, bucket) in recovered_buckets.iter() {
             buckets_map.buckets.insert(*bucket_id, bucket.clone());
         }
@@ -196,10 +195,10 @@ impl DataStore<'static, Key> {
                     keyspace: DEFAULT_DB_NAME,
                     active_memtable: active_memtable.to_owned(),
                     val_log: vlog,
-                    dir,
+                    dir: dir.to_owned(),
                     buckets,
                     key_range,
-                    meta,
+                    meta: meta.to_owned(),
                     flusher,
                     compactor: Compactor::new(
                         config.enable_ttl,
@@ -243,11 +242,11 @@ impl DataStore<'static, Key> {
     /// Recovers both active and readonly memtable states using value log
     ///
     /// Returns a tuple of active memtable and read only memtables
-    pub async fn recover_memtable<P: AsRef<Path> + Send + Sync>(
+    pub async fn recover_memtable(
         size_unit: SizeUnit,
         capacity: usize,
         false_positive_rate: f64,
-        vlog_path: P,
+        vlog_path: impl P,
         head_offset: usize,
     ) -> Result<(MemTable<Key>, ImmutableMemTablesLockFree<Key>), Error> {
         let read_only_memtables: ImmutableMemTablesLockFree<Key> = SkipMap::new();
@@ -288,8 +287,8 @@ impl DataStore<'static, Key> {
 
     /// Creates new [`DataStore`]
     /// Used in case there is no recovery needed
-    pub async fn handle_empty_vlog<P: AsRef<Path> + Send + Sync>(
-        params: CreateOrRecoverStoreParams<'_, P>,
+    pub async fn handle_empty_vlog(
+        params: CreateOrRecoverStoreParams<'_, impl P>,
     ) -> Result<DataStore<'static, Key>, Error> {
         let (buckets_path, dir, mut vlog, key_range, config, size_unit, meta) = (
             params.buckets_path,
@@ -347,7 +346,7 @@ impl DataStore<'static, Key> {
             active_memtable,
             val_log: vlog,
             buckets,
-            dir,
+            dir: dir.clone(),
             key_range,
             compactor: Compactor::new(
                 config.enable_ttl,
@@ -364,7 +363,6 @@ impl DataStore<'static, Key> {
                 compactors::CompactionReason::MaxSize,
                 config.false_positive_rate,
             ),
-            config: config.clone(),
             meta,
             flusher,
             read_only_memtables,
@@ -382,10 +380,11 @@ impl DataStore<'static, Key> {
             gc_table,
             gc_updated_entries,
             flush_stream: HashSet::new(),
+            config,
         })
     }
 
-    fn get_bucket_id_from_full_bucket_path<P: AsRef<Path> + Send + Sync>(full_path: P) -> String {
+    fn get_bucket_id_from_full_bucket_path(full_path: impl P) -> String {
         let full_path_as_str = full_path.as_ref().to_string_lossy().to_string();
         let mut bucket_id = String::new();
         // Find the last occurrence of "bucket" in the file path

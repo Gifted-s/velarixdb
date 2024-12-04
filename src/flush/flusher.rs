@@ -69,9 +69,9 @@ impl Flusher {
     /// removes it from the read only memtables
     ///
     /// It also notifies flush listener
-    pub fn flush_handler<Id: 'static + AsRef<[u8]> + Send + Sync + Debug>(
+    pub fn flush_handler(
         &mut self,
-        table_id: Id,
+        table_id: impl 'static + AsRef<[u8]> + Send + Sync + Debug,
         table_to_flush: InActiveMemtable,
         flush_tx: async_broadcast::Sender<FlushSignal>,
     ) {

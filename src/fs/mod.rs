@@ -40,16 +40,25 @@ pub type Buf = [u8];
 pub type RGuard<'a, T> = RwLockReadGuard<'a, T>;
 pub type WGuard<'a, T> = RwLockWriteGuard<'a, T>;
 
+pub trait ThreadSharable: Send + Sync {}
+impl<T> ThreadSharable for T where T: AsRef<Path> + Send + Sync {}
+
+pub trait P: AsRef<Path> + ThreadSharable {}
+impl<T> P for T where T: AsRef<Path> + ThreadSharable {}
+
+pub trait F: ThreadSharable + Debug + Clone {}
+impl<T> F for T where T: ThreadSharable + Debug + Clone {}
+
 #[async_trait]
 #[allow(dead_code)] // contains method for future features
-pub trait FileAsync: Send + Sync + Debug + Clone {
-    async fn create<P: AsRef<Path> + Send + Sync>(path: P) -> Result<File, Error>;
+pub trait FileAsync: F {
+    async fn create(path: impl P) -> Result<File, Error>;
 
-    async fn create_dir_all<P: AsRef<Path> + Send + Sync>(path: P) -> Result<(), Error>;
+    async fn create_dir_all(path: impl P) -> Result<(), Error>;
 
     async fn metadata(&self) -> Result<Metadata, Error>;
 
-    async fn open<P: AsRef<Path> + Send + Sync>(path: P) -> Result<File, Error>;
+    async fn open(path: impl P) -> Result<File, Error>;
 
     async fn read_buf(&self, buf: &mut Buf) -> Result<usize, Error>;
 
@@ -79,10 +88,9 @@ pub trait FileAsync: Send + Sync + Debug + Clone {
 }
 
 #[async_trait]
-pub trait DataFs: Send + Sync + Debug + Clone {
-    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<Self, Error>;
+pub trait DataFs: F {
+    async fn new(path: impl P, file_type: FileType) -> Result<Self, Error>;
     async fn load_entries(&self) -> Result<(SkipMapEntries<Key>, usize), Error>;
-
     async fn find_entry(
         &self,
         offset: u32,
@@ -96,13 +104,10 @@ pub trait DataFs: Send + Sync + Debug + Clone {
 }
 
 #[async_trait]
-pub trait VLogFs: Send + Sync + Debug + Clone {
-    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<Self, Error>;
-
+pub trait VLogFs: F {
+    async fn new(path: impl P, file_type: FileType) -> Result<Self, Error>;
     async fn get(&self, start_offset: usize) -> Result<Option<(Key, bool)>, Error>;
-
     async fn recover(&self, start_offset: usize) -> Result<Vec<ValueLogEntry>, Error>;
-
     async fn read_chunk_to_garbage_collect(
         &self,
         bytes_to_collect: usize,
@@ -111,39 +116,30 @@ pub trait VLogFs: Send + Sync + Debug + Clone {
 }
 
 #[async_trait]
-pub trait FilterFs: Send + Sync + Debug + Clone {
-    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<Self, Error>;
-
-    async fn recover<P: AsRef<Path> + Send + Sync>(
-        path: P,
-    ) -> Result<(FalsePositive, NoHashFunc, NoOfElements), Error>;
+pub trait FilterFs: F {
+    async fn new(path: impl P, file_type: FileType) -> Result<Self, Error>;
+    async fn recover(path: impl P) -> Result<(FalsePositive, NoHashFunc, NoOfElements), Error>;
 }
 
 #[async_trait]
 
-pub trait IndexFs: Send + Sync + Debug + Clone {
-    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<Self, Error>;
-
+pub trait IndexFs: F {
+    async fn new(path: impl P, file_type: FileType) -> Result<Self, Error>;
     async fn get_from_index(&self, searched_key: &[u8]) -> Result<Option<u32>, Error>;
-
     #[allow(dead_code)] // will be used for range queries(future)
     async fn get_block_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<RangeOffset, Error>;
 }
 
 #[async_trait]
-pub trait SummaryFs: Send + Sync + Debug + Clone {
-    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<Self, Error>;
-
-    async fn recover<P: AsRef<Path> + Send + Sync>(path: P) -> Result<(SmallestKey, BiggestKey), Error>;
+pub trait SummaryFs: F {
+    async fn new(path: impl P, file_type: FileType) -> Result<Self, Error>;
+    async fn recover(path: impl P) -> Result<(SmallestKey, BiggestKey), Error>;
 }
 
 #[async_trait]
-pub trait MetaFs: Send + Sync + Debug + Clone {
-    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<Self, Error>;
-
-    async fn recover<P: AsRef<Path> + Send + Sync>(
-        path: P,
-    ) -> Result<(VLogHead, VLogTail, CreatedAt, LastModified), Error>;
+pub trait MetaFs: F {
+    async fn new(path: impl P, file_type: FileType) -> Result<Self, Error>;
+    async fn recover(path: impl P) -> Result<(VLogHead, VLogTail, CreatedAt, LastModified), Error>;
 }
 
 #[derive(Debug, Clone)]
@@ -153,20 +149,22 @@ pub struct FileNode {
     pub file_type: FileType,
 }
 
+impl ThreadSharable for FileNode {}
+
 impl FileNode {
-    pub async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<Self, Error> {
+    pub async fn new(path: impl P, file_type: FileType) -> Result<Self, Error> {
         let file = FileNode::create(path.as_ref()).await?;
-        return Ok(Self {
+        Ok(Self {
             file_type,
             file: Arc::new(RwLock::new(file)),
             file_path: path.as_ref().to_path_buf(),
-        });
+        })
     }
 }
 
 #[async_trait]
 impl FileAsync for FileNode {
-    async fn create<P: AsRef<Path> + Send + Sync>(path: P) -> Result<File, Error> {
+    async fn create(path: impl P) -> Result<File, Error> {
         Ok(OpenOptions::new()
             .read(true)
             .append(true)
@@ -179,7 +177,7 @@ impl FileAsync for FileNode {
             })?)
     }
 
-    async fn create_dir_all<P: AsRef<Path> + Send + Sync>(dir: P) -> Result<(), Error> {
+    async fn create_dir_all(dir: impl P) -> Result<(), Error> {
         let dir = dir.as_ref();
         if !dir.exists() {
             return fs::create_dir_all(&dir).await.map_err(|err| DirCreation {
@@ -195,7 +193,7 @@ impl FileAsync for FileNode {
         Ok(file.metadata().await.map_err(GetFileMetaData)?)
     }
 
-    async fn open<P: AsRef<Path> + Send + Sync>(path: P) -> Result<File, Error> {
+    async fn open(path: impl P) -> Result<File, Error> {
         Ok(File::open(path.as_ref()).await.map_err(|err| FileOpen {
             path: path.as_ref().to_path_buf(),
             error: err,
@@ -259,9 +257,11 @@ pub struct DataFileNode {
     pub node: FileNode,
 }
 
+impl ThreadSharable for DataFileNode {}
+
 #[async_trait]
 impl DataFs for DataFileNode {
-    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<DataFileNode, Error> {
+    async fn new(path: impl P, file_type: FileType) -> Result<DataFileNode, Error> {
         let node = FileNode::new(path, file_type).await?;
         Ok(DataFileNode { node })
     }
@@ -452,9 +452,11 @@ pub struct VLogFileNode {
     pub node: FileNode,
 }
 
+impl ThreadSharable for VLogFileNode {}
+
 #[async_trait]
 impl VLogFs for VLogFileNode {
-    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<VLogFileNode, Error> {
+    async fn new(path: impl P, file_type: FileType) -> Result<VLogFileNode, Error> {
         let node = FileNode::new(path, file_type).await?;
         Ok(VLogFileNode { node })
     }
@@ -646,9 +648,12 @@ impl VLogFs for VLogFileNode {
 pub struct IndexFileNode {
     pub node: FileNode,
 }
+
+impl ThreadSharable for IndexFileNode {}
+
 #[async_trait]
 impl IndexFs for IndexFileNode {
-    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<IndexFileNode, Error> {
+    async fn new(path: impl P, file_type: FileType) -> Result<IndexFileNode, Error> {
         let node = FileNode::new(path, file_type).await?;
         Ok(IndexFileNode { node })
     }
@@ -744,22 +749,19 @@ pub struct FilterFileNode {
     pub node: FileNode,
 }
 
+impl ThreadSharable for FilterFileNode {}
+
 #[async_trait]
 impl FilterFs for FilterFileNode {
-    async fn new<P: AsRef<Path> + Send + Sync>(
-        path: P,
-        file_type: FileType,
-    ) -> Result<FilterFileNode, Error> {
+    async fn new(path: impl P, file_type: FileType) -> Result<FilterFileNode, Error> {
         let node = FileNode::new(path, file_type).await?;
         Ok(FilterFileNode { node })
     }
 
-    async fn recover<P: AsRef<Path> + Send + Sync>(
-        path: P,
-    ) -> Result<(FalsePositive, NoHashFunc, NoOfElements), Error> {
+    async fn recover(path: impl P) -> Result<(FalsePositive, NoHashFunc, NoOfElements), Error> {
         let mut file = FileNode::open(path.as_ref())
             .await
-            .map_err(|_| return FilterFileOpen(path.as_ref().to_owned()))?;
+            .map_err(|_| FilterFileOpen(path.as_ref().to_owned()))?;
         let mut no_hash_func_bytes = [0; SIZE_OF_U32];
         let mut bytes_read = load_buffer!(file, &mut no_hash_func_bytes, path.as_ref().to_path_buf())?;
         if bytes_read == 0 {
@@ -791,19 +793,18 @@ impl FilterFs for FilterFileNode {
 pub struct MetaFileNode {
     pub node: FileNode,
 }
+impl ThreadSharable for MetaFileNode {}
 
 #[async_trait]
 impl MetaFs for MetaFileNode {
-    async fn new<P: AsRef<Path> + Send + Sync>(path: P, file_type: FileType) -> Result<MetaFileNode, Error> {
+    async fn new(path: impl P, file_type: FileType) -> Result<MetaFileNode, Error> {
         let node = FileNode::new(path, file_type).await?;
         Ok(MetaFileNode { node })
     }
-    async fn recover<P: AsRef<Path> + Send + Sync>(
-        path: P,
-    ) -> Result<(VLogHead, VLogTail, CreatedAt, LastModified), Error> {
+    async fn recover(path: impl P) -> Result<(VLogHead, VLogTail, CreatedAt, LastModified), Error> {
         let mut file = FileNode::open(path.as_ref())
             .await
-            .map_err(|_| return FilterFileOpen(path.as_ref().to_owned()))?;
+            .map_err(|_| FilterFileOpen(path.as_ref().to_owned()))?;
         let mut head_offset_bytes = [0; SIZE_OF_U32];
         let mut bytes_read = load_buffer!(file, &mut head_offset_bytes, path.as_ref().to_path_buf())?;
         if bytes_read == 0 {
@@ -845,19 +846,18 @@ pub struct SummaryFileNode {
     pub node: FileNode,
 }
 
+impl ThreadSharable for SummaryFileNode {}
+
 #[async_trait]
 impl SummaryFs for SummaryFileNode {
-    async fn new<P: AsRef<Path> + Send + Sync>(
-        path: P,
-        file_type: FileType,
-    ) -> Result<SummaryFileNode, Error> {
+    async fn new(path: impl P, file_type: FileType) -> Result<SummaryFileNode, Error> {
         let node = FileNode::new(path, file_type).await?;
         Ok(SummaryFileNode { node })
     }
-    async fn recover<P: AsRef<Path> + Send + Sync>(path: P) -> Result<(SmallestKey, BiggestKey), Error> {
+    async fn recover(path: impl P) -> Result<(SmallestKey, BiggestKey), Error> {
         let mut file = FileNode::open(path.as_ref())
             .await
-            .map_err(|_| return FilterFileOpen(path.as_ref().to_owned()))?;
+            .map_err(|_| FilterFileOpen(path.as_ref().to_owned()))?;
         let mut smallest_key_len_bytes = [0; SIZE_OF_U32];
         let mut bytes_read = load_buffer!(file, &mut smallest_key_len_bytes, path.as_ref().to_owned())?;
         if bytes_read == 0 {
