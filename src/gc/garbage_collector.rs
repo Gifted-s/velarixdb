@@ -5,6 +5,7 @@ extern crate libc;
 extern crate nix;
 use crate::consts::{TAIL_ENTRY_KEY, TOMB_STONE_MARKER};
 use crate::err::Error;
+use crate::fs::P;
 use crate::index::Index;
 use crate::memtable::{Entry, MemTable, SkipMapValue, K};
 use crate::sst::Table;
@@ -17,7 +18,6 @@ use err::Error::*;
 use futures::future::join_all;
 use nix::libc::{c_int, off_t};
 use std::os::unix::io::AsRawFd;
-use std::path::Path;
 use std::sync::Arc;
 
 use tokio::sync::{Mutex, RwLock};
@@ -363,8 +363,8 @@ impl GC {
     ///
     /// Returns error in case punch failed
     #[allow(dead_code)] // will show unused on non-linux environment
-    pub(crate) async fn punch_holes<P: AsRef<Path> + std::marker::Send + 'static>(
-        file_path: P,
+    pub(crate) async fn punch_holes(
+        file_path: impl 'static + P ,
         offset: off_t,
         length: off_t,
     ) -> std::result::Result<(), Error> {
@@ -399,9 +399,9 @@ impl GC {
     /// # Errors
     ///
     /// Returns error in case put fails
-    pub(crate) async fn put<T: AsRef<[u8]>>(
-        key: T,
-        value: T,
+    pub(crate) async fn put(
+        key:  impl AsRef<[u8]>,
+        value: impl AsRef<[u8]>,
         val_offset: ValOffset,
         memtable: GCTable,
         gc_updated_entries: GCUpdatedEntries<Key>,
@@ -424,8 +424,8 @@ impl GC {
     /// # Errors
     ///
     /// Returns error in case search was not successful
-    pub(crate) async fn get<CustomKey: K>(
-        key: CustomKey,
+    pub(crate) async fn get(
+        key: impl K,
         memtable: GCTable,
         key_range: KeyRangeHandle,
         vlog: Arc<RwLock<ValueLog>>,
@@ -473,8 +473,8 @@ impl GC {
     /// # Errors
     ///
     /// Returns error in case search was not successful
-    pub(crate) async fn search_key_in_sstables<K: AsRef<[u8]>>(
-        key: K,
+    pub(crate) async fn search_key_in_sstables(
+        key: impl AsRef<[u8]>,
         ssts: Vec<Table>,
         val_log: &GCLog,
     ) -> Result<(Value, CreatedAt), Error> {
