@@ -45,11 +45,11 @@ pub type WGuard<'a, T> = RwLockWriteGuard<'a, T>;
 pub trait ThreadSharable: Send + Sync {}
 impl<T> ThreadSharable for T where T: AsRef<Path> + Send + Sync {}
 
-/// A triat for Path it must also be thread safe
+/// A trait for Path it must also be thread safe
 pub trait P: AsRef<Path> + ThreadSharable {}
 impl<T> P for T where T: AsRef<Path> + ThreadSharable {}
 
-/// A triat for a file handler shared between threads 
+/// A trait for a file handler shared between threads 
 pub trait F: ThreadSharable + Debug + Clone {}
 impl<T> F for T where T: ThreadSharable + Debug + Clone {}
 
