@@ -117,14 +117,15 @@ impl GC {
     /// Continues to check if it's time to run GC (works in background)
     pub fn start_gc_worker(&self, key_range: KeyRangeHandle, read_only_memtables: ImmutableMemTables<Key>) {
         let cfg = self.config.to_owned();
+        // NOTE: These are reference counter incrementation not deep clone
         let memtable = self.table.clone();
         let vlog = self.vlog.clone();
-        let table_ref = Arc::clone(&memtable);
-        let vlog_ref = Arc::clone(&vlog);
-        let key_range_ref = Arc::clone(&key_range);
-        let read_only_memtables_ref = Arc::clone(&read_only_memtables);
-        let gc_updated_entries_ref = Arc::clone(&self.gc_updated_entries);
-        let punch_marker_ref = Arc::clone(&self.punch_marker);
+        let table_ref = memtable.clone();
+        let vlog_ref = vlog.clone();
+        let key_range_ref = key_range.clone();
+        let read_only_memtables_ref = read_only_memtables.clone();
+        let gc_updated_entries_ref = self.gc_updated_entries.clone();
+        let punch_marker_ref = self.punch_marker.clone();
         tokio::spawn(async move {
             loop {
                 sleep_gc_task(cfg.online_gc_interval).await;
@@ -135,12 +136,12 @@ impl GC {
                 }
                 let res = GC::gc_handler(
                     &cfg,
-                    Arc::clone(&table_ref),
-                    Arc::clone(&vlog_ref),
-                    Arc::clone(&key_range_ref),
-                    Arc::clone(&read_only_memtables_ref),
-                    Arc::clone(&gc_updated_entries_ref),
-                    Arc::clone(&punch_marker_ref),
+                    table_ref.clone(),
+                    vlog_ref.clone(),
+                    key_range_ref.clone(),
+                    read_only_memtables_ref.clone(),
+                    gc_updated_entries_ref.clone(),
+                    punch_marker_ref.clone(),
                 )
                 .await;
                 match res {
@@ -182,20 +183,21 @@ impl GC {
         match chunk_res {
             Ok((entries, total_bytes_read)) => {
                 let tasks = entries.into_iter().map(|entry| {
-                    let invalid_entries_ref = Arc::clone(&invalid_entries);
-                    let valid_entries_ref = Arc::clone(&valid_entries);
-                    let table_ref = Arc::clone(&memtable);
-                    let vlog_ref = Arc::clone(&vlog);
-                    let key_range_ref = Arc::clone(&key_range);
-                    let read_only_memtables_ref = Arc::clone(&read_only_memtables);
+                    // NOTE: These are reference counter incrementation not deep clone
+                    let invalid_entries_ref = invalid_entries.clone();
+                    let valid_entries_ref = valid_entries.clone();
+                    let table_ref = memtable.clone();
+                    let vlog_ref = vlog.clone();
+                    let key_range_ref = key_range.clone();
+                    let read_only_memtables_ref = read_only_memtables.clone();
 
                     tokio::spawn(async move {
                         let most_recent_value = GC::get(
                             std::str::from_utf8(&entry.key).unwrap(),
-                            Arc::clone(&table_ref),
-                            Arc::clone(&key_range_ref),
-                            Arc::clone(&vlog_ref),
-                            Arc::clone(&read_only_memtables_ref),
+                            table_ref.clone(),
+                            key_range_ref.clone(),
+                            vlog_ref.clone(),
+                            read_only_memtables_ref.clone(),
                         )
                         .await;
                         match most_recent_value {
@@ -242,9 +244,9 @@ impl GC {
 
                 GC::write_valid_entries_to_store(
                     synced_entries.to_owned(),
-                    Arc::clone(&memtable),
+                    memtable.clone(),
                     gc_updated_entries,
-                    Arc::clone(&vlog),
+                    vlog.clone(),
                 )
                 .await?;
 
@@ -286,7 +288,7 @@ impl GC {
                 key,
                 value,
                 *existing_v_offset,
-                Arc::clone(&table),
+                table.clone(),
                 gc_updated_entries.clone(),
             )
             .await;
@@ -364,7 +366,7 @@ impl GC {
     /// Returns error in case punch failed
     #[allow(dead_code)] // will show unused on non-linux environment
     pub(crate) async fn punch_holes(
-        file_path: impl 'static + P ,
+        file_path: impl 'static + P,
         offset: off_t,
         length: off_t,
     ) -> std::result::Result<(), Error> {
@@ -400,7 +402,7 @@ impl GC {
     ///
     /// Returns error in case put fails
     pub(crate) async fn put(
-        key:  impl AsRef<[u8]>,
+        key: impl AsRef<[u8]>,
         value: impl AsRef<[u8]>,
         val_offset: ValOffset,
         memtable: GCTable,

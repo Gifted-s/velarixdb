@@ -40,8 +40,8 @@ pub type Buf = [u8];
 pub type RGuard<'a, T> = RwLockReadGuard<'a, T>;
 pub type WGuard<'a, T> = RwLockWriteGuard<'a, T>;
 
-/// A trait for any type that can be 
-/// sent and synchronized between threads 
+/// A trait for any type that can be
+/// sent and synchronized between threads
 pub trait ThreadSharable: Send + Sync {}
 impl<T> ThreadSharable for T where T: AsRef<Path> + Send + Sync {}
 
@@ -49,7 +49,7 @@ impl<T> ThreadSharable for T where T: AsRef<Path> + Send + Sync {}
 pub trait P: AsRef<Path> + ThreadSharable {}
 impl<T> P for T where T: AsRef<Path> + ThreadSharable {}
 
-/// A trait for a file handler shared between threads 
+/// A trait for a file handler shared between threads
 pub trait F: ThreadSharable + Debug + Clone {}
 impl<T> F for T where T: ThreadSharable + Debug + Clone {}
 
