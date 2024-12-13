@@ -44,11 +44,11 @@ pub type WGuard<'a, T> = RwLockWriteGuard<'a, T>;
 pub trait ThreadSharable: Send + Sync {}
 impl<T> ThreadSharable for T where T: AsRef<Path> + Send + Sync {}
 
-/// Trait for file and directory path shared between threads
+/// Trait for file and directory path, Sendable because of Tokio runtime
 pub trait P: AsRef<Path> + ThreadSharable {}
 impl<T> P for T where T: AsRef<Path> + ThreadSharable {}
 
-/// Trait for a file handler shared between threads
+/// Trait for a file handler. Sendable because of Tokio runtime
 pub trait F: ThreadSharable + Debug + Clone {}
 impl<T> F for T where T: ThreadSharable + Debug + Clone {}
 
