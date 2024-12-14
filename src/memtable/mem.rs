@@ -21,6 +21,7 @@ use Error::*;
 
 use std::{hash::Hash, sync::Arc};
 
+// Trait for key in memtable
 pub trait K: AsRef<[u8]> + Hash + Ord + Send + Sync + Clone + Debug {}
 
 impl<T> K for T where T: AsRef<[u8]> + Hash + Ord + Send + Sync + Clone + Debug {}
