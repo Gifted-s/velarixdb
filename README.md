@@ -79,7 +79,7 @@ v2 is the most recent version (not experimental) and under active development, t
 - [ ] Checksum to detect data corruption
 - [ ] Leveled Compaction (LCS), Time-Window Compaction (TCS), and Unified Compaction (UCS)
 - [ ] Monitoring module to continuously monitor and generate reports
-- [ ] Introduce Learned Index for Lower levels (Machine Learning)
+- [ ] Introduce Learned Index for Lower Levels in the LSM Tree (Machine Learning)
 
 ### It is not:
 - A standalone server
