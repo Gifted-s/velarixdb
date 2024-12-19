@@ -40,7 +40,7 @@ pub const META_DIRECTORY_NAME: &str = "meta";
 
 pub const TOMB_STONE_MARKER: &str = "*";
 
-/// TODO: Many lightweight computations here, benchmark against Lazy initialization
+/// TODO: Many lightweight computations here, benchmark with Lazy initialization
 /// 1KB
 pub static GC_CHUNK_SIZE: usize = SizeUnit::Kilobytes.as_bytes(1);
 
