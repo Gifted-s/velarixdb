@@ -302,7 +302,7 @@ impl BucketMap {
     /// Returns true or false based on deletion success or failure
     /// NOTE: This should be called only after compaction is complete
     ///
-    /// Errors
+    /// Error
     ///
     /// Returns error if deletion fails
     pub async fn delete_ssts(&mut self, ssts_to_delete: &SSTablesToRemove) -> Result<bool, Error> {
