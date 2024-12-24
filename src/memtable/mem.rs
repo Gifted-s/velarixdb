@@ -208,15 +208,6 @@ impl MemTable<Key> {
         let entry_length_byte = entry.key.len() + SIZE_OF_U32 + SIZE_OF_U64 + SIZE_OF_U8;
         if !self.bloom_filter.contains(&entry.key) {
             self.bloom_filter.set(&entry.key);
-            self.entries.insert(
-                entry.key.to_owned(),
-                SkipMapValue::new(entry.val_offset, entry.created_at, entry.is_tombstone),
-            );
-            if entry.val_offset > self.most_recent_entry.val_offset {
-                entry.clone_into(&mut self.most_recent_entry)
-            }
-            self.size += entry_length_byte;
-            return;
         }
 
         self.entries.insert(
