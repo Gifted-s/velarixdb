@@ -3,6 +3,10 @@
 <img src="/doc_logo.png" height="120">
 </p>
 
+## Contributors ✨
+Thanks to these amazing people for their contributions:
+[@NickNYU](https://github.com/NickNYU)
+
 
 [![codecov](https://codecov.io/gh/Gifted-s/velarixdb/branch/ft%2Ffinal/graph/badge.svg?token=01K79PJWQA)](https://codecov.io/gh/Gifted-s/velarixdb)
 [![Tests](https://github.com/Gifted-s/velarixdb/actions/workflows/rust.yml/badge.svg)](https://github.com/Gifted-s/velarixdb/actions/workflows/rust.yml)
