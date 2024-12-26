@@ -5,7 +5,7 @@
 
 ## Contributors ✨
 Thanks to these amazing people for their contributions:
-[@NickNYU](https://github.com/NickNYU)
+[@NickNYU](https://github.com/NickNYU), [@arrowler](https://github.com/arrowler)
 
 
 [![codecov](https://codecov.io/gh/Gifted-s/velarixdb/branch/ft%2Ffinal/graph/badge.svg?token=01K79PJWQA)](https://codecov.io/gh/Gifted-s/velarixdb)
