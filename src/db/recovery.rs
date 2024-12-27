@@ -30,7 +30,7 @@ use std::sync::Arc;
 use tokio::fs::read_dir;
 use tokio::sync::RwLock;
 
-/// Parameters to create an empty ['DataStore'] or recover exisiting one from ['ValueLog']
+/// Parameters to create an empty ['DataStore'] or recover to previous state before crash
 pub struct CreateOrRecoverStoreParams<'a, P> {
     pub dir: &'a DirPath,
     pub buckets_path: P,
