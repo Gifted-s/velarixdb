@@ -34,7 +34,7 @@ async fn main() {
         assert!(tokio_res.as_ref().unwrap().is_ok());
     }
 
-    // Read entries concurrently
+    // Read entries benchmark
     let reads = entries.keys().map(|k| {
         let store_inner = Arc::clone(&store_ref);
         let key = k.to_owned();
