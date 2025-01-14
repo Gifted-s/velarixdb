@@ -3,8 +3,7 @@ use tempfile::tempdir;
 use tokio::runtime;
 use velarixdb::db::DataStore;
 
-// Not sure if this is the best way to implement benchmark for async ops but
-// for now it LGTM (logically), review is accepted!
+
 fn insert_many(c: &mut Criterion) {
     let root = tempdir().unwrap();
     let path = root.path().join("default");
