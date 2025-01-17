@@ -53,7 +53,7 @@ pub struct Config {
     /// Which compaction strategy is used STCS, LCS, TCS or UCS
     pub compaction_strategy: compactors::Strategy,
 
-    /// Interval at which tombstone compaction is triggered
+    /// Interval at which online garbage collection is triggered
     pub online_gc_interval: std::time::Duration,
 
     /// How many bytes should be checked in value log for garbage collection in kilobytes
