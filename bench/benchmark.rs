@@ -3,7 +3,7 @@ use tempfile::tempdir;
 use tokio::runtime;
 use velarixdb::db::DataStore;
 
-
+// TODO: reseach the best way to implement this
 fn insert_many(c: &mut Criterion) {
     let root = tempdir().unwrap();
     let path = root.path().join("default");
