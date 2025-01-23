@@ -1,22 +1,24 @@
+use std::sync::Arc;
+
 use criterion::{criterion_group, criterion_main, Criterion};
 use tempfile::tempdir;
-use tokio::runtime;
+use tokio::runtime::Runtime;
+use tokio::sync::RwLock;
 use velarixdb::db::DataStore;
 
 // TODO: reseach the best way to implement this
-fn insert_many(c: &mut Criterion) {
+fn insert(c: &mut Criterion) {
     let root = tempdir().unwrap();
     let path = root.path().join("default");
-    let rt = runtime::Runtime::new().unwrap();
-    let mut store = { rt.block_on(async { DataStore::open("benchmark", path).await.unwrap() }) };
-    c.bench_function("insert_many", |b| {
-        b.iter(|| {
-            rt.block_on(async {
-                for e in 1..=3000 {
-                    let e = e.to_string();
-                    store.put(&e, &e).await.unwrap();
-                }
-            });
+    let runtime = Runtime::new().unwrap();
+    let store = Arc::new(RwLock::new(
+        runtime.block_on(async { DataStore::open("benchmark", path).await.unwrap() }),
+    ));
+    c.bench_function("put", |b| {
+        b.to_async(&runtime).iter(|| async {
+            let key = b"key";
+            let value = b"value";
+            store.write().await.put(&key, &value).await.unwrap();
         });
     });
 }
@@ -24,27 +26,46 @@ fn insert_many(c: &mut Criterion) {
 fn get_many(c: &mut Criterion) {
     let root = tempdir().unwrap();
     let path = root.path().join("default");
-    let rt = runtime::Runtime::new().unwrap();
-    let mut store = { rt.block_on(async { DataStore::open("benchmark", path).await.unwrap() }) };
+    let runtime = Runtime::new().unwrap();
+    let store = Arc::new(RwLock::new(
+        runtime.block_on(async { DataStore::open("benchmark", path).await.unwrap() }),
+    ));
 
-    rt.block_on(async {
-        for e in 1..=3000 {
+    runtime.block_on(async {
+        for e in 1..=20000 {
             let e = e.to_string();
-            store.put(&e, &e).await.unwrap();
+            store.write().await.put(&e, &e).await.unwrap();
         }
     });
 
     c.bench_function("get_many", |b| {
-        b.iter(|| {
-            rt.block_on(async {
-                for e in 1..=3000 {
-                    let e = e.to_string();
-                    store.get(&e).await.unwrap();
-                }
-            });
+        b.to_async(&runtime).iter(|| async {
+            for e in 1..=20000 {
+                let e = e.to_string();
+                store.read().await.get(&e).await.unwrap();
+            }
         });
     });
 }
 
-criterion_group!(benches, insert_many, get_many);
+// TODO: Fix these, independent writes should never await each other, just being lazy for now :)
+fn insert_many(c: &mut Criterion) {
+    let root = tempdir().unwrap();
+    let path = root.path().join("default");
+    let runtime = Runtime::new().unwrap();
+    let store = Arc::new(RwLock::new(
+        runtime.block_on(async { DataStore::open("benchmark", path).await.unwrap() }),
+    ));
+
+    c.bench_function("insert_many", |b| {
+        b.to_async(&runtime).iter(|| async {
+            for e in 1..=20000 {
+                let e = e.to_string();
+                store.write().await.put(&e, &e).await.unwrap();
+            }
+        });
+    });
+}
+
+criterion_group!(benches, insert, get_many, insert_many);
 criterion_main!(benches);
