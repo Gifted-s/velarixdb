@@ -6,7 +6,7 @@ use tokio::runtime::Runtime;
 use tokio::sync::RwLock;
 use velarixdb::db::DataStore;
 
-// TODO: reseach the best way to implement this
+
 fn insert(c: &mut Criterion) {
     let root = tempdir().unwrap();
     let path = root.path().join("default");
