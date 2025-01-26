@@ -48,7 +48,7 @@ fn get_many(c: &mut Criterion) {
     });
 }
 
-// TODO: Fix these, independent writes should never await each other
+
 fn insert_many(c: &mut Criterion) {
     let root = tempdir().unwrap();
     let path = root.path().join("default");
