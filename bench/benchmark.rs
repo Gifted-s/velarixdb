@@ -6,7 +6,7 @@ use tokio::runtime::Runtime;
 use tokio::sync::RwLock;
 use velarixdb::db::DataStore;
 
-// TODO: reseach the best way to implement this
+
 fn insert(c: &mut Criterion) {
     let root = tempdir().unwrap();
     let path = root.path().join("default");
@@ -48,7 +48,7 @@ fn get_many(c: &mut Criterion) {
     });
 }
 
-// TODO: Fix these, independent writes should never await each other, just being lazy for now :)
+
 fn insert_many(c: &mut Criterion) {
     let root = tempdir().unwrap();
     let path = root.path().join("default");
