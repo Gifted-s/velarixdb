@@ -32,7 +32,7 @@ fn get_many(c: &mut Criterion) {
     ));
 
     runtime.block_on(async {
-        for e in 1..=20000 {
+        for e in 1..=10000 {
             let e = e.to_string();
             store.write().await.put(&e, &e).await.unwrap();
         }
@@ -40,7 +40,7 @@ fn get_many(c: &mut Criterion) {
 
     c.bench_function("get_many", |b| {
         b.to_async(&runtime).iter(|| async {
-            for e in 1..=20000 {
+            for e in 1..=10000 {
                 let e = e.to_string();
                 store.read().await.get(&e).await.unwrap();
             }
@@ -49,7 +49,7 @@ fn get_many(c: &mut Criterion) {
 }
 
 
-fn insert_many(c: &mut Criterion) {
+fn put_many(c: &mut Criterion) {
     let root = tempdir().unwrap();
     let path = root.path().join("default");
     let runtime = Runtime::new().unwrap();
@@ -57,9 +57,9 @@ fn insert_many(c: &mut Criterion) {
         runtime.block_on(async { DataStore::open("benchmark", path).await.unwrap() }),
     ));
 
-    c.bench_function("insert_many", |b| {
+    c.bench_function("put_many", |b| {
         b.to_async(&runtime).iter(|| async {
-            for e in 1..=20000 {
+            for e in 1..=10000 {
                 let e = e.to_string();
                 store.write().await.put(&e, &e).await.unwrap();
             }
@@ -67,5 +67,5 @@ fn insert_many(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, insert, get_many, insert_many);
+criterion_group!(benches, insert, get_many, put_many);
 criterion_main!(benches);
