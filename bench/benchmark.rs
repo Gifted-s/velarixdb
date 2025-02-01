@@ -32,7 +32,7 @@ fn get_many(c: &mut Criterion) {
     ));
 
     runtime.block_on(async {
-        for e in 1..=20000 {
+        for e in 1..=10000 {
             let e = e.to_string();
             store.write().await.put(&e, &e).await.unwrap();
         }
@@ -40,7 +40,7 @@ fn get_many(c: &mut Criterion) {
 
     c.bench_function("get_many", |b| {
         b.to_async(&runtime).iter(|| async {
-            for e in 1..=20000 {
+            for e in 1..=10000 {
                 let e = e.to_string();
                 store.read().await.get(&e).await.unwrap();
             }
@@ -59,7 +59,7 @@ fn put_many(c: &mut Criterion) {
 
     c.bench_function("put_many", |b| {
         b.to_async(&runtime).iter(|| async {
-            for e in 1..=20000 {
+            for e in 1..=10000 {
                 let e = e.to_string();
                 store.write().await.put(&e, &e).await.unwrap();
             }
