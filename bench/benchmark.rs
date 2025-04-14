@@ -6,7 +6,6 @@ use tokio::runtime::Runtime;
 use tokio::sync::RwLock;
 use velarixdb::db::DataStore;
 
-
 fn insert(c: &mut Criterion) {
     let root = tempdir().unwrap();
     let path = root.path().join("default");
@@ -47,7 +46,6 @@ fn get_many(c: &mut Criterion) {
         });
     });
 }
-
 
 fn put_many(c: &mut Criterion) {
     let root = tempdir().unwrap();

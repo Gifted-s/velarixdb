@@ -149,7 +149,7 @@ impl GC {
                         log::info!("GC successful, awaiting sync")
                     }
                     Err(err) => {
-                        log::error!("GC Error {}", err.to_string());
+                        log::error!("GC Error {}", err);
                     }
                 }
             }

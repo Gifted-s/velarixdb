@@ -16,7 +16,7 @@
 //!
 //! ## Problem
 //!
-//! During compaction in LevelDB or RocksDB, in the worst case, up to 10 SSTable files need to be read (more accurately, based on the key distribution per level), sorted, and re-written since keys are not allowed to overlap across all the sstables from Level 1 downwards. Suppose after merging SSTables in one level, the next level exceeds its threshold; compaction can cascade from Level 0 all the way to Level 6, meaning the overall write amplification can be up to 50 (ignoring the first compaction level).[ Reference -> [Official LevelDB Compaction Process Docs](https://github.com/facebook/rocksdb/wiki/Leveled-Compaction) ]. 
+//! During compaction in LevelDB or RocksDB, in the worst case, up to 10 SSTable files need to be read (more accurately, based on the key distribution per level), sorted, and re-written since keys are not allowed to overlap across all the sstables from Level 1 downwards. Suppose after merging SSTables in one level, the next level exceeds its threshold; compaction can cascade from Level 0 all the way to Level 6, meaning the overall write amplification can be up to 50 (ignoring the first compaction level).[ Reference -> [Official LevelDB Compaction Process Docs](https://github.com/facebook/rocksdb/wiki/Leveled-Compaction) ].
 //! This repetitive data movement can cause significant wear on SSDs, reducing their lifespan due to the high number of write cycles. The goal is to minimize the amount of data moved during compaction, thereby reducing the amount of data re-written and extending the device's lifetime.
 //!
 //! ## Solution
