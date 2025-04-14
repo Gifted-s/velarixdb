@@ -27,7 +27,7 @@ VelarixDB is an ongoing project (*not production ready*) designed to optimize da
 
 ## Problem
 
-During compaction in LevelDB or RocksDB, in the worst case, up to 10 SSTable files need to be read, sorted ,and re-written since keys are not allowed to overlap across all the sstables from Level 1 downwards. Suppose after merging SSTables in one level, the next level exceeds its threshold; compaction can cascade from Level 0 all the way to Level 6, meaning the overall write amplification can be up to 50 (ignoring the first compaction level).[ Reference -> [Official LevelDB Compaction Process Docs](https://github.com/facebook/rocksdb/wiki/Leveled-Compaction) ]. 
+During compaction in LevelDB or RocksDB, in the worst case, up to 10 SSTable files need to be read (more accurately, based on the key distribution per level), sorted, and re-written since keys are not allowed to overlap across all the sstables from Level 1 downwards. Suppose after merging SSTables in one level, the next level exceeds its threshold; compaction can cascade from Level 0 all the way to Level 6, meaning the overall write amplification can be up to 50 (ignoring the first compaction level).[ Reference -> [Official LevelDB Compaction Process Docs](https://github.com/facebook/rocksdb/wiki/Leveled-Compaction) ]. 
 This repetitive data movement can cause significant wear on SSDs, reducing their lifespan due to the high number of write cycles. The goal is to minimize the amount of data moved during compaction, thereby reducing the amount of data re-written and extending the device's lifetime.
 
 ## Solution
@@ -49,8 +49,7 @@ According to the benchmarks presented in the WiscKey paper, implementations can 
 
 ## Designed for asynchronous runtime (unstable)
 Based on the introduction and efficiency of asynchronous IO at the OS kernel level e.g **io_uring** for the Linux kernel, VelarixDB is designed for asynchronous runtime. In this case, Tokio runtime.
-Tokio allows for efficient and scalable asynchronous operations, making the most of modern multi-core processors. Frankly, most OS File Systems do not provide async API currently, but Tokio uses a thread pool to offload blocking file system operations.
-This means that even though the file system operations themselves are blocking at the OS level, Tokio can handle them without blocking the main async task executor. Tokio might adopt [io_uring](https://docs.rs/tokio/latest/tokio/fs/index.html#:~:text=Currently%2C%20Tokio%20will%20always%20use%20spawn_blocking%20on%20all%20platforms%2C%20but%20it%20may%20be%20changed%20to%20use%20asynchronous%20file%20system%20APIs%20such%20as%20io_uring%20in%20the%20future.) in the future. (We haven't benchmarked the async version therefore, this is unstable and might be removed in a future version)
+Tokio allows for efficient and scalable asynchronous operations, making the most of modern multi-core processors. While some operating systems — such as macOS — do not currently provide native asynchronous file system APIs, Tokio handles this limitation gracefully. It uses a dedicated thread pool to offload blocking file system operations, effectively spawning separate threads behind the scenes for file I/O. This ensures that the async runtime remains non-blocking and responsive, even when interacting with inherently blocking system calls. The goal is to use [tokio-uring](https://github.com/tokio-rs/tokio-uring) which supports the use of [io_uring](https://unixism.net/loti/what_is_io_uring.html) in an asyncrhorous context in this case Tokio. Tokio might natively [support](https://docs.rs/tokio/latest/tokio/fs/index.html#:~:text=Currently%2C%20Tokio%20will,in%20the%20future.) in the future. (We haven't benchmarked the async version therefore, this is unstable and might be removed in a future version).
 
 
 ## Disclaimer
@@ -85,7 +84,6 @@ Please note that velarixdb is still under development and is not yet production-
 ### It is not:
 - A standalone server
 - A relational database
-- A wide-column database: it has no notion of columns
 
 ### Constraint
 - Keys are limited to 65,536 bytes, and values are limited to 2^32 bytes. Larger keys and values have a bigger performance impact.
