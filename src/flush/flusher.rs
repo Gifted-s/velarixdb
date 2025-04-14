@@ -94,7 +94,7 @@ impl Flusher {
                     }
                 }
                 Err(err) => {
-                    log::error!("{}", err.to_string())
+                    log::error!("{}", err)
                 }
             }
         });
