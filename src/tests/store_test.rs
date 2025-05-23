@@ -12,6 +12,21 @@ mod tests {
     fn setup() {
         let _ = env_logger::builder().is_test(true).try_init();
     }
+
+    #[tokio::test]
+    async fn test_print_keyspace_name() {
+        setup();
+        let root = tempdir().unwrap();
+        let path = root.path().join("test_print_keyspace");
+        let store_name = "test_keyspace_printer";
+        // Use open_without_background to avoid issues with background tasks in tests
+        let store = DataStore::open_without_background(store_name, path.clone()).await.unwrap();
+
+        // Simply call the function. If it executes without panicking, the test is considered passed for now.
+        store.print_keyspace_name();
+
+        // tempdir automatically cleans up the directory when it goes out of scope.
+    }
     #[tokio::test]
     async fn datastore_create_new() {
         setup();
