@@ -741,6 +741,11 @@ impl DataStore<'static, Key> {
     pub async fn is_range_iterator_set(&mut self) -> Bool {
         self.range_iterator.is_some()
     }
+
+    /// Prints the keyspace name of the DataStore to the console.
+    pub fn print_keyspace_name(&self) {
+        println!("Keyspace name: {}", self.keyspace);
+    }
 }
 impl DirPath {
     pub(crate) fn build(root_path: impl AsRef<Path> + Send + Sync) -> Self {
