@@ -20,7 +20,9 @@ mod tests {
         let path = root.path().join("test_print_keyspace");
         let store_name = "test_keyspace_printer";
         // Use open_without_background to avoid issues with background tasks in tests
-        let store = DataStore::open_without_background(store_name, path.clone()).await.unwrap();
+        let store = DataStore::open_without_background(store_name, path.clone())
+            .await
+            .unwrap();
 
         // Simply call the function. If it executes without panicking, the test is considered passed for now.
         store.print_keyspace_name();

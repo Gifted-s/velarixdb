@@ -108,6 +108,7 @@ pub struct RangeOffset {
 }
 
 impl RangeOffset {
+    #[allow(dead_code)]
     pub fn new(start: Offset, end: Offset) -> Self {
         Self {
             start_offset: start,
