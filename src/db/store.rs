@@ -314,7 +314,7 @@ impl DataStore<'static, Key> {
         let meta = Arc::new(Mutex::new(self.meta.to_owned()));
         tokio::spawn(async move {
             if let Err(err) = meta.lock().await.write().await {
-                log::error!("{}", err)
+                log::error!("{err}")
             }
         });
     }
@@ -588,8 +588,8 @@ impl DataStore<'static, Key> {
         for sst in ssts.iter() {
             let index = Index::new(sst.index_file.path.to_owned(), sst.index_file.file.to_owned());
             let block_handle = index.get(key.as_ref()).await?;
-            if block_handle.is_some() {
-                let sst_res = sst.get(block_handle.unwrap(), &key).await?;
+            if let Some(block_handle) = block_handle {
+                let sst_res = sst.get(block_handle, &key).await?;
 
                 if sst_res.as_ref().is_some() {
                     let (val_offset, created_at, is_tombstone) = sst_res.unwrap();

@@ -89,12 +89,12 @@ impl Flusher {
                             async_broadcast::TrySendError::Full(_) => {
                                 log::info!("{}", Error::FlushSignalChannelOverflow)
                             }
-                            _ => log::error!("{}", err),
+                            _ => log::error!("{err}"),
                         }
                     }
                 }
                 Err(err) => {
-                    log::error!("{}", err)
+                    log::error!("{err}")
                 }
             }
         });

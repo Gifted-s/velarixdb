@@ -163,7 +163,7 @@ mod tests {
         entry4.val = b"val4".to_vec();
         entry5.val = b"val5".to_vec();
 
-        let concurrent_write_workload = vec![entry1, entry2, entry3, entry4, entry5.to_owned()];
+        let concurrent_write_workload = [entry1, entry2, entry3, entry4, entry5.to_owned()];
         let store_ref = Arc::new(RwLock::new(store));
 
         let concurrent_write_tasks = concurrent_write_workload.iter().map(|e| {

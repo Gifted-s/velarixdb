@@ -39,7 +39,7 @@ mod tests {
         let workload =
             crate::tests::workload::Workload::new(workload_size, key_len, val_len, write_read_ratio);
         if let Err(err) = setup(store.clone(), &workload, true).await {
-            log::error!("Setup failed {}", err);
+            log::error!("Setup failed {err}");
             return;
         }
         let storage_reader = store.read().await;
@@ -77,7 +77,7 @@ mod tests {
         let workload =
             crate::tests::workload::Workload::new(workload_size, key_len, val_len, write_read_ratio);
         if let Err(err) = setup(store.clone(), &workload, true).await {
-            log::error!("Setup failed {}", err);
+            log::error!("Setup failed {err}");
             return;
         }
         let storage_reader = store.read().await;
@@ -114,7 +114,7 @@ mod tests {
         let workload =
             crate::tests::workload::Workload::new(workload_size, key_len, val_len, write_read_ratio);
         if let Err(err) = setup(store.clone(), &workload, true).await {
-            log::error!("Setup failed {}", err);
+            log::error!("Setup failed {err}");
             return;
         }
 
@@ -153,7 +153,7 @@ mod tests {
         let workload =
             crate::tests::workload::Workload::new(workload_size, key_len, val_len, write_read_ratio);
         if let Err(err) = setup(store.clone(), &workload, true).await {
-            log::error!("Setup failed {}", err);
+            log::error!("Setup failed {err}");
             return;
         }
         let storage_reader = store.read().await;
@@ -191,7 +191,7 @@ mod tests {
         let workload =
             crate::tests::workload::Workload::new(workload_size, key_len, val_len, write_read_ratio);
         if let Err(err) = setup(store.clone(), &workload, true).await {
-            log::error!("Setup failed {}", err);
+            log::error!("Setup failed {err}");
             return;
         }
         let string_length = 5;
@@ -244,7 +244,7 @@ mod tests {
         let workload =
             crate::tests::workload::Workload::new(workload_size, key_len, val_len, write_read_ratio);
         if let Err(err) = setup(store.clone(), &workload, true).await {
-            log::error!("Setup failed {}", err);
+            log::error!("Setup failed {err}");
             return;
         }
         (store.write().await).gc.config.gc_chunk_size = bytes_to_scan_for_garbage_colection;
@@ -282,7 +282,7 @@ mod tests {
         let workload =
             crate::tests::workload::Workload::new(workload_size, key_len, val_len, write_read_ratio);
         if let Err(err) = setup(store.clone(), &workload, prepare_delete).await {
-            log::error!("Setup failed {}", err);
+            log::error!("Setup failed {err}");
             return;
         }
         let storage_reader = store.read().await;

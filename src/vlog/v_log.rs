@@ -248,7 +248,7 @@ impl ValueLog {
     pub async fn clear_all(&mut self) {
         if self.content.file.node.metadata().await.is_ok() {
             if let Err(err) = self.content.file.node.remove_dir_all().await {
-                log::info!("{}", err);
+                log::info!("{err}");
             }
         }
         self.size = 0;

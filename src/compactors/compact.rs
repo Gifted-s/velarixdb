@@ -240,10 +240,10 @@ impl Compactor {
                         drop(state);
                         match err {
                             async_broadcast::TryRecvError::Overflowed(_) => {
-                                log::error!("{}", FlushSignalChannelOverflow)
+                                log::error!("{FlushSignalChannelOverflow}")
                             }
                             async_broadcast::TryRecvError::Closed => {
-                                log::error!("{}", FlushSignalChannelClosed)
+                                log::error!("{FlushSignalChannelClosed}")
                             }
                             async_broadcast::TryRecvError::Empty => {}
                         }

@@ -112,7 +112,7 @@ impl BloomFilter {
     ///
     /// Returns IO error in case write fails
     pub async fn write(&mut self, dir: impl AsRef<Path> + Send + Sync) -> Result<(), Error> {
-        let file_path = dir.as_ref().join(format!("{}.db", FILTER_FILE_NAME));
+        let file_path = dir.as_ref().join(format!("{FILTER_FILE_NAME}.db"));
         let file = FilterFileNode::new(file_path.to_owned(), crate::fs::FileType::Filter)
             .await
             .unwrap();
@@ -339,9 +339,7 @@ mod tests {
 
         assert!(
             observed_false_positive_rate <= max_allowed_false_positive_rate,
-            "Observed false positive rate ({}) is greater than the maximum allowed ({})",
-            observed_false_positive_rate,
-            max_allowed_false_positive_rate
+            "Observed false positive rate ({observed_false_positive_rate}) is greater than the maximum allowed ({max_allowed_false_positive_rate})"
         );
     }
 
@@ -381,9 +379,7 @@ mod tests {
 
         assert!(
             observed_false_positive_rate <= max_allowed_false_positive_rate,
-            "Observed false positive rate ({}) is greater than the maximum allowed ({})",
-            observed_false_positive_rate,
-            max_allowed_false_positive_rate
+            "Observed false positive rate ({observed_false_positive_rate}) is greater than the maximum allowed ({max_allowed_false_positive_rate})"
         );
     }
 
@@ -423,9 +419,7 @@ mod tests {
 
         assert!(
             observed_false_positive_rate <= max_allowed_false_positive_rate,
-            "Observed false positive rate ({}) is greater than the maximum allowed ({})",
-            observed_false_positive_rate,
-            max_allowed_false_positive_rate
+            "Observed false positive rate ({observed_false_positive_rate}) is greater than the maximum allowed ({max_allowed_false_positive_rate})"
         );
     }
 }

@@ -14,7 +14,7 @@ mod tests {
 
         assert_eq!(summary.smallest_key, vec![]);
         assert_eq!(summary.biggest_key, vec![]);
-        assert_eq!(summary.path, path.join(format!("{}.db", SUMMARY_FILE_NAME)));
+        assert_eq!(summary.path, path.join(format!("{SUMMARY_FILE_NAME}.db")));
     }
 
     #[tokio::test]

@@ -168,8 +168,8 @@ impl Table {
     ) -> Result<(PathBuf, PathBuf, CreatedAt), Error> {
         let created_at = Utc::now();
         FileNode::create_dir_all(dir.as_ref()).await?;
-        let data_file_name = format!("{}.db", DATA_FILE_NAME);
-        let index_file_name = format!("{}.db", INDEX_FILE_NAME);
+        let data_file_name = format!("{DATA_FILE_NAME}.db");
+        let index_file_name = format!("{INDEX_FILE_NAME}.db");
 
         let data_file_path = dir.as_ref().join(data_file_name);
         let index_file_path = dir.as_ref().join(index_file_name);
@@ -390,7 +390,7 @@ pub struct Summary {
 impl Summary {
     /// Create new `Summary`
     pub fn new<P: AsRef<Path> + Send + Sync>(path: P) -> Self {
-        let file_path = path.as_ref().join(format!("{}.db", SUMMARY_FILE_NAME));
+        let file_path = path.as_ref().join(format!("{SUMMARY_FILE_NAME}.db"));
         Self {
             path: file_path,
             biggest_key: vec![],

@@ -41,7 +41,7 @@ impl Meta {
         let created_at = Utc::now();
         let last_modified = Utc::now();
         FileNode::create_dir_all(dir.as_ref()).await?;
-        let file_path = dir.as_ref().join(format!("{}.bin", META_FILE_NAME));
+        let file_path = dir.as_ref().join(format!("{META_FILE_NAME}.bin"));
         let file = MetaFileNode::new(file_path.to_owned(), crate::fs::FileType::Meta)
             .await
             .unwrap();
