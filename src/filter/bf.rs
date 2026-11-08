@@ -61,7 +61,7 @@ impl BloomFilter {
     /// creates new [`BloomFilter`] instance
     pub fn new(false_positive_rate: f64, no_of_elements: usize) -> Self {
         assert!(
-            false_positive_rate >= 0.0,
+            false_positive_rate > 0.0,
             "False positive rate can not be less than or equal to zero"
         );
         assert!(no_of_elements > 0, "No of elements should be greater than 0");

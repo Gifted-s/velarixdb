@@ -180,7 +180,7 @@ impl MemTable<Key> {
         false_positive_rate: f64,
     ) -> Self {
         assert!(
-            false_positive_rate >= 0.0,
+            false_positive_rate > 0.0,
             "False positive rate can not be les than or equal to zero"
         );
         assert!(capacity > 0, "Capacity should be greater than 0");
