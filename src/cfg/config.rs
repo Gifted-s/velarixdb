@@ -115,7 +115,7 @@ impl DataStore<'static, Key> {
     /// The size must be greater than 0 if allow_prefetch is set to true.
     pub fn with_prefetch_size(mut self, size: usize) -> Self {
         assert!(
-            (self.config.allow_prefetch && size > 0),
+            (!self.config.allow_prefetch || size > 0),
             "prefetch_size should be greater than 0 if allow_prefetch is set to true"
         );
         self.config.prefetch_size = size;
@@ -151,7 +151,7 @@ impl DataStore<'static, Key> {
     /// The TTL must be at least 3 days if enable_ttl is set to true.
     pub fn with_entry_ttl(mut self, ttl: std::time::Duration) -> Self {
         assert!(
-            (self.config.enable_ttl && ttl.as_millis() >= Duration::from_secs(3 * 24 * 60 * 60).as_millis()),
+            (!self.config.enable_ttl || ttl.as_millis() >= Duration::from_secs(3 * 24 * 60 * 60).as_millis()),
             "entry_ttl_millis cannot be less than 3 days if enable_ttl is set to true"
         );
         self.config.entry_ttl = ttl;
